@@ -1660,7 +1660,7 @@ Client API:
 Returns version number string of libSoX, for example, "14.4.0".
 @returns The version number string of libSoX, for example, "14.4.0".
 */
-LSX_RETURN_VALID_Z LSX_RETURN_PURE
+LSX_RETURN_VALID_Z
 char const *
 LSX_API
 sox_version(void);
@@ -2087,7 +2087,7 @@ Client API:
 Returns an array containing the known effect handlers.
 @returns An array containing the known effect handlers.
 */
-LSX_RETURN_VALID_Z LSX_RETURN_PURE
+LSX_RETURN_VALID_Z
 sox_effect_fn_t const *
 LSX_API
 sox_get_effect_fns(void);
@@ -2276,7 +2276,7 @@ Converts a SoX error code into an error string.
 @returns error string corresponding to the specified error code,
 or a generic message if the error code is not recognized.
 */
-LSX_RETURN_VALID_Z LSX_RETURN_PURE
+LSX_RETURN_VALID_Z
 char const *
 LSX_API
 sox_strerror(

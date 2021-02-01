@@ -20,7 +20,6 @@
 #endif
 
 #include "sox_i.h"
-#include "sdm.h"
 #include <assert.h>
 
 #undef RANQD1
@@ -264,7 +263,6 @@ typedef struct {
   double const  * coefs;
   sox_bool      dither_off;
   sox_effect_handler_flow flow;
-  sdm_t         *sdm;
 } priv_t;
 
 #define CONVOLVE _ _ _ _
@@ -293,13 +291,6 @@ typedef struct {
 #define NAME flow_fir_20
 #define N 20
 #include "dither.h"
-
-static int flow_sdm(sox_effect_t * effp, const sox_sample_t * ibuf,
-    sox_sample_t * obuf, size_t * isamp, size_t * osamp)
-{
-  priv_t * p = (priv_t *)effp->priv;
-  return sdm_process(p->sdm, ibuf, obuf, isamp, osamp);
-}
 
 static int flow_no_shape(sox_effect_t * effp, const sox_sample_t * ibuf,
     sox_sample_t * obuf, size_t * isamp, size_t * osamp)
@@ -373,16 +364,16 @@ static int start(sox_effect_t * effp)
   if (effp->in_signal.precision <= p->prec || p->prec > 24)
     return SOX_EFF_NULL;   /* Dithering not needed at this resolution */
 
-  effp->out_signal.precision = p->prec;
-
   if (p->prec == 1) {
-    p->sdm = sdm_init(NULL, effp->in_signal.rate, 0, 0, 0);
-    if (!p->sdm)
-      return SOX_EOF;
-
-    p->flow = flow_sdm;
-    return SOX_SUCCESS;
+    /* The general dither routines don't work in this case, so notify
+       user and leave it at that for now.
+       TODO: Some special-case treatment of 1-bit noise shaping will be
+         needed for meaningful DSD write support. */
+    lsx_warn("Dithering/noise-shaping to 1 bit is currently not supported.");
+    return SOX_EFF_NULL;
   }
+
+  effp->out_signal.precision = p->prec;
 
   p->flow = flow_no_shape;
   if (p->filter_name) {
@@ -427,23 +418,6 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   return p->flow(effp, ibuf, obuf, isamp, osamp);
 }
 
-static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
-{
-  priv_t * p = (priv_t *)effp->priv;
-  if (p->sdm)
-    return sdm_drain(p->sdm, obuf, osamp);
-  *osamp = 0;
-  return SOX_SUCCESS;
-}
-
-static int stop(sox_effect_t * effp)
-{
-  priv_t * p = (priv_t *)effp->priv;
-  if (p->sdm)
-    sdm_close(p->sdm);
-  return SOX_SUCCESS;
-}
-
 sox_effect_handler_t const * lsx_dither_effect_fn(void)
 {
   static sox_effect_handler_t handler = {
@@ -456,7 +430,7 @@ sox_effect_handler_t const * lsx_dither_effect_fn(void)
     "\n           shibata, low-shibata, high-shibata."
     "\n  -a       Automatically turn on & off dithering as needed (use with caution!)"
     "\n  -p bits  Override the target sample precision",
-    SOX_EFF_PREC, getopts, start, flow, drain, stop, 0, sizeof(priv_t)
+    SOX_EFF_PREC, getopts, start, flow, 0, 0, 0, sizeof(priv_t)
   };
   return &handler;
 }

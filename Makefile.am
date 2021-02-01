@@ -2,8 +2,8 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = lpc10 libgsm src
-DIST_SUBDIRS = lpc10 libgsm src msvc9 msvc10 msvc14
+SUBDIRS = lpc10 src
+DIST_SUBDIRS = lpc10 src
 
 RM = rm -f
 
@@ -11,14 +11,11 @@ RM = rm -f
 # prefix to ensure they are added to the distribution.
 dist_man_MANS = sox.1 soxi.1 soxformat.7 libsox.3
 EXTRA_DIST = sox.txt soxi.txt soxformat.txt libsox.txt \
-	     CMakeLists.txt sox.pc.in LICENSE.GPL LICENSE.LGPL \
+	     sox.pc.in LICENSE.GPL LICENSE.LGPL \
 	     cygbuild README.win32 README.osx scripts/batch-example.bat \
 	     README.sh FEATURES.in
 
-if HAVE_PKGCONFIG
-pkgconfigdir = @PKGCONFIGDIR@
 pkgconfig_DATA = sox.pc
-endif
 
 play.1 rec.1: sox.1
 	$(RM) $@ && $(LN_S) $< $@
@@ -28,22 +25,22 @@ README: README.sh FEATURES.in
 
 # Rule for making text man pages.  Uses GNU nroff's -c so not portable.
 .1.txt:
-	tbl $(srcdir)/$< | nroff -man -c | sed "s/.//g" > $@
+	tbl $< | nroff -man -c | sed "s/.//g" > $@
 .3.txt:
-	tbl $(srcdir)/$< | nroff -man -c | sed "s/.//g" > $@
+	tbl $< | nroff -man -c | sed "s/.//g" > $@
 .7.txt:
-	tbl $(srcdir)/$< | nroff -man -c | sed "s/.//g" > $@
+	tbl $< | nroff -man -c | sed "s/.//g" > $@
 
 DOCTXT = sox.txt soxi.txt soxformat.txt libsox.txt README
 txt: $(DOCTXT)
 
 # Rule for making PDF man pages
 .1.pdf:
-	pdfroff -t -man -Tps $(srcdir)/$< > $@
+	pdfroff -t -man --no-toc-relocation -Tps $< > $@
 .3.pdf:
-	pdfroff -t -man -Tps $(srcdir)/$< > $@
+	pdfroff -t -man --no-toc-relocation -Tps $< > $@
 .7.pdf:
-	pdfroff -t -man -Tps $(srcdir)/$< > $@
+	pdfroff -t -man --no-toc-relocation -Tps $< > $@
 
 DOCPDF = sox.pdf soxi.pdf soxformat.pdf libsox.pdf
 pdf: $(DOCPDF)
@@ -78,11 +75,11 @@ distclean-local:
 FIXHTML = sed 's,<head>,&<link rel="stylesheet" href="http://sox.sourceforge.net/pub/skins/sox/sox.css" type="text/css"></link>,' 
 
 .1.html:
-	groff -t -man -Thtml -P -Dsoxpng $(srcdir)/$< | $(FIXHTML) > $@
+	groff -t -man -Thtml -P -Dsoxpng $< | $(FIXHTML) > $@
 .3.html:
-	groff -t -man -Thtml -P -Dsoxpng $(srcdir)/$< | $(FIXHTML) > $@
+	groff -t -man -Thtml -P -Dsoxpng $< | $(FIXHTML) > $@
 .7.html:
-	groff -t -man -Thtml -P -Dsoxpng $(srcdir)/$< | $(FIXHTML) > $@
+	groff -t -man -Thtml -P -Dsoxpng $< | $(FIXHTML) > $@
 
 DOCHTML = sox.html soxi.html soxformat.html libsox.html
 html: $(DOCHTML)
@@ -124,7 +121,3 @@ uninstall-hook:
 	$(RM) $(DESTDIR)$(mandir)/man1/play.1
 	$(RM) $(DESTDIR)$(mandir)/man1/rec.1
 	$(RM) $(DESTDIR)$(mandir)/man7/soxeffect.7
-
-# Automatically update libtool script if it gets out-of-date
-libtool: $(LIBTOOL_DEPS)
-	$(SHELL) ./config.status --recheck

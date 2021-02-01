@@ -20,8 +20,6 @@
 
 #include "sox_i.h"
 
-#ifdef HAVE_SNDFILE
-
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,13 +28,9 @@
 
 #define LOG_MAX 2048 /* As per the SFC_GET_LOG_INFO example */
 
-#if !defined(HAVE_LIBLTDL)
-#undef DL_SNDFILE
-#endif
-
 static const char* const sndfile_library_names[] =
 {
-#ifdef DL_SNDFILE
+#ifdef DL_LIBSNDFILE
   "libsndfile",
   "libsndfile-1",
   "cygsndfile-1",
@@ -44,7 +38,7 @@ static const char* const sndfile_library_names[] =
   NULL
 };
 
-#ifdef DL_SNDFILE
+#ifdef DL_LIBSNDFILE
   #define SNDFILE_FUNC      LSX_DLENTRY_DYNAMIC
   #define SNDFILE_FUNC_STOP LSX_DLENTRY_STUB
 #else
@@ -54,7 +48,7 @@ static const char* const sndfile_library_names[] =
 #else
   #define SNDFILE_FUNC_STOP LSX_DLENTRY_STUB
 #endif
-#endif /* DL_SNDFILE */
+#endif /* DL_LIBSNDFILE */
 
 #define SNDFILE_FUNC_OPEN(f,x) \
   SNDFILE_FUNC(f,x, SNDFILE*, sf_open_virtual, (SF_VIRTUAL_IO *sfvirtual, int mode, SF_INFO *sfinfo, void *user_data))
@@ -186,10 +180,8 @@ static struct {
   { "snd",      SF_FORMAT_AU },
   { "caf",      SF_FORMAT_CAF },
   { "flac",     SF_FORMAT_FLAC },
-#ifdef HAVE_SNDFILE_1_0_18
   { "wve",      SF_FORMAT_WVE },
   { "ogg",      SF_FORMAT_OGG },
-#endif
   { "svx",      SF_FORMAT_SVX },
   { "8svx",     SF_FORMAT_SVX },
   { "paf",      SF_ENDIAN_BIG | SF_FORMAT_PAF },
@@ -457,10 +449,8 @@ static int startwrite(sox_format_t * ft)
     return SOX_EOF;
   }
 
-#ifdef HAVE_SFC_SET_SCALE_INT_FLOAT_WRITE
   if ((sf->sf_info->format & SF_FORMAT_SUBMASK) == SF_FORMAT_FLOAT)
     sf->sf_command(sf->sf_file, SFC_SET_SCALE_INT_FLOAT_WRITE, NULL, SF_TRUE);
-#endif
 
   return SOX_SUCCESS;
 }
@@ -540,5 +530,3 @@ LSX_FORMAT_HANDLER(sndfile)
 
   return &format;
 }
-
-#endif

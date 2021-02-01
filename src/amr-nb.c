@@ -16,16 +16,13 @@
  */
  
 /*
- * In order to use the AMR format with SoX, you need to have an AMR
- * library installed at SoX build time. Currently, the SoX build system
- * recognizes two AMR implementations, in the following order:
- *   http://opencore-amr.sourceforge.net/
- *   http://ftp.penguin.cz/pub/users/utx/amr/
+ * In order to use the AMR format with SoX, you need to have an
+ * AMR library installed at SoX build time. The SoX build system
+ * recognizes the AMR implementations available from
+ * http://opencore-amr.sourceforge.net/
  */
 
 #include "sox_i.h"
-
-#ifdef HAVE_AMRNB
 
 /* Common definitions: */
 
@@ -48,11 +45,7 @@ static char const amrnb_magic[] = "#!AMR\n";
 #define AMR_RATE            8000
 #define AMR_DESC            "3GPP Adaptive Multi Rate Narrow-Band (AMR-NB) lossy speech compressor"
 
-#if !defined(HAVE_LIBLTDL)
-  #undef DL_AMRNB
-#endif
-
-#ifdef DL_AMRNB
+#ifdef DL_OPENCORE_AMRNB
   #define AMR_FUNC  LSX_DLENTRY_DYNAMIC
 #else
   #define AMR_FUNC  LSX_DLENTRY_STATIC
@@ -60,10 +53,8 @@ static char const amrnb_magic[] = "#!AMR\n";
 
 /* OpenCore definitions: */
 
-#if defined(HAVE_OPENCORE_AMRNB_INTERF_DEC_H) || defined(DL_AMRNB)
-  #define AMR_OPENCORE 1
-  #define AMR_OPENCORE_ENABLE_ENCODE 1
-#endif
+#define AMR_OPENCORE 1
+#define AMR_OPENCORE_ENABLE_ENCODE 1
 
 #define AMR_OPENCORE_FUNC_ENTRIES(f,x) \
   AMR_FUNC(f,x, void*, Encoder_Interface_init,   (int dtx)) \
@@ -73,69 +64,27 @@ static char const amrnb_magic[] = "#!AMR\n";
   AMR_FUNC(f,x, void,  Decoder_Interface_Decode, (void* state, const unsigned char* in, short* out, int bfi)) \
   AMR_FUNC(f,x, void,  Decoder_Interface_exit,   (void* state)) \
 
-#define AmrOpencoreEncoderInit() \
+#define AmrEncoderInit() \
   Encoder_Interface_init(1)
-#define AmrOpencoreEncoderEncode(state, mode, in, out, forceSpeech) \
+#define AmrEncoderEncode(state, mode, in, out, forceSpeech) \
   Encoder_Interface_Encode(state, mode, in, out, forceSpeech)
-#define AmrOpencoreEncoderExit(state) \
+#define AmrEncoderExit(state) \
   Encoder_Interface_exit(state)
-#define AmrOpencoreDecoderInit() \
+#define AmrDecoderInit() \
   Decoder_Interface_init()
-#define AmrOpencoreDecoderDecode(state, in, out, bfi) \
+#define AmrDecoderDecode(state, in, out, bfi) \
   Decoder_Interface_Decode(state, in, out, bfi)
-#define AmrOpencoreDecoderExit(state) \
+#define AmrDecoderExit(state) \
   Decoder_Interface_exit(state)
 
 #define AMR_OPENCORE_DESC "amr-nb OpenCore library"
 static const char* const amr_opencore_library_names[] =
 {
-#ifdef DL_AMRWB
+#ifdef DL_OPENCORE_AMRNB
   "libopencore-amrnb",
   "libopencore-amrnb-0",
 #endif
   NULL
 };
 
-/* 3GPP (reference implementation) definitions: */
-
-#if !defined(HAVE_OPENCORE_AMRNB_INTERF_DEC_H) || defined(DL_AMRNB)
-  #define AMR_GP3 1
-#endif
-
-#define AMR_GP3_FUNC_ENTRIES(f,x) \
-  AMR_FUNC(f,x, void*, VADxEncoder_Interface_init,      (int dtx, char vad2_code)) \
-  AMR_FUNC(f,x, int,   GP3VADxEncoder_Interface_Encode, (void* state, enum amrnb_mode mode, short* in, unsigned char* out, int forceSpeech, char vad2_code)) \
-  AMR_FUNC(f,x, void,  Encoder_Interface_exit,          (void* state)) \
-  AMR_FUNC(f,x, void*, Decoder_Interface_init,          (void)) \
-  AMR_FUNC(f,x, void,  GP3Decoder_Interface_Decode,     (void* state, unsigned char* in, short* out, int bfi)) \
-  AMR_FUNC(f,x, void,  Decoder_Interface_exit,          (void* state)) \
-
-#define AmrGp3EncoderInit() \
-  VADxEncoder_Interface_init(1, 0)
-#define AmrGp3EncoderEncode(state, mode, in, out, forceSpeech) \
-  GP3VADxEncoder_Interface_Encode(state, mode, in, out, forceSpeech, 0)
-#define AmrGp3EncoderExit(state) \
-  Encoder_Interface_exit(state)
-#define AmrGp3DecoderInit() \
-  Decoder_Interface_init()
-#define AmrGp3DecoderDecode(state, in, out, bfi) \
-  GP3Decoder_Interface_Decode(state, in, out, bfi)
-#define AmrGp3DecoderExit(state) \
-  Decoder_Interface_exit(state)
-
-#define AMR_GP3_DESC "amr-nb 3GPP reference library"
-static const char* const amr_gp3_library_names[] =
-{
-#ifdef DL_AMRWB
-  "libamrnb-3",
-  "libamrnb",
-  "amrnb",
-  "cygamrnb-3",
-#endif
-  NULL
-};
-
 #include "amr.h"
-
-#endif /* HAVE_AMRNB */
-    

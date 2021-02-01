@@ -23,19 +23,12 @@ typedef struct {
     char * str;       /* Command-line argument to parse for this pad */
     uint64_t start; /* Start padding when in_pos equals this */
     uint64_t pad;   /* Number of samples to pad */
-    uint64_t align; /* Align output to multiple of this */
   } * pads;
 
   uint64_t in_pos;  /* Number of samples read from the input stream */
-  uint64_t out_pos; /* Number of samples written to the output stream */
   unsigned pads_pos;  /* Number of pads completed so far */
   uint64_t pad_pos; /* Number of samples through the current pad */
 } priv_t;
-
-static uint64_t pad_align(uint64_t pos, uint64_t align)
-{
-  return (align - pos % align) % align;
-}
 
 static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
 {
@@ -46,24 +39,14 @@ static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
   const uint64_t in_length = argv ? 0 :
     (effp->in_signal.length != SOX_UNKNOWN_LEN ?
      effp->in_signal.length / effp->in_signal.channels : SOX_UNKNOWN_LEN);
-  uint64_t pad_len = 0;
-  uint64_t *arg;
-  char *str;
 
   for (i = 0; i < p->npads; ++i) {
     if (argv) /* 1st parse only */
       p->pads[i].str = lsx_strdup(argv[i]);
-    str = p->pads[i].str;
-    if (*str == '%') {
-      str++;
-      arg = &p->pads[i].align;
-    } else {
-      arg = &p->pads[i].pad;
-    }
-    next = lsx_parsesamples(rate, str, arg, 't');
+    next = lsx_parsesamples(rate, p->pads[i].str, &p->pads[i].pad, 't');
     if (next == NULL) break;
     if (*next == '\0')
-      p->pads[i].start = i? in_length : 0;
+      p->pads[i].start = i? UINT64_MAX : 0;
     else {
       if (*next != '@') break;
       next = lsx_parseposition(rate, next+1, argv ? NULL : &p->pads[i].start,
@@ -74,14 +57,6 @@ static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
         p->pads[i].start = UINT64_MAX; /* currently the same value, but ... */
     }
     if (!argv) {
-      if (p->pads[i].align && p->pads[i].start != UINT64_MAX) {
-        p->pads[i].pad =
-          pad_align(p->pads[i].start + pad_len, p->pads[i].align);
-        p->pads[i].align = 0;
-      }
-
-      pad_len += p->pads[i].pad;
-
       /* Do this check only during the second pass when the actual
          sample rate is known, otherwise it might fail on legal
          commands like
@@ -132,9 +107,9 @@ static int start(sox_effect_t * effp)
     }
   }
 
-  p->in_pos = p->out_pos = p->pad_pos = p->pads_pos = 0;
+  p->in_pos = p->pad_pos = p->pads_pos = 0;
   for (i = 0; i < p->npads; ++i)
-    if (p->pads[i].pad || p->pads[i].align)
+    if (p->pads[i].pad)
       return SOX_SUCCESS;
   return SOX_EFF_NULL;
 }
@@ -163,8 +138,6 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
     }
   } while (idone < *isamp && odone < *osamp);
 
-  p->out_pos += odone;
-
   *isamp = idone * effp->in_signal.channels;
   *osamp = odone * effp->in_signal.channels;
   return SOX_SUCCESS;
@@ -174,12 +147,8 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
 {
   priv_t * p = (priv_t *)effp->priv;
   static size_t isamp = 0;
-  if (p->pads_pos != p->npads && p->in_pos != p->pads[p->pads_pos].start) {
-    if (p->pads[p->pads_pos].align)
-      p->pads[p->pads_pos].pad =
-        pad_align(p->pads[p->pads_pos].align, p->pads[p->pads_pos].align);
+  if (p->pads_pos != p->npads && p->in_pos != p->pads[p->pads_pos].start)
     p->in_pos = UINT64_MAX;  /* Invoke the final pad (with no given start) */
-  }
   return flow(effp, 0, obuf, &isamp, osamp);
 }
 

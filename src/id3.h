@@ -20,14 +20,6 @@
 
 #include "sox_i.h"
 
-#ifdef HAVE_ID3TAG
-
 void lsx_id3_read_tag(sox_format_t *ft, sox_bool search);
-
-#else
-
-#define lsx_id3_read_tag(ft, search) do { } while (0)
-
-#endif /* HAVE_ID3TAG */
 
 #endif

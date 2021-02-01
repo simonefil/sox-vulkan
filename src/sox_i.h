@@ -183,6 +183,8 @@ UNUSED static int lsx_readsw(sox_format_t * ft, int16_t * sw)
 #define lsx_readsw(ft, sw) lsx_readb(ft, (uint16_t *)sw)
 #endif
 
+int lsx_read_fields(sox_format_t *ft, uint32_t *len,  const char *spec, ...);
+
 int lsx_write3(sox_format_t * ft, unsigned u3);
 int lsx_writeb(sox_format_t * ft, unsigned ub);
 int lsx_writedf(sox_format_t * ft, double d);
@@ -300,11 +302,7 @@ int lsx_effects_quit(void);
 
 /*--------------------------------- Dynamic Library ----------------------------------*/
 
-#if defined(HAVE_WIN32_LTDL_H)
-    #include "win32-ltdl.h"
-    #define HAVE_LIBLTDL 1
-    typedef lt_dlhandle lsx_dlhandle;
-#elif defined(HAVE_LIBLTDL)
+#if defined(HAVE_LIBLTDL)
     #include <ltdl.h>
     typedef lt_dlhandle lsx_dlhandle;
 #else

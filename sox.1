@@ -325,12 +325,6 @@ c8 c8 c.
 .TE
 .DT
 .SP
-On some systems, SoX allows audio playback volume to be adjusted whilst
-using
-.BR play .
-Where supported, this is achieved by tapping the `v' & `V' keys during
-playback.
-.SP
 To help with setting a suitable recording level, SoX includes a peak-level
 meter which can be invoked (before making the actual recording) as follows:
 .EX
@@ -1085,7 +1079,7 @@ See also the
 .BR vol ,
 and
 .B gain
-effects, and see \fBInput File Balancing\fR above.
+effects, and see \fBInput File Combining\fR above.
 .SS Input & Output File Format Options
 These options apply to the input or output file whose name they
 immediately precede on the command line and are used mainly when
@@ -2012,18 +2006,10 @@ option is not given, then the pseudo-random number generator used to
 generate the white noise will be `reseeded', i.e. the generated noise
 will be different between invocations.
 .SP
-If the target precision is 1-bit, the \fBsdm\fR effect is applied
-automatically with default settings. Invoke it manually to control its
-options.
-.SP
 This effect should not be followed by any other effect that
 affects the audio.
 .SP
 See also the `Dithering' section above.
-.TP
-\fBdop\fR
-DSD over PCM.  1-bit DSD data is packed into 24-bit samples for
-transport over non-DSD-aware links.
 .TP
 \fBdownsample\fR [\fIfactor\fR(2)]
 Downsample the signal by an integer factor: Only the first out of
@@ -2462,7 +2448,7 @@ For example, the following (one long) command shows how multi-band
 companding is typically used in FM radio:
 .EX
 .ne 8
-   play track1.wav gain \-3 sinc 8000\- 29 100 mcompand \\
+   play track1.wav gain \-3 sinc \-n 29 \-b 100 8000 mcompand \\
 	\(dq0.005,0.1 \-47,\-40,\-34,\-34,\-17,\-33\(dq 100 \\
 	\(dq0.003,0.05 \-47,\-40,\-34,\-34,\-17,\-33\(dq 400 \\
 	\(dq0.000625,0.0125 \-47,\-40,\-34,\-34,\-15,\-33\(dq 1600 \\
@@ -2543,7 +2529,7 @@ Non linear distortion.
 The \fIcolour\fR parameter controls the amount of even harmonic content
 in the over-driven output.
 .TP
-\fBpad\fR { \fI[%]length\fR[\fB@\fIposition(=)\fR] }
+\fBpad\fR { \fIlength\fR[\fB@\fIposition(=)\fR] }
 Pad the audio with silence, at the beginning, the end, or any
 specified points through the audio.
 .I length
@@ -2563,11 +2549,6 @@ adds 1\*d5 seconds of silence padding at each end of the audio, whilst
 inserts 4000 samples of silence 3 minutes into the audio.
 If silence is wanted only at the end of the audio, specify either the end
 position or specify a zero-length pad at the start.
-.SP
-If a pad specification starts with with a % sign, the output is padded
-to a multiple of \fIlength\fR at the specified position. For example,
-\fBpad 0 %10\fR adds silence at the end of the audio up to the next
-multiple of 10 seconds.
 .SP
 See also
 .B delay
@@ -2712,7 +2693,7 @@ as detailed in the following table:
 .ne 6
 .TS
 center;
-lB lw52.
+lB lw51.
 \-M/\-I/\-L	Phase response = minimum/intermediate/linear
 \-s	Steep filter (band-width = 99%)
 \-a	Allow aliasing/imaging above the pass-band
@@ -3004,36 +2985,6 @@ The sampling rate must be one of: 44\*d1, 48, 88\*d2, 96 kHz.
 .SP
 This effect supports the \fB\-\-plot\fR global option.
 .TP
-\fBsdm\fR [\fB\-f \fIfilter\fR] [\fB\-t \fIorder\fR] [\fB\-n \fInum\fR] [\fB-l \fIlatency\fR]
-Apply a 1-bit sigma-delta modulator producing DSD output.  The input
-should be previously upsampled, e.g. with the \fBrate\fR effect, to a
-high rate, 2\*d8224MHz for DSD64.  The \fB\-f\fR option selects the
-noise-shaping filter from the following list where the number indicates
-the order of the filter:
-.EX
-   clans-4      sdm-4
-   clans-5      sdm-5
-   clans-6      sdm-6
-   clans-7      sdm-7
-   clans-8      sdm-8
-.EE
-.TP
-\ 
-The noise filter may be combined with a partial trellis/viterbi search
-by supplying the following options:
-.RS
-.IP \fB\-t \fIorder\fR
-Trellis order, max 32.
-.IP \fB\-n \fInum\fR
-Number of paths to consider, max 32.
-.IP \fB\-l \fIlatency\fR
-Output latency, max 2048.
-.RE
-.TP
-\ 
-The result of using these parameters is hard to predict and can include
-high noise levels or instability.  Caution is advised.
-.TP
 \fBsilence \fR[\fB\-l\fR] \fIabove-periods\fR [\fIduration threshold\fR[\fBd\fR\^|\^\fB%\fR]
 [\fIbelow-periods duration threshold\fR[\fBd\fR\^|\^\fB%\fR]]
 .SP
@@ -3278,6 +3229,10 @@ A negative
 .I num
 effectively increases the `brightness' of the spectrogram display,
 and vice versa.
+.IP \fB\-n\fR
+Sets the upper limit of the Z axis so that the loudest pixels
+are shown using the brightest colour in the palette - a kind of
+automatic \fB\-Z\fR flag.
 .IP \fB\-q\ \fInum\fR
 Sets the Z-axis quantisation, i.e. the number of different colours (or
 intensities) in which to render Z-axis
@@ -4247,7 +4202,7 @@ SoX scripting examples at http://sox.sourceforge.net/Docs/Scripts
 [1]
 R. Bristow-Johnson,
 .IR "Cookbook formulae for audio EQ biquad filter coefficients" ,
-http://musicdsp.org/files/Audio-EQ-Cookbook.txt
+https://webaudio.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html
 .TP
 [2]
 Wikipedia,
@@ -4257,7 +4212,7 @@ http://en.wikipedia.org/wiki/Q_factor
 [3]
 Scott Lehman,
 .IR "Effects Explained" ,
-http://harmony-central.com/Effects/effects-explained.html
+https://web.archive.org/web/20070320114719/http://www.harmony-central.com/Effects/effects-explained.html
 .TP
 [4]
 Wikipedia,
@@ -4272,7 +4227,7 @@ http://www.ladspa.org
 [6]
 Richard Furse,
 .IR "Computer Music Toolkit" ,
-http://www.ladspa.org/cmt
+https://www.ladspa.org/cmt/overview.html
 .TP
 [7]
 Steve Harris,

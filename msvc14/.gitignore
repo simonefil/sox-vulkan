@@ -1,0 +1,12 @@
+*.user
+Debug
+ipch
+Makefile
+Makefile.in
+Release
+Sox.ncb
+Sox.opensdf
+Sox.sdf
+SoX.VC.db
+SoX.VC.VC.opendb
+*.suo

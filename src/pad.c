@@ -23,11 +23,11 @@ typedef struct {
     char * str;       /* Command-line argument to parse for this pad */
     uint64_t start; /* Start padding when in_pos equals this */
     uint64_t pad;   /* Number of samples to pad */
-	uint64_t align; /* Align output to multiple of this */
+    uint64_t align; /* Align output to multiple of this */
   } * pads;
 
   uint64_t in_pos;  /* Number of samples read from the input stream */
-  uint64_t out_pos;  /* Number of samples read from the output stream */
+  uint64_t out_pos; /* Number of samples written to the output stream */
   unsigned pads_pos;  /* Number of pads completed so far */
   uint64_t pad_pos; /* Number of samples through the current pad */
 } priv_t;
@@ -60,7 +60,8 @@ static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
     } else {
       arg = &p->pads[i].pad;
     }
-    next = lsx_parsesamples(rate, str, arg, 't');    if (next == NULL) break;
+    next = lsx_parsesamples(rate, str, arg, 't');
+    if (next == NULL) break;
     if (*next == '\0')
       p->pads[i].start = i? in_length : 0;
     else {
@@ -73,7 +74,7 @@ static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
         p->pads[i].start = UINT64_MAX; /* currently the same value, but ... */
     }
     if (!argv) {
-	  if (p->pads[i].align && p->pads[i].start != UINT64_MAX) {
+      if (p->pads[i].align && p->pads[i].start != UINT64_MAX) {
         p->pads[i].pad =
           pad_align(p->pads[i].start + pad_len, p->pads[i].align);
         p->pads[i].align = 0;
@@ -161,7 +162,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
       }
     }
   } while (idone < *isamp && odone < *osamp);
-  
+
   p->out_pos += odone;
 
   *isamp = idone * effp->in_signal.channels;
@@ -177,7 +178,7 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
     if (p->pads[p->pads_pos].align)
       p->pads[p->pads_pos].pad =
         pad_align(p->pads[p->pads_pos].align, p->pads[p->pads_pos].align);
-	p->in_pos = UINT64_MAX;  /* Invoke the final pad (with no given start) */
+    p->in_pos = UINT64_MAX;  /* Invoke the final pad (with no given start) */
   }
   return flow(effp, 0, obuf, &isamp, osamp);
 }

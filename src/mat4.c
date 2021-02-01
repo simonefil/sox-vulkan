@@ -17,6 +17,8 @@
 
 #include "sox_i.h"
 
+#if defined HAVE_SNDFILE
+
 LSX_FORMAT_HANDLER(mat4)
 {
   static char const * const names[] = {"mat4", "mat", NULL};
@@ -31,3 +33,5 @@ LSX_FORMAT_HANDLER(mat4)
   handler.write_formats = write_encodings;
   return &handler;
 }
+
+#endif

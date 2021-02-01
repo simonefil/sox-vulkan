@@ -443,7 +443,7 @@ static size_t sunwrite(
         size_t cbStride;
         int cbWritten;
 
-        cStride = cInputRemaining;
+        cStride = cInput;
         if (cStride > pPriv->cOutput) {
             cStride = pPriv->cOutput;
         }

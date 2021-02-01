@@ -15,7 +15,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#include "glob.h"
+#include "win32-glob.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
@@ -72,7 +72,7 @@ glob(
     size_t len;
     unsigned entries = 0;
     WIN32_FIND_DATAA finddata;
-    HANDLE hfindfile;
+    HANDLE hfindfile = FindFirstFileA(pattern, &finddata);
 
     if (!pattern || flags != (flags & GLOB_FLAGS) || unused || !pglob)
     {
@@ -93,7 +93,6 @@ glob(
         len--;
     path[len] = 0;
 
-    hfindfile = FindFirstFileA(pattern, &finddata);
     if (hfindfile == INVALID_HANDLE_VALUE)
     {
         if (flags & GLOB_NOCHECK)

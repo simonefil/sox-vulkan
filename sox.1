@@ -325,6 +325,12 @@ c8 c8 c.
 .TE
 .DT
 .SP
+On some systems, SoX allows audio playback volume to be adjusted whilst
+using
+.BR play .
+Where supported, this is achieved by tapping the `v' & `V' keys during
+playback.
+.SP
 To help with setting a suitable recording level, SoX includes a peak-level
 meter which can be invoked (before making the actual recording) as follows:
 .EX
@@ -1079,7 +1085,7 @@ See also the
 .BR vol ,
 and
 .B gain
-effects, and see \fBInput File Combining\fR above.
+effects, and see \fBInput File Balancing\fR above.
 .SS Input & Output File Format Options
 These options apply to the input or output file whose name they
 immediately precede on the command line and are used mainly when
@@ -2706,7 +2712,7 @@ as detailed in the following table:
 .ne 6
 .TS
 center;
-lB lw51.
+lB lw52.
 \-M/\-I/\-L	Phase response = minimum/intermediate/linear
 \-s	Steep filter (band-width = 99%)
 \-a	Allow aliasing/imaging above the pass-band
@@ -3272,10 +3278,6 @@ A negative
 .I num
 effectively increases the `brightness' of the spectrogram display,
 and vice versa.
-.IP \fB\-n\fR
-Sets the upper limit of the Z axis so that the loudest pixels
-are shown using the brightest colour in the palette - a kind of
-automatic \fB\-Z\fR flag.
 .IP \fB\-q\ \fInum\fR
 Sets the Z-axis quantisation, i.e. the number of different colours (or
 intensities) in which to render Z-axis
@@ -4245,7 +4247,7 @@ SoX scripting examples at http://sox.sourceforge.net/Docs/Scripts
 [1]
 R. Bristow-Johnson,
 .IR "Cookbook formulae for audio EQ biquad filter coefficients" ,
-https://webaudio.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html
+http://musicdsp.org/files/Audio-EQ-Cookbook.txt
 .TP
 [2]
 Wikipedia,
@@ -4255,7 +4257,7 @@ http://en.wikipedia.org/wiki/Q_factor
 [3]
 Scott Lehman,
 .IR "Effects Explained" ,
-https://web.archive.org/web/20070320114719/http://www.harmony-central.com/Effects/effects-explained.html
+http://harmony-central.com/Effects/effects-explained.html
 .TP
 [4]
 Wikipedia,
@@ -4270,7 +4272,7 @@ http://www.ladspa.org
 [6]
 Richard Furse,
 .IR "Computer Music Toolkit" ,
-https://www.ladspa.org/cmt/overview.html
+http://www.ladspa.org/cmt
 .TP
 [7]
 Steve Harris,

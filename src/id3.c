@@ -15,12 +15,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#include <id3tag.h>
 #include "sox_i.h"
 #include "id3.h"
-
-#ifdef HAVE_ID3TAG
-
-#include <id3tag.h>
 
 static char const * id3tagmap[][2] =
 {
@@ -218,10 +215,3 @@ void lsx_id3_read_tag(sox_format_t * ft, sox_bool search)
     id3_tag_delete(info.tag);
   }
 }
-
-#else
-
-/* Stub for format modules */
-void lsx_id3_read_tag(sox_format_t *ft, sox_bool search) { }
-
-#endif

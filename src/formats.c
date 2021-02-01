@@ -18,7 +18,6 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#define _GNU_SOURCE
 #include "sox_i.h"
 
 #include <assert.h>
@@ -36,10 +35,6 @@
 
 #if HAVE_MAGIC
   #include <magic.h>
-#endif
-
-#ifdef HAVE_UNISTD_H
-#  include <unistd.h>
 #endif
 
 #define PIPE_AUTO_DETECT_SIZE 256 /* Only as much as we can rewind a pipe */
@@ -304,26 +299,22 @@ char const * sox_find_comment(sox_comments_t comments, char const * id)
 
 static void set_endiannesses(sox_format_t * ft)
 {
-  if (ft->handler.flags & SOX_FILE_ENDIAN) {
-    sox_bool file_is_bigendian = !(ft->handler.flags & SOX_FILE_ENDBIG);
-
-    if (ft->encoding.opposite_endian) {
-      ft->encoding.reverse_bytes = file_is_bigendian != MACHINE_IS_BIGENDIAN;
-      lsx_report("`%s': overriding file-type byte-order", ft->filename);
-    } else if (ft->encoding.reverse_bytes == sox_option_default) {
-      ft->encoding.reverse_bytes = file_is_bigendian == MACHINE_IS_BIGENDIAN;
-    }
-  } else {
-    if (ft->encoding.opposite_endian) {
-      ft->encoding.reverse_bytes = sox_option_yes;
-      lsx_report("`%s': overriding machine byte-order", ft->filename);
-    } else if (ft->encoding.reverse_bytes == sox_option_default) {
-      ft->encoding.reverse_bytes = sox_option_no;
-    }
-  }
+  if (ft->encoding.opposite_endian)
+    ft->encoding.reverse_bytes = (ft->handler.flags & SOX_FILE_ENDIAN)?
+      !(ft->handler.flags & SOX_FILE_ENDBIG) != MACHINE_IS_BIGENDIAN : sox_true;
+  else if (ft->encoding.reverse_bytes == sox_option_default)
+    ft->encoding.reverse_bytes = (ft->handler.flags & SOX_FILE_ENDIAN)?
+      !(ft->handler.flags & SOX_FILE_ENDBIG) == MACHINE_IS_BIGENDIAN : sox_false;
 
   /* FIXME: Change reports to suitable warnings if trying
    * to override something that can't be overridden. */
+
+  if (ft->handler.flags & SOX_FILE_ENDIAN) {
+    if (ft->encoding.reverse_bytes == (sox_option_t)
+        (!(ft->handler.flags & SOX_FILE_ENDBIG) != MACHINE_IS_BIGENDIAN))
+      lsx_report("`%s': overriding file-type byte-order", ft->filename);
+  } else if (ft->encoding.reverse_bytes == sox_option_yes)
+    lsx_report("`%s': overriding machine byte-order", ft->filename);
 
   if (ft->encoding.reverse_bits == sox_option_default)
     ft->encoding.reverse_bits = !!(ft->handler.flags & SOX_FILE_BIT_REV);
@@ -339,11 +330,13 @@ static void set_endiannesses(sox_format_t * ft)
 
 static sox_bool is_seekable(sox_format_t const * ft)
 {
+  struct stat st;
+
   assert(ft);
   if (!ft->fp)
     return sox_false;
-
-  return !fseek(ft->fp, 0, SEEK_CUR);
+  fstat(fileno((FILE*)ft->fp), &st);
+  return ((st.st_mode & S_IFMT) == S_IFREG);
 }
 
 /* check that all settings have been given */
@@ -351,8 +344,8 @@ static int sox_checkformat(sox_format_t * ft)
 {
   ft->sox_errno = SOX_SUCCESS;
 
-  if (ft->signal.rate <= 0) {
-    lsx_fail_errno(ft, SOX_EFMT, "sample rate zero or negative");
+  if (!ft->signal.rate) {
+    lsx_fail_errno(ft,SOX_EFMT,"sampling rate was not specified");
     return SOX_EOF;
   }
   if (!ft->signal.precision) {
@@ -379,50 +372,6 @@ static int xfclose(FILE * file, lsx_io_type io_type)
     fclose(file);
 }
 
-static void incr_pipe_size(FILE *f)
-{
-/*
- * Linux 2.6.35 and later has the ability to expand the pipe buffer
- * Try to get it as big as possible to avoid stalls when SoX itself
- * is using big buffers
- */
-#if defined(F_GETPIPE_SZ) && defined(F_SETPIPE_SZ)
-  static long max_pipe_size;
-
-  /* read the maximum size of the pipe the first time this is called */
-  if (max_pipe_size == 0) {
-    const char path[] = "/proc/sys/fs/pipe-max-size";
-    int fd = open(path, O_RDONLY);
-
-    max_pipe_size = -1;
-    if (fd >= 0) {
-      char buf[80];
-      ssize_t r = read(fd, buf, sizeof(buf) - 1);
-
-      if (r > 0) {
-        buf[r] = 0;
-        max_pipe_size = strtol(buf, NULL, 10);
-
-        /* guard against obviously wrong values on messed up systems */
-        if (max_pipe_size <= PIPE_BUF || max_pipe_size > INT_MAX)
-          max_pipe_size = -1;
-      }
-      close(fd);
-    }
-  }
-
-  if (max_pipe_size > PIPE_BUF) {
-    int fd = fileno(f);
-
-    if (fcntl(fd, F_SETPIPE_SZ, max_pipe_size) >= 0)
-      lsx_debug("got pipe %ld bytes\n", max_pipe_size);
-    else
-      lsx_warn("couldn't set pipe size to %ld bytes: %s\n",
-               max_pipe_size, strerror(errno));
-  }
-#endif /* do nothing for platforms without F_{GET,SET}PIPE_SZ */
-}
-
 static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * io_type)
 {
   *io_type = lsx_io_file;
@@ -435,7 +384,6 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
 #endif
     f = popen(identifier + 1, POPEN_MODE);
     *io_type = lsx_io_pipe;
-    incr_pipe_size(f);
 #else
     lsx_fail("this build of SoX cannot open pipes");
 #endif
@@ -448,7 +396,6 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
     char * command = lsx_malloc(strlen(command_format) + strlen(identifier));
     sprintf(command, command_format, identifier);
     f = popen(command, POPEN_MODE);
-    incr_pipe_size(f);
     free(command);
     *io_type = lsx_io_url;
 #else
@@ -1063,15 +1010,8 @@ int sox_close(sox_format_t * ft)
     else result = ft->handler.stopwrite? (*ft->handler.stopwrite)(ft) : SOX_SUCCESS;
   }
 
-  if (ft->fp == stdin) {
-    sox_globals.stdin_in_use_by = NULL;
-  } else if (ft->fp == stdout) {
-    fflush(stdout);
-    sox_globals.stdout_in_use_by = NULL;
-  } else if (ft->fp) {
+  if (ft->fp && ft->fp != stdin && ft->fp != stdout)
     xfclose(ft->fp, ft->io_type);
-  }
-
   free(ft->priv);
   free(ft->filename);
   free(ft->filetype);
@@ -1250,9 +1190,8 @@ sox_get_format_fns(void)
     return s_sox_format_fns;
 }
 
-static unsigned nformats = NSTATIC_FORMATS;
-
 #ifdef HAVE_LIBLTDL /* Plugin format handlers */
+  static unsigned nformats = NSTATIC_FORMATS;
 
   static int init_format(const char *file, lt_ptr data)
   {
@@ -1335,7 +1274,7 @@ sox_format_handler_t const * sox_find_format(char const * name0, sox_bool no_dev
     char * pos = strchr(name, ';');
     if (pos) /* Use only the 1st clause of a mime string */
       *pos = '\0';
-    for (f = 0; f < nformats; ++f) {
+    for (f = 0; s_sox_format_fns[f].fn; ++f) {
       sox_format_handler_t const * handler = s_sox_format_fns[f].fn();
 
       if (!(no_dev && (handler->flags & SOX_FILE_DEVICE)))

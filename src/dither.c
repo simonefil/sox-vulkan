@@ -264,7 +264,7 @@ typedef struct {
   double const  * coefs;
   sox_bool      dither_off;
   sox_effect_handler_flow flow;
-  sdm_t			*sdm;
+  sdm_t         *sdm;
 } priv_t;
 
 #define CONVOLVE _ _ _ _
@@ -376,7 +376,7 @@ static int start(sox_effect_t * effp)
   effp->out_signal.precision = p->prec;
 
   if (p->prec == 1) {
-     p->sdm = sdm_init(NULL, effp->in_signal.rate, 0, 0, 0);
+    p->sdm = sdm_init(NULL, effp->in_signal.rate, 0, 0, 0);
     if (!p->sdm)
       return SOX_EOF;
 

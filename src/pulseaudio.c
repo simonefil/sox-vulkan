@@ -126,9 +126,6 @@ static size_t write_samples(sox_format_t *ft, const sox_sample_t *buf, size_t ns
   size_t len;
   int rc, error;
 
-  if (!nsamp)
-    return 0;
-
   /* Pulse Audio buffer lengths are true buffer lengths and not
    * count of samples. */
   len = nsamp * sizeof(sox_sample_t);

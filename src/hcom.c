@@ -73,14 +73,6 @@ typedef struct {
   size_t pos;                /* Where next byte goes */
 } priv_t;
 
-static int dictvalid(int n, int size, int left, int right)
-{
-        if (n > 0 && left < 0)
-                return 1;
-
-        return (unsigned)left < size && (unsigned)right < size;
-}
-
 static int startread(sox_format_t * ft)
 {
         priv_t *p = (priv_t *) ft->priv;
@@ -147,7 +139,6 @@ static int startread(sox_format_t * ft)
         ft->encoding.bits_per_sample = 8;
         ft->signal.rate = 22050 / divisor;
         ft->signal.channels = 1;
-        ft->signal.length = huffcount;
 
         /* Allocate memory for the dictionary */
         p->dictionary = lsx_malloc(511 * sizeof(dictent));
@@ -159,8 +150,8 @@ static int startread(sox_format_t * ft)
                 lsx_debug("%d %d",
                        p->dictionary[i].dict_leftson,
                        p->dictionary[i].dict_rightson);
-                if (!dictvalid(i, dictsize, p->dictionary[i].dict_leftson,
-                               p->dictionary[i].dict_rightson)) {
+                if ((unsigned) p->dictionary[i].dict_leftson >= dictsize ||
+                    (unsigned) p->dictionary[i].dict_rightson >= dictsize) {
                         lsx_fail_errno(ft, SOX_EHDR, "Invalid dictionary");
                         return SOX_EOF;
                 }
@@ -285,14 +276,6 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t l
   if (len == 0)
     return 0;
 
-  if (p->pos == INT32_MAX)
-    return SOX_EOF;
-
-  if (p->pos + len > INT32_MAX) {
-    lsx_warn("maximum file size exceeded");
-    len = INT32_MAX - p->pos;
-  }
-
   if (p->pos + len > p->size) {
     p->size = ((p->pos + len) / BUFINCR + 1) * BUFINCR;
     p->data = lsx_realloc(p->data, p->size);
@@ -353,7 +336,6 @@ static void compress(sox_format_t * ft, unsigned char **df, int32_t *dl)
   long codes[256], codesize[256];
   dictent newdict[511];
   int i, sample, j, k, d, l, frequcount;
-  int64_t csize;
 
   sample = *datafork;
   memset(frequtable, 0, sizeof(frequtable));
@@ -409,10 +391,10 @@ static void compress(sox_format_t * ft, unsigned char **df, int32_t *dl)
   }
   dictsize = p->de - newdict;
   makecodes(0, 0, 0, 1, newdict, codes, codesize);
-  csize = 0;
+  l = 0;
   for (i = 0; i < 256; i++)
-    csize += frequtable[i] * codesize[i];
-  l = (((csize + 31) >> 5) << 2) + 24 + dictsize * 4;
+    l += frequtable[i] * codesize[i];
+  l = (((l + 31) >> 5) << 2) + 24 + dictsize * 4;
   lsx_debug("  Original size: %6d bytes", *dl);
   lsx_debug("Compressed size: %6d bytes", l);
   datafork = lsx_malloc((size_t)l);
@@ -451,12 +433,12 @@ static int stopwrite(sox_format_t * ft)
 {
   priv_t *p = (priv_t *) ft->priv;
   unsigned char *compressed_data = p->data;
-  int32_t compressed_len = p->pos;
+  size_t compressed_len = p->pos;
   int rc = SOX_SUCCESS;
 
   /* Compress it all at once */
   if (compressed_len) {
-    compress(ft, &compressed_data, &compressed_len);
+    compress(ft, &compressed_data, (int32_t *)&compressed_len);
     free(p->data);
   }
 

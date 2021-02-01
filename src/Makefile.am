@@ -4,7 +4,6 @@ RM = rm -f
 
 AM_CPPFLAGS = -DLADSPA_PATH="\"@LADSPA_PATH@\""
 AM_CFLAGS = @WARN_CFLAGS@ #-Werror
-
 AUTOMAKE_OPTIONS = subdir-objects
 
 if HAVE_LIBLTDL
@@ -92,7 +91,8 @@ libsox_la_LIBADD += @GOMP_LIBS@
 
 libsox_la_CFLAGS = @WARN_CFLAGS@
 libsox_la_LDFLAGS = @APP_LDFLAGS@ -version-info @SHLIB_VERSION@ \
-  -export-symbols-regex '^(sox_.*|lsx_(([cm]|re)alloc|check_read_params|(close|open)_dllibrary|(debug(_more|_most)?|fail|report|warn)_impl|eof|error|fail_errno|filelength|find_(enum_(text|value)|file_extension)|flush|getopt(_init)?|id3_read_tag|lpc10_(create_(de|en)coder_state|(de|en)code)|raw(read|write)|read(_b_buf|buf|chars)|rewind|seeki|sigfigs3p?|strcasecmp|strdup|tell|unreadb|write(b|_b_buf|buf|s)))$$'
+  -export-symbols $(srcdir)/libsox.sym
+EXTRA_libsox_la_DEPENDENCIES = $(srcdir)/libsox.sym
 
 if HAVE_WIN32_LTDL
   libsox_la_SOURCES += win32-ltdl.c win32-ltdl.h

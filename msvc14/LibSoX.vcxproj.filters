@@ -127,6 +127,15 @@
     <ClInclude Include="SoX\soxconfig.h">
       <Filter>Config Headers</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\rate.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\sdm.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\sdm_x86.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\alsa.c">
@@ -286,9 +295,6 @@
       <Filter>Effect Sources</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sinc.c">
-      <Filter>Effect Sources</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\spectrogram.c">
       <Filter>Effect Sources</Filter>
     </ClCompile>
     <ClCompile Include="..\src\speed.c">
@@ -608,6 +614,9 @@
     </ClCompile>
     <ClCompile Include="..\src\id3.c">
       <Filter>Format Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\spectrogram.c">
+      <Filter>Excluded Sources</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

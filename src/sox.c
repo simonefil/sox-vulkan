@@ -84,6 +84,10 @@
   #include <unistd.h>
 #endif
 
+#ifdef HAVE_SYS_IOCTL_H
+  #include <sys/ioctl.h>
+#endif
+
 #ifdef HAVE_GETTIMEOFDAY
   #define TIME_FRAC 1e6
 #else
@@ -1208,6 +1212,18 @@ static sox_bool since(struct timeval * then, double secs, sox_bool always_reset)
   return ret;
 }
 
+static int termwidth = 80;
+
+#ifdef TIOCGWINSZ
+static void get_termwidth(int s)
+{
+  struct winsize w;
+
+  if (!ioctl(2, TIOCGWINSZ, &w))
+    termwidth = w.ws_col;
+}
+#endif
+
 #define MIN_HEADROOM 6.
 static double min_headroom = MIN_HEADROOM;
 
@@ -1243,9 +1259,9 @@ static char const * vu(unsigned channel)
 static char * headroom(void)
 {
   if (min_headroom < MIN_HEADROOM) {
-    static char buff[10];
+    static char buff[16];
     unsigned h = (unsigned)(min_headroom * 10);
-    sprintf(buff, "Hd:%u.%u", h /10, h % 10);
+    snprintf(buff, sizeof(buff), "Hd:%u.%u", h /10, h % 10);
     return buff;
   }
   return "      ";
@@ -1259,16 +1275,19 @@ static void display_status(sox_bool all_done)
   if (all_done || since(&then, .1, sox_false)) {
     double read_time = (double)read_wide_samples / combiner_signal.rate;
     double left_time = 0, in_time = 0, percentage = 0;
+    char buf[128];
 
     if (input_wide_samples) {
       in_time = (double)input_wide_samples / combiner_signal.rate;
       left_time = max(in_time - read_time, 0);
       percentage = max(100. * read_wide_samples / input_wide_samples, 0);
     }
-    fprintf(stderr, "\rIn:%-5s %s [%s] Out:%-5s [%6s|%-6s] %s Clip:%-5s",
+    snprintf(buf, min(termwidth + 2, sizeof(buf)),
+      "\rIn:%-5s %s [%s] Out:%-5s [%6s|%-6s] %s Clip:%-5s",
       lsx_sigfigs3p(percentage), str_time(read_time), str_time(left_time),
       lsx_sigfigs3((double)output_samples),
       vu(0), vu(1), headroom(), lsx_sigfigs3((double)total_clips()));
+    fputs(buf, stderr);
   }
   if (all_done)
     fputc('\n', stderr);
@@ -1289,63 +1308,15 @@ static int kbhit(void)
 #define kbhit() 0
 #endif
 
-#ifdef HAVE_SOUNDCARD_H
-#include <sys/ioctl.h>
-static void adjust_volume(int delta)
-{
-  char * from_env = getenv("MIXERDEV");
-  int vol1 = 0, vol2 = 0, fd = open(from_env? from_env : "/dev/mixer", O_RDWR);
-  if (fd >= 0) {
-    if (ioctl(fd, MIXER_READ(SOUND_MIXER_PCM), &vol1) != -1) {
-      int side1 = vol1 & 0xff, side2 = (vol1 >> 8) & 0xff;
-      delta = delta < 0?  max(delta, -min(side1, side2)) :
-          min(delta, 100 - max(side1, side2));
-      vol2 = ((side2 + delta) << 8) + side1 + delta;
-      lsx_debug("%04x %04x", vol1, vol2);
-      if (vol1 != vol2 && ioctl(fd, MIXER_WRITE(SOUND_MIXER_PCM), &vol2) < 0)
-        vol2 = vol1;
-    }
-    close(fd);
-  }
-  if (vol1 == vol2)
-    putc('\a', stderr);
-}
-#elif defined(HAVE_AUDIOIO_H)
-static void adjust_volume(int delta)
-{
-  int vol1 = 0, vol2 = 0, fd = fileno((FILE*)ofile->ft->fp);
-  if (fd >= 0) {
-    audio_info_t audio_info;
-    if (ioctl(fd, AUDIO_GETINFO, &audio_info) >= 0) {
-      vol1 = (audio_info.play.gain * 100 + (AUDIO_MAX_GAIN >> 1)) / AUDIO_MAX_GAIN;
-      vol2 = range_limit(vol1 + delta, 0, 100);
-      AUDIO_INITINFO(&audio_info);
-      audio_info.play.gain = (vol2 * AUDIO_MAX_GAIN + 50) / 100;
-      audio_info.output_muted = 0;
-      lsx_debug("%04x %04x", vol1, vol2);
-      if (vol1 != vol2 && ioctl(fd, AUDIO_SETINFO, &audio_info) < 0)
-        vol2 = vol1;
-    }
-  }
-  if (vol1 == vol2)
-    putc('\a', stderr);
-}
-#else
-static void adjust_volume(int delta)
-{
-  (void)delta;
-  putc('\a', stderr);
-}
-#endif
-
 static int update_status(sox_bool all_done, void * client_data)
 {
   (void)client_data;
   if (interactive) while (kbhit()) {
+    int LSX_UNUSED ch;
 #ifdef HAVE_CONIO_H
-    int ch = _getch();
+    ch = _getch();
 #else
-    int ch = getchar();
+    ch = getchar();
 #endif
 
 #ifdef MORE_INTERACTIVE
@@ -1385,10 +1356,6 @@ static int update_status(sox_bool all_done, void * client_data)
       user_restart_eff = sox_true;
     }
 #endif
-    switch (ch) {
-      case 'V': adjust_volume(+7); break;
-      case 'v': adjust_volume(-7); break;
-    }
   }
 
   display_status(all_done || user_abort);
@@ -1574,13 +1541,28 @@ static void open_output_file(void)
   report_file_info(ofile);
 }
 
+static void setsig(int sig, void (*handler)(int))
+{
+#ifdef HAVE_SIGACTION
+  struct sigaction sa;
+
+  sa.sa_handler = handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+
+  sigaction(sig, &sa, NULL);
+#else
+  signal(sig, handler);
+#endif
+}
+
 static void sigint(int s)
 {
   static struct timeval then;
   if (input_count > 1 && show_progress && s == SIGINT &&
       is_serial(combine_method) && since(&then, 1.0, sox_true))
   {
-    signal(SIGINT, sigint);
+    setsig(SIGINT, sigint);
     user_skip = sox_true;
   }
   else user_abort = sox_true;
@@ -1789,9 +1771,28 @@ static int process(void)
     tcsetattr(fileno(stdin), TCSANOW, &modified_termios);
   }
 #endif
+#if defined(F_GETFL) && defined(F_SETFL) && defined(O_NONBLOCK)
+  if (interactive) {
+    int fd = fileno(stdin);
+    int flags = fcntl(fd, F_GETFL);
+    if (flags == -1) {
+      lsx_warn("error getting flags on stdin descriptor: %s", strerror(errno));
+    } else if (!(flags & O_NONBLOCK)) {
+      if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+        lsx_warn("error setting non-blocking on stdin: %s", strerror(errno));
+    }
+  }
+#endif
 
-  signal(SIGTERM, sigint); /* Stop gracefully, as soon as we possibly can. */
-  signal(SIGINT , sigint); /* Either skip current input or behave as SIGTERM. */
+#ifdef TIOCGWINSZ
+  get_termwidth(0);
+#ifdef SIGWINCH
+  setsig(SIGWINCH, get_termwidth);
+#endif
+#endif
+
+  setsig(SIGTERM, sigint); /* Stop gracefully, as soon as we possibly can. */
+  setsig(SIGINT , sigint); /* Either skip current input or behave as SIGTERM. */
   if (very_first_effchain) {
     struct timeval now;
     double d;
@@ -2852,6 +2853,7 @@ int main(int argc, char **argv)
 {
   size_t i;
   char mybase[6];
+  int err;
 
   gettimeofday(&load_timeofday, NULL);
   myname = argv[0];
@@ -2904,8 +2906,8 @@ int main(int argc, char **argv)
     combine_method = sox_concatenate;
 
   /* Make sure we got at least the required # of input filenames */
-  if (input_count < (size_t)(is_serial(combine_method) ? 1 : 2))
-    usage("Not enough input filenames specified");
+  if (input_count < 1)
+    usage("No input filenames specified");
 
   /* Check for misplaced input/output-specific options */
   for (i = 0; i < input_count; ++i) {
@@ -2920,7 +2922,7 @@ int main(int argc, char **argv)
   if (ofile->signal.length != SOX_UNSPEC)
     usage("--ignore-length can be given only for an input file");
 
-  signal(SIGINT, SIG_IGN); /* So child pipes aren't killed by track skip */
+  setsig(SIGINT, SIG_IGN); /* So child pipes aren't killed by track skip */
   for (i = 0; i < input_count; i++) {
     size_t j = input_count - 1 - i; /* Open in reverse order 'cos of rec (below) */
     file_t * f = files[j];
@@ -2967,7 +2969,7 @@ int main(int argc, char **argv)
   for (i = 0; i < input_count; i++)
     set_replay_gain(files[i]->ft->oob.comments, files[i]);
 
-  signal(SIGINT, SIG_DFL);
+  setsig(SIGINT, SIG_DFL);
 
   /* Loop through the rest of the arguments looking for effects */
   add_eff_chain();
@@ -3005,8 +3007,12 @@ int main(int argc, char **argv)
     read_user_effects(effects_filename);
   }
 
-  while (process() != SOX_EOF && !user_abort && current_input < input_count)
-  {
+  for (;;) {
+    err = process();
+
+    if (err == SOX_EOF || user_abort || current_input >= input_count)
+      break;
+
     if (advance_eff_chain() == SOX_EOF)
       break;
 
@@ -3049,5 +3055,5 @@ int main(int argc, char **argv)
 
   cleanup();
 
-  return 0;
+  return !!err;
 }

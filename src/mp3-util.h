@@ -73,22 +73,16 @@ static unsigned long xing_frames(priv_t * p, struct mad_bitptr ptr, unsigned bit
   return 0;
 }
 
-static void mad_timer_mult(mad_timer_t * t, double d)
-{
-  t->seconds = (signed long)(d *= (t->seconds + t->fraction * (1. / MAD_TIMER_RESOLUTION)));
-  t->fraction = (unsigned long)((d - t->seconds) * MAD_TIMER_RESOLUTION + .5);
-}
-
-static size_t mp3_duration_ms(sox_format_t * ft)
+static size_t mp3_duration(sox_format_t * ft)
 {
   priv_t              * p = (priv_t *) ft->priv;
   struct mad_stream   mad_stream;
   struct mad_header   mad_header;
   struct mad_frame    mad_frame;
-  mad_timer_t         time = mad_timer_zero;
   size_t              initial_bitrate = 0; /* Initialised to prevent warning */
   size_t              tagsize = 0, consumed = 0, frames = 0;
   sox_bool            vbr = sox_false, depadded = sox_false;
+  size_t              num_samples = 0;
 
   p->mad_stream_init(&mad_stream);
   p->mad_header_init(&mad_header);
@@ -98,7 +92,7 @@ static size_t mp3_duration_ms(sox_format_t * ft)
     int read, padding = 0;
     size_t leftover = mad_stream.bufend - mad_stream.next_frame;
 
-    memcpy(p->mp3_buffer, mad_stream.this_frame, leftover);
+    memmove(p->mp3_buffer, mad_stream.this_frame, leftover);
     read = lsx_readbuf(ft, p->mp3_buffer + leftover, p->mp3_buffer_size - leftover);
     if (read <= 0) {
       lsx_debug("got exact duration by scan to EOF (frames=%" PRIuPTR " leftover=%" PRIuPTR ")", frames, leftover);
@@ -133,7 +127,7 @@ static size_t mp3_duration_ms(sox_format_t * ft)
         continue; /* Not an audio frame */
       }
 
-      p->mad_timer_add(&time, mad_header.duration);
+      num_samples += MAD_NSBSAMPLES(&mad_header) * 32;
       consumed += mad_stream.next_frame - mad_stream.this_frame;
 
       lsx_debug_more("bitrate=%lu", mad_header.bitrate);
@@ -148,7 +142,7 @@ static size_t mp3_duration_ms(sox_format_t * ft)
             break;
           }
         if ((frames = xing_frames(p, mad_stream.anc_ptr, mad_stream.anc_bitlen))) {
-          p->mad_timer_multiply(&time, (signed long)frames);
+          num_samples *= frames;
           lsx_debug("got exact duration from XING frame count (%" PRIuPTR ")", frames);
           break;
         }
@@ -157,7 +151,9 @@ static size_t mp3_duration_ms(sox_format_t * ft)
 
       /* If not VBR, we can time just a few frames then extrapolate */
       if (++frames == 25 && !vbr) {
-        mad_timer_mult(&time, (double)(lsx_filelength(ft) - tagsize) / consumed);
+        double frame_size = (double) consumed / frames;
+        size_t num_frames = (lsx_filelength(ft) - tagsize) / frame_size;
+        num_samples = num_samples / frames * num_frames;
         lsx_debug("got approx. duration by CBR extrapolation");
         break;
       }
@@ -168,7 +164,8 @@ static size_t mp3_duration_ms(sox_format_t * ft)
   mad_header_finish(&mad_header);
   p->mad_stream_finish(&mad_stream);
   lsx_rewind(ft);
-  return p->mad_timer_count(time, MAD_UNITS_MILLISECONDS);
+
+  return num_samples;
 }
 
 #endif /* HAVE_MAD_H */

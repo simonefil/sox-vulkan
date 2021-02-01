@@ -22,6 +22,7 @@ LSX_ and lsx_ symbols should not be used by libSoX-based applications.
 #include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -57,7 +58,7 @@ Plugins API:
 Attribute required on all functions exported by libSoX and on all function
 pointer types used by the libSoX API.
 */
-#ifdef __GNUC__
+#if defined __GNUC__ && defined __i386__
 #define LSX_API  __attribute__ ((cdecl)) /* libSoX function */
 #elif _MSC_VER
 #define LSX_API  __cdecl /* libSoX function */
@@ -387,108 +388,49 @@ Basic typedefs:
 Client API:
 Signed twos-complement 8-bit type. Typically defined as signed char.
 */
-#if SCHAR_MAX==127 && SCHAR_MIN==(-128)
-typedef signed char sox_int8_t;
-#elif CHAR_MAX==127 && CHAR_MIN==(-128)
-typedef char sox_int8_t;
-#else
-#error Unable to determine an appropriate definition for sox_int8_t.
-#endif
+typedef int8_t sox_int8_t;
 
 /**
 Client API:
 Unsigned 8-bit type. Typically defined as unsigned char.
 */
-#if UCHAR_MAX==0xff
-typedef unsigned char sox_uint8_t;
-#elif CHAR_MAX==0xff && CHAR_MIN==0
-typedef char sox_uint8_t;
-#else
-#error Unable to determine an appropriate definition for sox_uint8_t.
-#endif
+typedef uint8_t sox_uint8_t;
 
 /**
 Client API:
 Signed twos-complement 16-bit type. Typically defined as short.
 */
-#if SHRT_MAX==32767 && SHRT_MIN==(-32768)
-typedef short sox_int16_t;
-#elif INT_MAX==32767 && INT_MIN==(-32768)
-typedef int sox_int16_t;
-#else
-#error Unable to determine an appropriate definition for sox_int16_t.
-#endif
+typedef int16_t sox_int16_t;
 
 /**
 Client API:
 Unsigned 16-bit type. Typically defined as unsigned short.
 */
-#if USHRT_MAX==0xffff
-typedef unsigned short sox_uint16_t;
-#elif UINT_MAX==0xffff
-typedef unsigned int sox_uint16_t;
-#else
-#error Unable to determine an appropriate definition for sox_uint16_t.
-#endif
+typedef uint16_t sox_uint16_t;
 
 /**
 Client API:
 Signed twos-complement 32-bit type. Typically defined as int.
 */
-#if INT_MAX==2147483647 && INT_MIN==(-2147483647-1)
-typedef int sox_int32_t;
-#elif LONG_MAX==2147483647 && LONG_MIN==(-2147483647-1)
-typedef long sox_int32_t;
-#else
-#error Unable to determine an appropriate definition for sox_int32_t.
-#endif
+typedef int32_t sox_int32_t;
 
 /**
 Client API:
 Unsigned 32-bit type. Typically defined as unsigned int.
 */
-#if UINT_MAX==0xffffffff
-typedef unsigned int sox_uint32_t;
-#elif ULONG_MAX==0xffffffff
-typedef unsigned long sox_uint32_t;
-#else
-#error Unable to determine an appropriate definition for sox_uint32_t.
-#endif
+typedef uint32_t sox_uint32_t;
 
 /**
 Client API:
 Signed twos-complement 64-bit type. Typically defined as long or long long.
 */
-#if LONG_MAX==9223372036854775807 && LONG_MIN==(-9223372036854775807-1)
-typedef long sox_int64_t;
-#elif defined(_MSC_VER)
-typedef __int64 sox_int64_t;
-#else
-typedef long long sox_int64_t;
-#endif
+typedef int64_t sox_int64_t;
 
 /**
 Client API:
 Unsigned 64-bit type. Typically defined as unsigned long or unsigned long long.
 */
-#if ULONG_MAX==0xffffffffffffffff
-typedef unsigned long sox_uint64_t;
-#elif defined(_MSC_VER)
-typedef unsigned __int64 sox_uint64_t;
-#else
-typedef unsigned long long sox_uint64_t;
-#endif
-
-#ifndef _DOXYGEN_
-lsx_static_assert(sizeof(sox_int8_t)==1,   sox_int8_size);
-lsx_static_assert(sizeof(sox_uint8_t)==1,  sox_uint8_size);
-lsx_static_assert(sizeof(sox_int16_t)==2,  sox_int16_size);
-lsx_static_assert(sizeof(sox_uint16_t)==2, sox_uint16_size);
-lsx_static_assert(sizeof(sox_int32_t)==4,  sox_int32_size);
-lsx_static_assert(sizeof(sox_uint32_t)==4, sox_uint32_size);
-lsx_static_assert(sizeof(sox_int64_t)==8,  sox_int64_size);
-lsx_static_assert(sizeof(sox_uint64_t)==8, sox_uint64_size);
-#endif
+typedef uint64_t sox_uint64_t;
 
 /**
 Client API:
@@ -607,7 +549,6 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_CVSD      , /**< Continuously Variable Slope Delta modulation */
   SOX_ENCODING_LPC10     , /**< Linear Predictive Coding */
   SOX_ENCODING_OPUS      , /**< Opus compression */
-  SOX_ENCODING_DSD       , /**< Direct Stream Digital */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;
@@ -801,7 +742,7 @@ Converts sox_sample_t to an unsigned integer of width (bits).
 @returns Unsigned integer of width (bits).
 */
 #define SOX_SAMPLE_TO_UNSIGNED(bits,d,clips) \
-  (sox_uint##bits##_t)(SOX_SAMPLE_TO_SIGNED(bits,d,clips)^SOX_INT_MIN(bits))
+  (sox_uint##bits##_t)(SOX_SAMPLE_TO_SIGNED(bits,d,clips) ^ SOX_INT_MIN(bits))
 
 /**
 Client API:
@@ -811,8 +752,13 @@ Converts sox_sample_t to a signed integer of width (bits).
 @param clips Variable that is incremented if the result is too big.
 @returns Signed integer of width (bits).
 */
-#define SOX_SAMPLE_TO_SIGNED(bits,d,clips) \
-  (sox_int##bits##_t)(LSX_USE_VAR(sox_macro_temp_double),sox_macro_temp_sample=(d),sox_macro_temp_sample>SOX_SAMPLE_MAX-(1<<(31-bits))?++(clips),SOX_INT_MAX(bits):((sox_uint32_t)(sox_macro_temp_sample+(1<<(31-bits))))>>(32-bits))
+#define SOX_SAMPLE_TO_SIGNED(bits,d,clips)                              \
+  (sox_int##bits##_t)(                                                  \
+    LSX_USE_VAR(sox_macro_temp_double),                                 \
+    sox_macro_temp_sample = (d),                                        \
+    sox_macro_temp_sample > SOX_SAMPLE_MAX - (1 << (31-bits)) ?         \
+      ++(clips), SOX_INT_MAX(bits) :                                    \
+      ((sox_uint32_t)(sox_macro_temp_sample + (1 << (31-bits)))) >> (32-bits))
 
 /**
 Client API:
@@ -821,7 +767,7 @@ Converts signed integer of width (bits) to sox_sample_t.
 @param d    Input sample to be converted.
 @returns SoX native sample value.
 */
-#define SOX_SIGNED_TO_SAMPLE(bits,d)((sox_sample_t)(d)<<(32-bits))
+#define SOX_SIGNED_TO_SAMPLE(bits,d) ((sox_sample_t)(d) << (32-bits))
 
 /**
 Client API:
@@ -830,7 +776,8 @@ Converts unsigned integer of width (bits) to sox_sample_t.
 @param d    Input sample to be converted.
 @returns SoX native sample value.
 */
-#define SOX_UNSIGNED_TO_SAMPLE(bits,d)(SOX_SIGNED_TO_SAMPLE(bits,d)^SOX_SAMPLE_NEG)
+#define SOX_UNSIGNED_TO_SAMPLE(bits,d) \
+      (SOX_SIGNED_TO_SAMPLE(bits,d) ^ SOX_SAMPLE_NEG)
 
 /**
 Client API:
@@ -893,7 +840,8 @@ Converts unsigned 32-bit integer to sox_sample_t.
 @param clips The parameter is not used.
 @returns SoX native sample value.
 */
-#define SOX_UNSIGNED_32BIT_TO_SAMPLE(d,clips) ((sox_sample_t)(d)^SOX_SAMPLE_NEG)
+#define SOX_UNSIGNED_32BIT_TO_SAMPLE(d,clips) \
+  ((sox_sample_t)(d) ^ SOX_SAMPLE_NEG)
 
 /**
 Client API:
@@ -911,7 +859,7 @@ Converts 32-bit float to sox_sample_t.
 @param clips Variable to increment if the input sample is too large or too small.
 @returns SoX native sample value.
 */
-#define SOX_FLOAT_32BIT_TO_SAMPLE(d,clips) (sox_sample_t)(LSX_USE_VAR(sox_macro_temp_sample),sox_macro_temp_double=(d)*(SOX_SAMPLE_MAX+1.),sox_macro_temp_double<SOX_SAMPLE_MIN?++(clips),SOX_SAMPLE_MIN:sox_macro_temp_double>=SOX_SAMPLE_MAX+1.?sox_macro_temp_double>SOX_SAMPLE_MAX+1.?++(clips),SOX_SAMPLE_MAX:SOX_SAMPLE_MAX:sox_macro_temp_double)
+#define SOX_FLOAT_32BIT_TO_SAMPLE(d,clips) SOX_FLOAT_64BIT_TO_SAMPLE(d, clips)
 
 /**
 Client API:
@@ -920,7 +868,20 @@ Converts 64-bit float to sox_sample_t.
 @param clips Variable to increment if the input sample is too large or too small.
 @returns SoX native sample value.
 */
-#define SOX_FLOAT_64BIT_TO_SAMPLE(d,clips) (sox_sample_t)(LSX_USE_VAR(sox_macro_temp_sample),sox_macro_temp_double=(d)*(SOX_SAMPLE_MAX+1.),sox_macro_temp_double<0?sox_macro_temp_double<=SOX_SAMPLE_MIN-.5?++(clips),SOX_SAMPLE_MIN:sox_macro_temp_double-.5:sox_macro_temp_double>=SOX_SAMPLE_MAX+.5?sox_macro_temp_double>SOX_SAMPLE_MAX+1.?++(clips),SOX_SAMPLE_MAX:SOX_SAMPLE_MAX:sox_macro_temp_double+.5)
+#define SOX_FLOAT_64BIT_TO_SAMPLE(d, clips)                     \
+  (sox_sample_t)(                                               \
+    LSX_USE_VAR(sox_macro_temp_sample),                         \
+    sox_macro_temp_double = (d) * (SOX_SAMPLE_MAX + 1.0),       \
+    sox_macro_temp_double < 0 ?                                 \
+      sox_macro_temp_double <= SOX_SAMPLE_MIN - 0.5 ?           \
+        ++(clips), SOX_SAMPLE_MIN :                             \
+        sox_macro_temp_double - 0.5 :                           \
+      sox_macro_temp_double >= SOX_SAMPLE_MAX + 0.5 ?           \
+        sox_macro_temp_double > SOX_SAMPLE_MAX + 1.0 ?          \
+          ++(clips), SOX_SAMPLE_MAX :                           \
+          SOX_SAMPLE_MAX :                                      \
+        sox_macro_temp_double + 0.5                             \
+  )
 
 /**
 Client API:
@@ -990,9 +951,9 @@ Converts SoX native sample to a signed 32-bit integer.
 Client API:
 Converts SoX native sample to a 32-bit float.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips The parameter is not used.
 */
-#define SOX_SAMPLE_TO_FLOAT_32BIT(d,clips) (LSX_USE_VAR(sox_macro_temp_double),sox_macro_temp_sample=(d),sox_macro_temp_sample>SOX_SAMPLE_MAX-64?++(clips),1:(((sox_macro_temp_sample+64)&~127)*(1./(SOX_SAMPLE_MAX+1.))))
+#define SOX_SAMPLE_TO_FLOAT_32BIT(d,clips) ((d)*(1.0 / (SOX_SAMPLE_MAX + 1.0)))
 
 /**
 Client API:
@@ -1000,7 +961,7 @@ Converts SoX native sample to a 64-bit float.
 @param d Input sample to be converted.
 @param clips The parameter is not used.
 */
-#define SOX_SAMPLE_TO_FLOAT_64BIT(d,clips) ((d)*(1./(SOX_SAMPLE_MAX+1.)))
+#define SOX_SAMPLE_TO_FLOAT_64BIT(d,clips) ((d)*(1.0 / (SOX_SAMPLE_MAX + 1.0)))
 
 /**
 Client API:
@@ -1660,7 +1621,7 @@ Client API:
 Returns version number string of libSoX, for example, "14.4.0".
 @returns The version number string of libSoX, for example, "14.4.0".
 */
-LSX_RETURN_VALID_Z LSX_RETURN_PURE
+LSX_RETURN_VALID_Z
 char const *
 LSX_API
 sox_version(void);

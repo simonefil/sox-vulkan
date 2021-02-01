@@ -362,6 +362,22 @@ static int sox_mp3_inputtag(sox_format_t * ft)
     return rc;
 }
 
+{
+    priv_t *p = ft->priv;
+
+    if (p->Frame.header.layer != MAD_LAYER_III)
+        return sox_false;
+
+    if (p->Stream.anc_bitlen < 32)
+        return sox_false;
+
+    if (!memcmp(anc->byte, "Xing", 4) ||
+        !memcmp(anc->byte, "Info", 4))
+        return sox_true;
+
+    return sox_false;
+}
+
 static int startread(sox_format_t * ft)
 {
   priv_t *p = (priv_t *) ft->priv;
@@ -390,7 +406,7 @@ static int startread(sox_format_t * ft)
     if (!ft->signal.length)
 #endif
       if (!ignore_length)
-        ft->signal.length = mp3_duration_ms(ft);
+        ft->signal.length = mp3_duration(ft);
   }
 
   p->mad_stream_init(&p->Stream);
@@ -456,18 +472,19 @@ static int startread(sox_format_t * ft)
           return SOX_EOF;
   }
 
-  p->FrameCount=1;
-
-  p->mad_timer_add(&p->Timer,p->Frame.header.duration);
-  p->mad_synth_frame(&p->Synth,&p->Frame);
   ft->signal.precision = MP3_MAD_PRECISION;
-  ft->signal.rate=p->Synth.pcm.samplerate;
+  ft->signal.rate=p->Frame.header.samplerate;
   if (ignore_length)
     ft->signal.length = SOX_UNSPEC;
   else {
-    ft->signal.length = (uint64_t)(ft->signal.length * .001 * ft->signal.rate + .5);
     ft->signal.length *= ft->signal.channels;  /* Keep separate from line above! */
   }
+
+  if (!sox_mp3_vbrtag(ft))
+      p->Stream.next_frame = p->Stream.this_frame;
+
+  p->mad_frame_init(&p->Frame);
+  sox_mp3_input(ft);
 
   p->cursamp = 0;
 
@@ -590,7 +607,7 @@ static int sox_mp3seek(sox_format_t * ft, uint64_t offset)
     size_t read;
     size_t leftover = p->Stream.bufend - p->Stream.next_frame;
 
-    memcpy(p->mp3_buffer, p->Stream.this_frame, leftover);
+    memmove(p->mp3_buffer, p->Stream.this_frame, leftover);
     read = lsx_readbuf(ft, p->mp3_buffer + leftover, p->mp3_buffer_size - leftover);
     if (read == 0) {
       lsx_debug("seek failure. unexpected EOF (frames=%" PRIuPTR " leftover=%" PRIuPTR ")", p->FrameCount, leftover);
@@ -1137,7 +1154,7 @@ static int startwrite(sox_format_t * ft)
   return(SOX_SUCCESS);
 }
 
-#define MP3_SAMPLE_TO_FLOAT(d,clips) ((float)(32768*SOX_SAMPLE_TO_FLOAT_32BIT(d,clips)))
+#define MP3_SAMPLE_TO_FLOAT(d) ((float)(32768*SOX_SAMPLE_TO_FLOAT_32BIT(d,)))
 
 static size_t sox_mp3write(sox_format_t * ft, const sox_sample_t *buf, size_t samp)
 {
@@ -1147,7 +1164,6 @@ static size_t sox_mp3write(sox_format_t * ft, const sox_sample_t *buf, size_t sa
     int nsamples = samp/ft->signal.channels;
     int i,j;
     int written = 0;
-    int clips = 0;
     SOX_SAMPLE_LOCALS;
 
     new_buffer_size = samp * sizeof(float);
@@ -1167,7 +1183,7 @@ static size_t sox_mp3write(sox_format_t * ft, const sox_sample_t *buf, size_t sa
     {
         size_t s;
         for(s = 0; s < samp; s++)
-            buffer_l[s] = SOX_SAMPLE_TO_FLOAT_32BIT(buf[s], clips);
+            buffer_l[s] = SOX_SAMPLE_TO_FLOAT_32BIT(buf[s],);
     }
     else
     {
@@ -1180,15 +1196,15 @@ static size_t sox_mp3write(sox_format_t * ft, const sox_sample_t *buf, size_t sa
             j=0;
             for (i = 0; i < nsamples; i++)
             {
-                buffer_l[i] = MP3_SAMPLE_TO_FLOAT(buf[j++], clips);
-                buffer_r[i] = MP3_SAMPLE_TO_FLOAT(buf[j++], clips);
+                buffer_l[i] = MP3_SAMPLE_TO_FLOAT(buf[j++]);
+                buffer_r[i] = MP3_SAMPLE_TO_FLOAT(buf[j++]);
             }
         }
         else
         {
             j=0;
             for (i = 0; i < nsamples; i++) {
-                buffer_l[i] = MP3_SAMPLE_TO_FLOAT(buf[j++], clips);
+                buffer_l[i] = MP3_SAMPLE_TO_FLOAT(buf[j++]);
             }
         }
     }

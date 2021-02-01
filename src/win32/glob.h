@@ -1,6 +1,4 @@
-/* libSoX Memory allocation functions
- *
- * Copyright (c) 2005-2006 Reuben Thomas.  All rights reserved.
+/* libSoX minimal glob for MS-Windows: (c) 2009 SoX contributors
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -17,20 +15,35 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef LSX_MALLOC_H
-#define LSX_MALLOC_H
+#ifndef GLOB_H
+#define GLOB_H 1
 
-#include <stddef.h>
-#include <string.h>
+#define GLOB_NOCHECK (16)
+#define GLOB_FLAGS (GLOB_NOCHECK)
 
-LSX_RETURN_VALID void *lsx_malloc(size_t size);
-LSX_RETURN_VALID void *lsx_calloc(size_t n, size_t size);
-LSX_RETURN_VALID void *lsx_realloc_array(void *p, size_t n, size_t size);
-LSX_RETURN_VALID char *lsx_strdup(const char *s);
+typedef struct glob_t
+{
+    unsigned gl_pathc;
+    char **gl_pathv;
+} glob_t;
 
-#define lsx_Calloc(v,n)  v = lsx_calloc(n,sizeof(*(v)))
-#define lsx_memdup(p,s) ((p)? memcpy(lsx_malloc(s), p, s) : NULL)
-#define lsx_valloc(v,n)  v = lsx_realloc_array(NULL, n, sizeof(*(v)))
-#define lsx_revalloc(v,n)  v = lsx_realloc_array(v, n, sizeof(*(v)))
-
+#ifdef __cplusplus
+extern "C" {
 #endif
+
+int
+glob(
+    const char *pattern,
+    int flags,
+    void *unused,
+    glob_t *pglob);
+
+void
+globfree(
+    glob_t* pglob);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ifndef GLOB_H */

@@ -549,6 +549,7 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_CVSD      , /**< Continuously Variable Slope Delta modulation */
   SOX_ENCODING_LPC10     , /**< Linear Predictive Coding */
   SOX_ENCODING_OPUS      , /**< Opus compression */
+  SOX_ENCODING_DSD       , /**< Direct Stream Digital */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;

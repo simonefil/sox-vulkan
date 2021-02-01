@@ -57,15 +57,15 @@ libsox_la_SOURCES = adpcms.c adpcms.h aiff.c aiff.h cvsd.c cvsd.h cvsdfilt.h \
 libsox_la_SOURCES += \
 	band.h bend.c biquad.c biquad.h biquads.c chorus.c compand.c \
 	compandt.c compandt.h contrast.c dcshift.c delay.c dft_filter.c \
-	dft_filter.h dither.c dither.h divide.c downsample.c earwax.c \
+	dft_filter.h dither.c dither.h divide.c dop.c downsample.c earwax.c \
 	echo.c echos.c effects.c effects.h effects_i.c effects_i_dsp.c \
 	fade.c fft4g.c fft4g.h fifo.h fir.c firfit.c flanger.c gain.c \
 	hilbert.c input.c ladspa.h ladspa.c loudness.c mcompand.c \
 	mcompand_xover.h noiseprof.c noisered.c \
 	noisered.h output.c overdrive.c pad.c phaser.c rate.c \
 	rate_filters.h rate_half_fir.h rate_poly_fir0.h rate_poly_fir.h \
-	remix.c repeat.c reverb.c reverse.c silence.c sinc.c skeleff.c \
-	speed.c splice.c stat.c stats.c stretch.c swap.c \
+	remix.c repeat.c reverb.c reverse.c sdm.c sdm.h sdm_x86.h silence.c \
+	sinc.c skeleff.c speed.c splice.c stat.c stats.c stretch.c swap.c \
 	synth.c tempo.c tremolo.c trim.c upsample.c vad.c vol.c
 if HAVE_PNG
     libsox_la_SOURCES += spectrogram.c
@@ -111,11 +111,12 @@ libsox_la_SOURCES += raw-fmt.c s1-fmt.c s2-fmt.c s3-fmt.c \
   lu-fmt.c 8svx.c aiff-fmt.c aifc-fmt.c au.c avr.c cdr.c cvsd-fmt.c \
   dvms-fmt.c dat.c hcom.c htk.c maud.c prc.c sf.c smp.c \
   sounder.c soundtool.c sphere.c tx16w.c voc.c vox-fmt.c ima-fmt.c adpcm.c adpcm.h \
-  ima_rw.c ima_rw.h wav.c wve.c xa.c nulfile.c f4-fmt.c f8-fmt.c gsrt.c \
-  id3.c id3.h
+  ima_rw.c ima_rw.h wav.c wve.c xa.c nulfile.c f4-fmt.c f8-fmt.c gsrt.c dsf.c \
+  dsdiff.c
 
 if HAVE_ID3TAG
-  libsox_la_LIBADD += @ID3TAG_LIBS@
+  libsox_la_SOURCES += id3.c id3.h
+  libsox_la_LIBADD += @ID3_LIBS@
 endif
 
 pkglib_LTLIBRARIES =

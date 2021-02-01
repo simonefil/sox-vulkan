@@ -150,6 +150,7 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_lossy2, "CVSD"         , "CVSD"},
   {sox_encodings_lossy2, "LPC10"        , "LPC10"},
   {sox_encodings_lossy2, "Opus"         , "Opus"},
+  {sox_encodings_none  , "DSD"          , "Direct Stream Digital"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -174,6 +175,7 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
 
     case SOX_ENCODING_ALAW:       return bits_per_sample == 8? 13: 0;
     case SOX_ENCODING_ULAW:       return bits_per_sample == 8? 14: 0;
+    case SOX_ENCODING_DSD:        return bits_per_sample;
 
     case SOX_ENCODING_CL_ADPCM:   return bits_per_sample? 8: 0;
     case SOX_ENCODING_CL_ADPCM16: return bits_per_sample == 4? 13: 0;

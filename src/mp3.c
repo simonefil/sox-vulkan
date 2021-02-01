@@ -362,8 +362,10 @@ static int sox_mp3_inputtag(sox_format_t * ft)
     return rc;
 }
 
+static sox_bool sox_mp3_vbrtag(sox_format_t *ft)
 {
     priv_t *p = ft->priv;
+    struct mad_bitptr *anc = &p->Stream.anc_ptr;
 
     if (p->Frame.header.layer != MAD_LAYER_III)
         return sox_false;

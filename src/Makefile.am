@@ -5,6 +5,8 @@ RM = rm -f
 AM_CPPFLAGS = -DLADSPA_PATH="\"@LADSPA_PATH@\""
 AM_CFLAGS = @WARN_CFLAGS@ #-Werror
 
+AUTOMAKE_OPTIONS = subdir-objects
+
 if HAVE_LIBLTDL
 # This is being used as a short cut to turn off versioning of ALL dynamic
 # fmt libraries.  If any fmt ever needs to add a specific LDFLAGS

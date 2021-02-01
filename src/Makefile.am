@@ -15,11 +15,6 @@ if HAVE_LIBLTDL
 AM_LDFLAGS = -avoid-version -module
 AM_CPPFLAGS += -DPKGLIBDIR="\"$(pkglibdir)\""
 endif
-if HAVE_WIN32_LTDL
-# Must match line above.
-AM_LDFLAGS = -avoid-version -module
-AM_CPPFLAGS += -DPKGLIBDIR="\"$(pkglibdir)\""
-endif
 
 # Pass flags from --enable-silent-libtool
 LIBTOOL = @LIBTOOL@ @LIBTOOLFLAGS@
@@ -40,7 +35,8 @@ lib_LTLIBRARIES = libsox.la
 include_HEADERS = sox.h
 sox_SOURCES = sox.c
 if HAVE_WIN32_GLOB
-sox_SOURCES += win32-glob.c win32-glob.h
+sox_SOURCES += win32/glob.c win32/glob.h
+AM_CPPFLAGS += -I$(srcdir)/win32
 endif
 sox_LDADD = libsox.la
 example0_SOURCES = example0.c

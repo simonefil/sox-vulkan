@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <sys/ioctl.h>
 
 #if defined(HAVE_WIN32_GLOB_H)
   #include "win32-glob.h"

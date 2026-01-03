@@ -1,0 +1,747 @@
+cmake_minimum_required(VERSION 3.14)
+
+project(SoX
+    VERSION 14.4.3
+    DESCRIPTION "Sound eXchange - audio processing tool"
+    LANGUAGES C
+)
+
+# Library version (SHLIB_VERSION from configure.ac: 3:0:0)
+set(SOX_VERSION_MAJOR 3)
+set(SOX_VERSION_MINOR 0)
+set(SOX_VERSION_PATCH 0)
+
+# =====================================================================
+# Platform detection
+# =====================================================================
+set(IS_LINUX FALSE)
+set(IS_FREEBSD FALSE)
+set(IS_NETBSD FALSE)
+set(IS_OPENBSD FALSE)
+set(IS_BSD FALSE)
+set(IS_MACOS FALSE)
+set(IS_WINDOWS FALSE)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(IS_LINUX TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(IS_FREEBSD TRUE)
+    set(IS_BSD TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    set(IS_NETBSD TRUE)
+    set(IS_BSD TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    set(IS_OPENBSD TRUE)
+    set(IS_BSD TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(IS_MACOS TRUE)
+elseif(WIN32)
+    set(IS_WINDOWS TRUE)
+endif()
+
+# BSD systems: add /usr/local paths for ports/packages
+if(IS_BSD)
+    list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+    list(APPEND CMAKE_INCLUDE_PATH "/usr/local/include")
+    list(APPEND CMAKE_LIBRARY_PATH "/usr/local/lib")
+    # pkg-config path for BSD ports
+    set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:/usr/local/lib/pkgconfig:/usr/local/libdata/pkgconfig")
+endif()
+
+# Options
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_STATIC_EXECUTABLE "Build fully static executable" OFF)
+option(WITH_OPENMP "Enable OpenMP support" ON)
+
+# =====================================================================
+# Static libraries support (from build_static_libs.sh)
+# =====================================================================
+
+# Check if static_libs directory exists and add it to search paths
+set(STATIC_LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/static_libs")
+if(EXISTS "${STATIC_LIBS_DIR}")
+    message(STATUS "Found static_libs directory: ${STATIC_LIBS_DIR}")
+    list(INSERT CMAKE_PREFIX_PATH 0 "${STATIC_LIBS_DIR}")
+    list(INSERT CMAKE_INCLUDE_PATH 0 "${STATIC_LIBS_DIR}/include")
+    list(INSERT CMAKE_LIBRARY_PATH 0 "${STATIC_LIBS_DIR}/lib")
+    set(ENV{PKG_CONFIG_PATH} "${STATIC_LIBS_DIR}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+
+    # Prefer static libraries when static_libs exists
+    if(NOT BUILD_SHARED_LIBS)
+        set(CMAKE_FIND_LIBRARY_SUFFIXES .a .lib ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    endif()
+endif()
+
+# For fully static build
+if(BUILD_STATIC_EXECUTABLE)
+    set(BUILD_SHARED_LIBS OFF)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a .lib)
+
+    if(IS_LINUX)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
+    elseif(IS_MACOS)
+        # macOS doesn't support fully static executables
+        message(WARNING "macOS does not support fully static executables")
+    elseif(IS_WINDOWS AND MSVC)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+endif()
+
+# Optional format/device support
+option(WITH_ALSA "ALSA audio driver support" ON)
+option(WITH_AO "libao audio driver support" ON)
+option(WITH_COREAUDIO "CoreAudio support (macOS)" ON)
+option(WITH_OSS "OSS audio driver support" ON)
+option(WITH_PULSEAUDIO "PulseAudio support" ON)
+option(WITH_SNDIO "sndio audio driver support" ON)
+option(WITH_WAVEAUDIO "WaveAudio support (Windows)" ON)
+option(WITH_SUNAUDIO "Sun audio support" ON)
+
+option(WITH_FLAC "FLAC format support" ON)
+option(WITH_GSM "GSM format support" ON)
+option(WITH_LPC10 "LPC10 format support" ON)
+option(WITH_MAD "MAD MP3 decoder support" ON)
+option(WITH_LAME "LAME MP3 encoder support" ON)
+option(WITH_TWOLAME "TwoLAME MP2 encoder support" ON)
+option(WITH_ID3TAG "id3tag support" ON)
+option(WITH_OGGVORBIS "Ogg Vorbis support" ON)
+option(WITH_OPUS "Opus support" ON)
+option(WITH_WAVPACK "WavPack support" ON)
+option(WITH_SNDFILE "libsndfile support" ON)
+option(WITH_AMRNB "AMR-NB support" ON)
+option(WITH_AMRWB "AMR-WB support" ON)
+
+option(WITH_PNG "PNG support for spectrogram" ON)
+option(WITH_MAGIC "libmagic support for file type detection" ON)
+option(WITH_LADSPA "LADSPA effects support" ON)
+
+# Set default build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# Compiler settings
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -W -Wmissing-prototypes -Wstrict-prototypes -pedantic)
+
+    # Platform-specific linker flags
+    if(IS_LINUX)
+        add_link_options(-Wl,-z,defs)
+    endif()
+
+    # BSD-specific: ensure proper library paths
+    if(IS_BSD)
+        add_compile_options(-I/usr/local/include)
+        add_link_options(-L/usr/local/lib)
+
+        # FreeBSD uses /usr/local for ports
+        if(IS_FREEBSD)
+            include_directories(SYSTEM /usr/local/include)
+            link_directories(/usr/local/lib)
+        endif()
+    endif()
+endif()
+
+# Platform detection
+include(CheckIncludeFile)
+include(CheckFunctionExists)
+include(CheckSymbolExists)
+include(CheckTypeSize)
+include(TestBigEndian)
+include(GNUInstallDirs)
+include(CMakePushCheckState)
+
+# Check endianness
+test_big_endian(WORDS_BIGENDIAN)
+
+# Check headers
+check_include_file(fcntl.h HAVE_FCNTL_H)
+check_include_file(unistd.h HAVE_UNISTD_H)
+check_include_file(byteswap.h HAVE_BYTESWAP_H)
+check_include_file(sys/stat.h HAVE_SYS_STAT_H)
+check_include_file(sys/time.h HAVE_SYS_TIME_H)
+check_include_file(sys/timeb.h HAVE_SYS_TIMEB_H)
+check_include_file(sys/types.h HAVE_SYS_TYPES_H)
+check_include_file(sys/utsname.h HAVE_SYS_UTSNAME_H)
+check_include_file(sys/ioctl.h HAVE_SYS_IOCTL_H)
+check_include_file(termios.h HAVE_TERMIOS_H)
+check_include_file(glob.h HAVE_GLOB_H)
+check_include_file(fenv.h HAVE_FENV_H)
+check_include_file(inttypes.h HAVE_INTTYPES_H)
+check_include_file(stdint.h HAVE_STDINT_H)
+check_include_file(string.h HAVE_STRING_H)
+check_include_file(strings.h HAVE_STRINGS_H)
+check_include_file(io.h HAVE_IO_H)
+
+# Check functions
+check_function_exists(strcasecmp HAVE_STRCASECMP)
+check_function_exists(strdup HAVE_STRDUP)
+check_function_exists(popen HAVE_POPEN)
+check_function_exists(vsnprintf HAVE_VSNPRINTF)
+check_function_exists(gettimeofday HAVE_GETTIMEOFDAY)
+check_function_exists(mkstemp HAVE_MKSTEMP)
+check_function_exists(fmemopen HAVE_FMEMOPEN)
+check_function_exists(lrint HAVE_LRINT)
+check_function_exists(fseeko HAVE_FSEEKO)
+
+# Math library
+include(CheckLibraryExists)
+check_library_exists(m pow "" HAVE_LIBM)
+if(HAVE_LIBM)
+    set(MATH_LIBRARY m)
+endif()
+
+# OpenMP support
+if(WITH_OPENMP)
+    find_package(OpenMP)
+    if(OpenMP_C_FOUND)
+        set(HAVE_OPENMP TRUE)
+    endif()
+endif()
+
+# Find packages using pkg-config when available
+find_package(PkgConfig QUIET)
+
+# ===== External library detection =====
+
+# GSM library (check for external, otherwise use in-tree)
+set(EXTERNAL_GSM FALSE)
+if(WITH_GSM)
+    find_library(GSM_LIBRARY gsm)
+    find_path(GSM_INCLUDE_DIR gsm/gsm.h gsm.h)
+    if(GSM_LIBRARY AND GSM_INCLUDE_DIR)
+        set(EXTERNAL_GSM TRUE)
+        set(GSM_LIBRARIES ${GSM_LIBRARY})
+    endif()
+    set(HAVE_GSM TRUE)
+endif()
+
+# LPC10 library (check for external, otherwise use in-tree)
+set(EXTERNAL_LPC10 FALSE)
+if(WITH_LPC10)
+    find_library(LPC10_LIBRARY lpc10)
+    find_path(LPC10_INCLUDE_DIR lpc10.h)
+    if(LPC10_LIBRARY AND LPC10_INCLUDE_DIR)
+        set(EXTERNAL_LPC10 TRUE)
+        set(LPC10_LIBRARIES ${LPC10_LIBRARY})
+    endif()
+    set(HAVE_LPC10 TRUE)
+endif()
+
+# PNG library (for spectrogram) - prefer static on Windows
+if(WITH_PNG)
+    if(IS_WINDOWS)
+        find_library(PNG_LIBRARY_STATIC libpng16_static png16_static PATHS ${CMAKE_PREFIX_PATH}/lib NO_DEFAULT_PATH)
+        if(PNG_LIBRARY_STATIC)
+            find_path(PNG_INCLUDE_DIR png.h PATHS ${CMAKE_PREFIX_PATH}/include NO_DEFAULT_PATH)
+            if(PNG_INCLUDE_DIR)
+                set(PNG_FOUND TRUE)
+                set(PNG_LIBRARIES ${PNG_LIBRARY_STATIC})
+                set(PNG_INCLUDE_DIRS ${PNG_INCLUDE_DIR})
+                set(HAVE_PNG TRUE)
+            endif()
+        else()
+            find_package(PNG)
+            if(PNG_FOUND)
+                set(HAVE_PNG TRUE)
+            endif()
+        endif()
+    else()
+        find_package(PNG)
+        if(PNG_FOUND)
+            set(HAVE_PNG TRUE)
+        endif()
+    endif()
+endif()
+
+# ZLIB (needed by several libraries) - prefer static library on Windows
+if(IS_WINDOWS)
+    # Prefer zlibstatic.lib for static linking
+    find_library(ZLIB_LIBRARY_STATIC zlibstatic PATHS ${CMAKE_PREFIX_PATH}/lib NO_DEFAULT_PATH)
+    if(ZLIB_LIBRARY_STATIC)
+        set(ZLIB_LIBRARIES ${ZLIB_LIBRARY_STATIC})
+        find_path(ZLIB_INCLUDE_DIR zlib.h)
+        if(ZLIB_INCLUDE_DIR)
+            set(ZLIB_FOUND TRUE)
+            set(ZLIB_INCLUDE_DIRS ${ZLIB_INCLUDE_DIR})
+        endif()
+    else()
+        find_package(ZLIB)
+    endif()
+else()
+    find_package(ZLIB)
+endif()
+
+# libmagic
+if(WITH_MAGIC)
+    find_library(MAGIC_LIBRARY magic)
+    find_path(MAGIC_INCLUDE_DIR magic.h)
+    if(MAGIC_LIBRARY AND MAGIC_INCLUDE_DIR)
+        set(HAVE_MAGIC TRUE)
+        set(MAGIC_LIBRARIES ${MAGIC_LIBRARY})
+    endif()
+endif()
+
+# FLAC
+if(WITH_FLAC)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(FLAC flac)
+    endif()
+    if(NOT FLAC_FOUND)
+        find_library(FLAC_LIBRARY FLAC)
+        find_path(FLAC_INCLUDE_DIR FLAC/all.h)
+        if(FLAC_LIBRARY AND FLAC_INCLUDE_DIR)
+            set(FLAC_LIBRARIES ${FLAC_LIBRARY})
+            set(FLAC_INCLUDE_DIRS ${FLAC_INCLUDE_DIR})
+            set(FLAC_FOUND TRUE)
+        endif()
+    endif()
+    if(FLAC_FOUND)
+        set(HAVE_FLAC TRUE)
+    endif()
+endif()
+
+# Ogg Vorbis
+if(WITH_OGGVORBIS)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(VORBIS vorbis vorbisfile vorbisenc)
+        pkg_check_modules(OGG ogg)
+    endif()
+    if(NOT VORBIS_FOUND)
+        find_library(VORBIS_LIBRARY vorbis)
+        find_library(VORBISFILE_LIBRARY vorbisfile)
+        find_library(VORBISENC_LIBRARY vorbisenc)
+        find_library(OGG_LIBRARY ogg)
+        find_path(VORBIS_INCLUDE_DIR vorbis/codec.h)
+        if(VORBIS_LIBRARY AND VORBISFILE_LIBRARY AND VORBISENC_LIBRARY AND OGG_LIBRARY AND VORBIS_INCLUDE_DIR)
+            set(VORBIS_LIBRARIES ${VORBISENC_LIBRARY} ${VORBISFILE_LIBRARY} ${VORBIS_LIBRARY})
+            set(OGG_LIBRARIES ${OGG_LIBRARY})
+            set(VORBIS_INCLUDE_DIRS ${VORBIS_INCLUDE_DIR})
+            set(VORBIS_FOUND TRUE)
+            set(OGG_FOUND TRUE)
+        endif()
+    endif()
+    if(VORBIS_FOUND AND OGG_FOUND)
+        set(HAVE_OGG_VORBIS TRUE)
+        set(OGG_VORBIS_LIBRARIES ${VORBIS_LIBRARIES} ${OGG_LIBRARIES})
+        set(OGG_VORBIS_INCLUDE_DIRS ${VORBIS_INCLUDE_DIRS})
+    endif()
+endif()
+
+# Opus
+if(WITH_OPUS)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(OPUS opusfile)
+    endif()
+    if(NOT OPUS_FOUND)
+        find_library(OPUS_LIBRARY opus)
+        find_library(OPUSFILE_LIBRARY opusfile)
+        find_path(OPUS_INCLUDE_DIR opus/opus.h)
+        if(OPUS_LIBRARY AND OPUSFILE_LIBRARY AND OPUS_INCLUDE_DIR)
+            set(OPUS_LIBRARIES ${OPUSFILE_LIBRARY} ${OPUS_LIBRARY})
+            # Include both base dir (for opus/opus.h) and opus subdir (for opusfile.h)
+            set(OPUS_INCLUDE_DIRS ${OPUS_INCLUDE_DIR} ${OPUS_INCLUDE_DIR}/opus)
+            set(OPUS_FOUND TRUE)
+        endif()
+    endif()
+    if(OPUS_FOUND)
+        set(HAVE_OPUS TRUE)
+    endif()
+endif()
+
+# MAD (MP3 decoder)
+if(WITH_MAD)
+    find_library(MAD_LIBRARY mad)
+    find_path(MAD_INCLUDE_DIR mad.h)
+    if(MAD_LIBRARY AND MAD_INCLUDE_DIR)
+        set(HAVE_MAD_H TRUE)
+        set(MAD_LIBRARIES ${MAD_LIBRARY})
+        # Use FPM_64BIT for 64-bit builds to avoid x86 inline asm in mad.h
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            add_definitions(-DFPM_64BIT)
+        else()
+            add_definitions(-DFPM_DEFAULT)
+        endif()
+    endif()
+endif()
+
+# LAME (MP3 encoder)
+if(WITH_LAME)
+    find_library(LAME_LIBRARY mp3lame)
+    find_path(LAME_INCLUDE_DIR lame/lame.h)
+    if(LAME_LIBRARY AND LAME_INCLUDE_DIR)
+        set(CMAKE_REQUIRED_INCLUDES ${LAME_INCLUDE_DIR})
+        check_include_file(lame/lame.h HAVE_LAME_LAME_H)
+        set(LAME_LIBRARIES ${LAME_LIBRARY})
+        set(HAVE_LAME TRUE)
+    endif()
+endif()
+
+# TwoLAME (MP2 encoder)
+if(WITH_TWOLAME)
+    find_library(TWOLAME_LIBRARY twolame)
+    find_path(TWOLAME_INCLUDE_DIR twolame.h)
+    if(TWOLAME_LIBRARY AND TWOLAME_INCLUDE_DIR)
+        set(HAVE_TWOLAME TRUE)
+        set(HAVE_TWOLAME_H TRUE)
+        set(TWOLAME_LIBRARIES ${TWOLAME_LIBRARY})
+    endif()
+endif()
+
+# MP3 support requires at least one of MAD, LAME, or TwoLAME
+if(HAVE_MAD_H OR HAVE_LAME OR HAVE_TWOLAME)
+    set(HAVE_MP3 TRUE)
+    set(MP3_LIBRARIES)
+    if(HAVE_MAD_H)
+        list(APPEND MP3_LIBRARIES ${MAD_LIBRARIES})
+    endif()
+    if(HAVE_LAME)
+        list(APPEND MP3_LIBRARIES ${LAME_LIBRARIES})
+    endif()
+    if(HAVE_TWOLAME)
+        list(APPEND MP3_LIBRARIES ${TWOLAME_LIBRARIES})
+    endif()
+endif()
+
+# id3tag
+if(WITH_ID3TAG)
+    find_library(ID3TAG_LIBRARY id3tag)
+    find_path(ID3TAG_INCLUDE_DIR id3tag.h)
+    if(ID3TAG_LIBRARY AND ID3TAG_INCLUDE_DIR)
+        set(HAVE_ID3TAG TRUE)
+        set(ID3TAG_LIBRARIES ${ID3TAG_LIBRARY})
+        if(ZLIB_FOUND)
+            list(APPEND ID3TAG_LIBRARIES ${ZLIB_LIBRARIES})
+        endif()
+    endif()
+endif()
+
+# WavPack
+if(WITH_WAVPACK)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(WAVPACK wavpack)
+    endif()
+    if(NOT WAVPACK_FOUND)
+        find_library(WAVPACK_LIBRARY wavpack)
+        find_path(WAVPACK_INCLUDE_DIR wavpack/wavpack.h)
+        if(WAVPACK_LIBRARY AND WAVPACK_INCLUDE_DIR)
+            set(WAVPACK_LIBRARIES ${WAVPACK_LIBRARY})
+            set(WAVPACK_INCLUDE_DIRS ${WAVPACK_INCLUDE_DIR})
+            set(WAVPACK_FOUND TRUE)
+        endif()
+    endif()
+    if(WAVPACK_FOUND)
+        set(HAVE_WAVPACK TRUE)
+    endif()
+endif()
+
+# libsndfile
+if(WITH_SNDFILE)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(SNDFILE sndfile)
+    endif()
+    if(NOT SNDFILE_FOUND)
+        find_library(SNDFILE_LIBRARY sndfile)
+        find_path(SNDFILE_INCLUDE_DIR sndfile.h)
+        if(SNDFILE_LIBRARY AND SNDFILE_INCLUDE_DIR)
+            set(SNDFILE_LIBRARIES ${SNDFILE_LIBRARY})
+            set(SNDFILE_INCLUDE_DIRS ${SNDFILE_INCLUDE_DIR})
+            set(SNDFILE_FOUND TRUE)
+        endif()
+    endif()
+    if(SNDFILE_FOUND)
+        set(HAVE_SNDFILE TRUE)
+    endif()
+endif()
+
+# AMR-NB
+if(WITH_AMRNB)
+    find_library(AMRNB_LIBRARY opencore-amrnb amrnb)
+    find_path(AMRNB_INCLUDE_DIR opencore-amrnb/interf_dec.h amrnb/sp_dec.h)
+    if(AMRNB_LIBRARY AND AMRNB_INCLUDE_DIR)
+        set(HAVE_AMRNB TRUE)
+        set(AMRNB_LIBRARIES ${AMRNB_LIBRARY})
+        # Check if OpenCore headers are present (vs 3GPP reference)
+        if(EXISTS "${AMRNB_INCLUDE_DIR}/opencore-amrnb/interf_dec.h")
+            set(HAVE_OPENCORE_AMRNB_INTERF_DEC_H TRUE)
+        endif()
+    endif()
+endif()
+
+# AMR-WB
+if(WITH_AMRWB)
+    find_library(AMRWB_LIBRARY opencore-amrwb amrwb)
+    find_path(AMRWB_INCLUDE_DIR opencore-amrwb/dec_if.h amrwb/dec.h)
+    if(AMRWB_LIBRARY AND AMRWB_INCLUDE_DIR)
+        set(HAVE_AMRWB TRUE)
+        set(AMRWB_LIBRARIES ${AMRWB_LIBRARY})
+        # Check if OpenCore headers are present (vs 3GPP reference)
+        if(EXISTS "${AMRWB_INCLUDE_DIR}/opencore-amrwb/dec_if.h")
+            set(HAVE_OPENCORE_AMRWB_DEC_IF_H TRUE)
+        endif()
+    endif()
+endif()
+
+# ===== Audio device driver detection =====
+
+# ALSA (Linux only)
+if(WITH_ALSA AND IS_LINUX)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(ALSA alsa)
+    endif()
+    if(NOT ALSA_FOUND)
+        find_library(ALSA_LIBRARY asound)
+        find_path(ALSA_INCLUDE_DIR alsa/asoundlib.h)
+        if(ALSA_LIBRARY AND ALSA_INCLUDE_DIR)
+            set(ALSA_LIBRARIES ${ALSA_LIBRARY})
+            set(ALSA_INCLUDE_DIRS ${ALSA_INCLUDE_DIR})
+            set(ALSA_FOUND TRUE)
+        endif()
+    endif()
+    if(ALSA_FOUND)
+        set(HAVE_ALSA TRUE)
+    endif()
+endif()
+
+# PulseAudio (Linux and FreeBSD)
+if(WITH_PULSEAUDIO AND (IS_LINUX OR IS_FREEBSD))
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(PULSEAUDIO libpulse-simple)
+    endif()
+    if(NOT PULSEAUDIO_FOUND)
+        find_library(PULSE_LIBRARY pulse)
+        find_library(PULSE_SIMPLE_LIBRARY pulse-simple)
+        find_path(PULSE_INCLUDE_DIR pulse/simple.h)
+        if(PULSE_LIBRARY AND PULSE_SIMPLE_LIBRARY AND PULSE_INCLUDE_DIR)
+            set(PULSEAUDIO_LIBRARIES ${PULSE_LIBRARY} ${PULSE_SIMPLE_LIBRARY})
+            set(PULSEAUDIO_INCLUDE_DIRS ${PULSE_INCLUDE_DIR})
+            set(PULSEAUDIO_FOUND TRUE)
+        endif()
+    endif()
+    if(PULSEAUDIO_FOUND)
+        set(HAVE_PULSEAUDIO TRUE)
+    endif()
+endif()
+
+# OSS (Linux, FreeBSD, NetBSD, OpenBSD)
+if(WITH_OSS)
+    check_include_file(sys/soundcard.h HAVE_SYS_SOUNDCARD_H)
+    check_include_file(machine/soundcard.h HAVE_MACHINE_SOUNDCARD_H)
+    if(HAVE_SYS_SOUNDCARD_H OR HAVE_MACHINE_SOUNDCARD_H)
+        set(HAVE_OSS TRUE)
+        set(OSS_LIBRARIES "")
+
+        # FreeBSD: OSS is built into the kernel, no extra library needed
+        # NetBSD: requires libossaudio
+        # OpenBSD: deprecated, use sndio instead
+        if(IS_NETBSD)
+            find_library(OSS_LIBRARY ossaudio)
+            if(OSS_LIBRARY)
+                set(OSS_LIBRARIES ${OSS_LIBRARY})
+            endif()
+        endif()
+
+        # Linux with OSS emulation may need ossaudio
+        if(IS_LINUX)
+            find_library(OSS_LIBRARY ossaudio)
+            if(OSS_LIBRARY)
+                set(OSS_LIBRARIES ${OSS_LIBRARY})
+            endif()
+        endif()
+    endif()
+endif()
+
+# Sun Audio
+if(WITH_SUNAUDIO)
+    check_include_file(sys/audioio.h HAVE_SYS_AUDIOIO_H)
+    check_include_file(sun/audioio.h HAVE_SUN_AUDIOIO_H)
+    if(HAVE_SYS_AUDIOIO_H OR HAVE_SUN_AUDIOIO_H)
+        set(HAVE_SUN_AUDIO TRUE)
+    endif()
+endif()
+
+# CoreAudio (macOS only)
+if(WITH_COREAUDIO AND IS_MACOS)
+    find_library(COREAUDIO_FRAMEWORK CoreAudio)
+    if(COREAUDIO_FRAMEWORK)
+        set(HAVE_COREAUDIO TRUE)
+        set(COREAUDIO_LIBRARIES "-framework CoreAudio")
+    endif()
+endif()
+
+# WaveAudio (Windows only)
+if(WITH_WAVEAUDIO AND IS_WINDOWS)
+    set(HAVE_WAVEAUDIO TRUE)
+    set(WAVEAUDIO_LIBRARIES winmm)
+endif()
+
+# sndio (OpenBSD native, also available on FreeBSD/NetBSD/Linux)
+if(WITH_SNDIO)
+    find_library(SNDIO_LIBRARY sndio)
+    find_path(SNDIO_INCLUDE_DIR sndio.h)
+    if(SNDIO_LIBRARY AND SNDIO_INCLUDE_DIR)
+        set(HAVE_SNDIO TRUE)
+        set(SNDIO_LIBRARIES ${SNDIO_LIBRARY})
+        set(SNDIO_INCLUDE_DIRS ${SNDIO_INCLUDE_DIR})
+    endif()
+endif()
+
+# libao
+if(WITH_AO)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(AO ao)
+    endif()
+    if(NOT AO_FOUND)
+        find_library(AO_LIBRARY ao)
+        find_path(AO_INCLUDE_DIR ao/ao.h)
+        if(AO_LIBRARY AND AO_INCLUDE_DIR)
+            set(AO_LIBRARIES ${AO_LIBRARY})
+            set(AO_INCLUDE_DIRS ${AO_INCLUDE_DIR})
+            set(AO_FOUND TRUE)
+        endif()
+    endif()
+    if(AO_FOUND)
+        set(HAVE_AO TRUE)
+    endif()
+endif()
+
+# Windows-specific settings
+if(IS_WINDOWS)
+    set(HAVE_WIN32_GLOB_H TRUE)
+    set(HAVE_WIN32_LTDL_H TRUE)
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+    if(MSVC)
+        add_definitions(-D_CRT_NONSTDC_NO_DEPRECATE)
+    endif()
+endif()
+
+# BSD-specific checks
+if(IS_BSD)
+    # Check for BSD-specific functions
+    check_function_exists(arc4random HAVE_ARC4RANDOM)
+
+    # DragonFlyBSD detection (similar to FreeBSD)
+    if(CMAKE_SYSTEM_NAME STREQUAL "DragonFly")
+        set(IS_DRAGONFLY TRUE)
+        set(IS_BSD TRUE)
+    endif()
+endif()
+
+# LADSPA support (requires ltdl or dlopen)
+if(WITH_LADSPA)
+    # Find libltdl (from libtool)
+    find_path(LTDL_INCLUDE_DIR ltdl.h
+        HINTS ${CMAKE_PREFIX_PATH}
+        PATH_SUFFIXES include
+    )
+    find_library(LTDL_LIBRARY
+        NAMES ltdl libltdl
+        HINTS ${CMAKE_PREFIX_PATH}
+        PATH_SUFFIXES lib
+    )
+
+    if(LTDL_INCLUDE_DIR AND LTDL_LIBRARY)
+        set(HAVE_LADSPA_H TRUE)
+        set(HAVE_LIBLTDL TRUE)
+        set(LTDL_LIBRARIES ${LTDL_LIBRARY})
+        set(LTDL_INCLUDE_DIRS ${LTDL_INCLUDE_DIR})
+        set(LADSPA_PATH "${CMAKE_INSTALL_FULL_LIBDIR}/ladspa" CACHE PATH "LADSPA plugin path")
+        message(STATUS "Found libltdl: ${LTDL_LIBRARY}")
+    else()
+        message(STATUS "libltdl not found, disabling LADSPA")
+        set(HAVE_LADSPA_H FALSE)
+    endif()
+endif()
+
+# Generate config header
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/soxconfig.h.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/src/soxconfig.h
+    @ONLY
+)
+
+# Make config header available
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/src)
+
+# Add subdirectories
+if(NOT EXTERNAL_GSM AND WITH_GSM)
+    add_subdirectory(libgsm)
+endif()
+
+if(NOT EXTERNAL_LPC10 AND WITH_LPC10)
+    add_subdirectory(lpc10)
+endif()
+
+add_subdirectory(src)
+
+# Determine platform name for summary
+if(IS_LINUX)
+    set(PLATFORM_NAME "Linux")
+elseif(IS_FREEBSD)
+    set(PLATFORM_NAME "FreeBSD")
+elseif(IS_NETBSD)
+    set(PLATFORM_NAME "NetBSD")
+elseif(IS_OPENBSD)
+    set(PLATFORM_NAME "OpenBSD")
+elseif(IS_MACOS)
+    set(PLATFORM_NAME "macOS")
+elseif(IS_WINDOWS)
+    set(PLATFORM_NAME "Windows")
+else()
+    set(PLATFORM_NAME "${CMAKE_SYSTEM_NAME}")
+endif()
+
+# Summary
+message(STATUS "")
+message(STATUS "=== SoX Configuration Summary ===")
+message(STATUS "")
+message(STATUS "Platform:                ${PLATFORM_NAME} (${CMAKE_SYSTEM_PROCESSOR})")
+message(STATUS "Build type:              ${CMAKE_BUILD_TYPE}")
+message(STATUS "Install prefix:          ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "")
+message(STATUS "Optional Device Drivers:")
+message(STATUS "  ALSA:                  ${HAVE_ALSA}")
+message(STATUS "  libao:                 ${HAVE_AO}")
+message(STATUS "  CoreAudio:             ${HAVE_COREAUDIO}")
+message(STATUS "  OSS:                   ${HAVE_OSS}")
+message(STATUS "  PulseAudio:            ${HAVE_PULSEAUDIO}")
+message(STATUS "  sndio:                 ${HAVE_SNDIO}")
+message(STATUS "  Sun Audio:             ${HAVE_SUN_AUDIO}")
+message(STATUS "  WaveAudio:             ${HAVE_WAVEAUDIO}")
+message(STATUS "")
+message(STATUS "Optional File Formats:")
+message(STATUS "  AMR-NB:                ${HAVE_AMRNB}")
+message(STATUS "  AMR-WB:                ${HAVE_AMRWB}")
+message(STATUS "  FLAC:                  ${HAVE_FLAC}")
+message(STATUS "  GSM:                   ${HAVE_GSM} (external: ${EXTERNAL_GSM})")
+message(STATUS "  LPC10:                 ${HAVE_LPC10} (external: ${EXTERNAL_LPC10})")
+message(STATUS "  MP3 (mad/lame/twolame):${HAVE_MP3}")
+message(STATUS "  Ogg Vorbis:            ${HAVE_OGG_VORBIS}")
+message(STATUS "  Opus:                  ${HAVE_OPUS}")
+message(STATUS "  libsndfile:            ${HAVE_SNDFILE}")
+message(STATUS "  WavPack:               ${HAVE_WAVPACK}")
+message(STATUS "")
+message(STATUS "Other Options:")
+message(STATUS "  PNG (spectrogram):     ${HAVE_PNG}")
+message(STATUS "  libmagic:              ${HAVE_MAGIC}")
+message(STATUS "  LADSPA:                ${HAVE_LADSPA_H}")
+message(STATUS "  OpenMP:                ${HAVE_OPENMP}")
+message(STATUS "")
+
+# pkg-config file
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/sox.pc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/sox.pc
+    @ONLY
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/sox.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
+# Install man pages
+install(FILES sox.1 soxi.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+install(FILES soxformat.7 DESTINATION ${CMAKE_INSTALL_MANDIR}/man7)
+install(FILES libsox.3 DESTINATION ${CMAKE_INSTALL_MANDIR}/man3)

@@ -31,6 +31,8 @@ cmake_install.cmake
 # Generated files
 sox*.tar.gz
 *.txt
+!CMakeLists.txt
+!**/CMakeLists.txt
 *.pdf
 *.html
 sox.pc

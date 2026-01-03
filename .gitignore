@@ -1,3 +1,4 @@
+# Autotools artifacts
 Makefile
 Makefile.in
 autom4te.cache
@@ -17,6 +18,17 @@ missing
 aclocal.m4
 libtool
 ltmain.sh
+
+# CMake build directories
+build/
+build_deps/
+static_libs/
+output/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Generated files
 sox*.tar.gz
 *.txt
 *.pdf

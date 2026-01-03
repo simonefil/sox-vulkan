@@ -242,7 +242,7 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
   sox_effect_t *effp1 = chain->effects[n - 1];
   sox_effect_t *effp = chain->effects[n];
   int effstatus = SOX_SUCCESS;
-  size_t f = 0;
+  ptrdiff_t f = 0;  /* Use signed type for MSVC OpenMP compatibility */
   size_t idone = effp1->oend - effp1->obeg;
   size_t obeg = sox_globals.bufsiz - effp->oend;
   sox_bool il_change = (effp->flows == 1) !=
@@ -284,7 +284,7 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
         firstprivate(idone_min,odone_min,idone_max,odone_max) \
         lastprivate(idone_min,odone_min,idone_max,odone_max)
 #endif
-    for (f = 0; f < effp->flows; ++f) {
+    for (f = 0; f < (ptrdiff_t)effp->flows; ++f) {
       size_t idonec = idone / effp->flows;
       size_t odonec = obeg / effp->flows;
       int eff_status_c = effp->handler.flow(&chain->effects[n][f],

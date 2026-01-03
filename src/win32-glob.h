@@ -1,4 +1,4 @@
-/* libSoX libpng stub file for MSVC9: (c) 2009 SoX contributors
+/* libSoX minimal glob for MS-Windows: (c) 2009 SoX contributors
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -15,4 +15,35 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#define PRId64 "lld"
+#ifndef GLOB_H
+#define GLOB_H 1
+
+#define GLOB_NOCHECK (16)
+#define GLOB_FLAGS (GLOB_NOCHECK)
+
+typedef struct glob_t
+{
+    unsigned gl_pathc;
+    char **gl_pathv;
+} glob_t;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int
+glob(
+    const char *pattern,
+    int flags,
+    void *unused,
+    glob_t *pglob);
+
+void
+globfree(
+    glob_t* pglob);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ifndef GLOB_H */

@@ -499,9 +499,16 @@ target_include_directories(mad PUBLIC
     `$<INSTALL_INTERFACE:include>
 )
 
+# Use FPM_64BIT for 64-bit builds (FPM_INTEL uses x86 asm not supported on x64)
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(FPM_MODE FPM_64BIT)
+else()
+    set(FPM_MODE FPM_DEFAULT)
+endif()
+
 target_compile_definitions(mad PRIVATE
     _CRT_SECURE_NO_WARNINGS
-    FPM_DEFAULT
+    `${FPM_MODE}
     HAVE_CONFIG_H
 )
 

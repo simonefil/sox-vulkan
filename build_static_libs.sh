@@ -97,6 +97,7 @@ LIBVORBIS_VERSION="1.3.7"
 FLAC_VERSION="1.4.3"
 OPUS_VERSION="1.5.2"
 OPUSFILE_VERSION="0.12"
+LIBOPUSENC_VERSION="0.3"
 LIBMAD_VERSION="0.15.1b"
 LAME_VERSION="3.100"
 TWOLAME_VERSION="0.4.0"
@@ -476,6 +477,31 @@ build_opusfile() {
     make install
 
     log_success "opusfile installed"
+}
+
+build_libopusenc() {
+    log_info "========== Building libopusenc ${LIBOPUSENC_VERSION} =========="
+
+    local url="https://github.com/xiph/libopusenc/releases/download/v${LIBOPUSENC_VERSION}/libopusenc-${LIBOPUSENC_VERSION}.tar.gz"
+    local archive="${DOWNLOAD_DIR}/libopusenc-${LIBOPUSENC_VERSION}.tar.gz"
+    local src="${SRC_DIR}/libopusenc-${LIBOPUSENC_VERSION}"
+
+    download_file "$url" "$archive"
+
+    if [ ! -d "$src" ]; then
+        extract_archive "$archive" "$SRC_DIR"
+    fi
+
+    cd "$src"
+
+    ./configure $(get_common_flags) \
+        --disable-examples \
+        PKG_CONFIG_PATH="${STATIC_LIBS_DIR}/lib/pkgconfig"
+
+    make -j${JOBS}
+    make install
+
+    log_success "libopusenc installed"
 }
 
 # Update outdated config.guess/config.sub for ARM64 support
@@ -1017,6 +1043,7 @@ main() {
     if [ "${ENABLE_OPUS}" = "ON" ]; then
         build_opus
         build_opusfile
+        build_libopusenc
     fi
 
     if [ "${ENABLE_MP3}" = "ON" ]; then

@@ -67,6 +67,7 @@ $Versions = @{
     flac = "1.4.3"
     opus = "1.5.2"
     opusfile = "0.12"
+    libopusenc = "0.3"
     lame = "3.100"
     twolame = "0.4.0"
     wavpack = "5.7.0"
@@ -456,6 +457,74 @@ install(FILES include/opusfile.h DESTINATION include/opus)
     Build-CMakeProject $src
 
     Write-Success "opusfile installed"
+}
+
+function Build-Libopusenc {
+    Write-Info "========== Building libopusenc $($Versions.libopusenc) =========="
+
+    $url = "https://github.com/xiph/libopusenc/releases/download/v$($Versions.libopusenc)/libopusenc-$($Versions.libopusenc).tar.gz"
+    $archive = Join-Path $DownloadDir "libopusenc-$($Versions.libopusenc).tar.gz"
+    $src = Join-Path $SrcDir "libopusenc-$($Versions.libopusenc)"
+
+    Download-File $url $archive
+
+    if (-not (Test-Path $src)) {
+        Extract-Archive $archive $SrcDir
+    }
+
+    # libopusenc doesn't provide CMake, so create a minimal static-library build.
+    $cmakeFile = Join-Path $src "CMakeLists.txt"
+    $cmakeContent = @"
+cmake_minimum_required(VERSION 3.14)
+project(libopusenc C)
+
+find_path(OPUS_INCLUDE_DIR opus/opus.h)
+find_library(OPUS_LIBRARY opus)
+
+add_library(opusenc STATIC
+    src/ogg_packer.c
+    src/opus_header.c
+    src/opusenc.c
+    src/picture.c
+    src/resample.c
+    src/unicode_support.c
+)
+
+target_include_directories(opusenc PUBLIC
+    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/include>
+    `$<INSTALL_INTERFACE:include/opus>
+)
+
+target_include_directories(opusenc PRIVATE
+    `${CMAKE_CURRENT_SOURCE_DIR}/src
+    `${OPUS_INCLUDE_DIR}
+    `${OPUS_INCLUDE_DIR}/opus
+)
+
+target_link_libraries(opusenc PUBLIC `${OPUS_LIBRARY})
+
+target_compile_definitions(opusenc PRIVATE
+    OPE_BUILD
+    OUTSIDE_SPEEX
+    RANDOM_PREFIX=libopusenc
+    RESAMPLE_FULL_SINC_TABLE=1
+    PACKAGE_NAME="libopusenc"
+    PACKAGE_VERSION="$($Versions.libopusenc)"
+    _CRT_SECURE_NO_WARNINGS
+)
+
+if(MSVC)
+    target_compile_options(opusenc PRIVATE /wd4244 /wd4267)
+endif()
+
+install(TARGETS opusenc ARCHIVE DESTINATION lib)
+install(FILES include/opusenc.h DESTINATION include/opus)
+"@
+    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
+
+    Build-CMakeProject $src
+
+    Write-Success "libopusenc installed"
 }
 
 function Build-Libmad {
@@ -1011,6 +1080,7 @@ function Main {
     if ($EnableOpus) {
         Build-Opus
         Build-Opusfile
+        Build-Libopusenc
     }
 
     if ($EnableMp3) {

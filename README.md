@@ -201,7 +201,7 @@ chmod +x build_static_libs.sh
 |-------|-------------|-----------|
 | OGG/Vorbis | Ogg container with Vorbis audio | libogg, libvorbis |
 | FLAC | Free Lossless Audio Codec | libFLAC |
-| Opus | Modern low-latency codec | libopus, opusfile |
+| Opus | Modern low-latency codec (decode and encode) | libopus, opusfile, libopusenc |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -359,9 +359,22 @@ This will list all supported audio formats. Look for:
 # Convert a WAV file to FLAC
 ./output/sox input.wav output.flac
 
+# Convert a WAV file to Opus at 128 kbit/s
+./output/sox input.wav -C 128 output.opus
+
+# Encode standard 5.1 surround at 384 kbit/s
+./output/sox input-5.1.wav -C 384 output-5.1.opus
+
 # Generate a test tone (5 seconds, 440Hz sine wave)
 ./output/sox -n test.wav synth 5 sine 440
 ```
+
+Opus encoding and decoding support the standard layouts from 1 to 8 channels.
+Mono and stereo use mapping family 0; layouts with 3 to 8 channels use mapping
+family 1. SoX automatically converts between its canonical WAVE channel order
+and the Vorbis channel order required by multichannel Opus. Since SoX tracks
+the channel count but not an explicit channel layout, non-standard discrete
+layouts, ambisonics, and streams with more than 8 channels are not supported.
 
 ### 5. Verify Static Linking (Linux/macOS)
 
@@ -446,6 +459,7 @@ The build scripts download and compile the following library versions:
 | FLAC | 1.4.3 |
 | opus | 1.5.2 |
 | opusfile | 0.12 |
+| libopusenc | 0.3 |
 | libmad | 0.15.1b |
 | LAME | 3.100 |
 | TwoLAME | 0.4.0 |

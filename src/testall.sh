@@ -67,3 +67,16 @@ t voc
 t vox -r 8130
 t wav
 t wve
+
+if ${bindir}/sox${EXEEXT} --help-format opus 2>/dev/null | grep -q '^Writes:$'; then
+	echo "Format: opus   Options: -C 96"
+	${bindir}/sox${EXEEXT} ${srcdir}/monkey.wav -C 96 /tmp/monkey.opus $effect
+	${bindir}/sox${EXEEXT} /tmp/monkey.opus /tmp/monkey1.wav $effect
+
+	echo "Format: opus   Options: 6-channel mapping family 1"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 6 /tmp/opus-5.1.wav \
+		synth .1 sine 220 sine 330 sine 440 sine 60 sine 550 sine 660
+	${bindir}/sox${EXEEXT} /tmp/opus-5.1.wav -C 384 /tmp/opus-5.1.opus
+	${bindir}/sox${EXEEXT} /tmp/opus-5.1.opus /tmp/opus-5.1-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/opus-5.1-decoded.wav`" = 6
+fi

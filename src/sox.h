@@ -549,7 +549,9 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_CVSD      , /**< Continuously Variable Slope Delta modulation */
   SOX_ENCODING_LPC10     , /**< Linear Predictive Coding */
   SOX_ENCODING_OPUS      , /**< Opus compression */
+  SOX_ENCODING_AC3       , /**< ATSC A/52 AC-3 compression */
   SOX_ENCODING_DSD       , /**< Direct Stream Digital */
+  SOX_ENCODING_EAC3      , /**< ATSC A/52 E-AC-3 compression */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;
@@ -1052,6 +1054,7 @@ if clipping occurs.
 #define SOX_FILE_MONO    0x0100 /**< Client API: Do channel restrictions allow mono? */
 #define SOX_FILE_STEREO  0x0200 /**< Client API: Do channel restrictions allow stereo? */
 #define SOX_FILE_QUAD    0x0400 /**< Client API: Do channel restrictions allow quad? */
+#define SOX_FILE_CODEC_OPTIONS 0x0800 /**< Client API: Accepts implementation-specific codec options */
 
 #define SOX_FILE_CHANS   (SOX_FILE_MONO | SOX_FILE_STEREO | SOX_FILE_QUAD) /**< Client API: No channel restrictions */
 #define SOX_FILE_LIT_END (SOX_FILE_ENDIAN | 0)                             /**< Client API: File is little-endian */
@@ -1537,6 +1540,7 @@ struct sox_format_t {
   sox_uint64_t     data_start;      /**< Offset at which headers end and sound data begins (set by lsx_check_read_params) */
   sox_format_handler_t handler;     /**< Format handler for this file */
   void             * priv;          /**< Format handler's private data area */
+  char const       * codec_options; /**< Internal codec options, if supported by the handler */
 };
 
 /**
@@ -1835,6 +1839,21 @@ sox_open_read(
     );
 
 /**
+Internal API:
+Opens a decoding session with handler-specific codec options.
+*/
+LSX_RETURN_OPT
+sox_format_t *
+LSX_API
+lsx_open_read_with_codec_options(
+    LSX_PARAM_IN_Z     char               const * path,
+    LSX_PARAM_IN_OPT   sox_signalinfo_t   const * signal,
+    LSX_PARAM_IN_OPT   sox_encodinginfo_t const * encoding,
+    LSX_PARAM_IN_OPT_Z char               const * filetype,
+    LSX_PARAM_IN_OPT_Z char               const * codec_options
+    );
+
+/**
 Client API:
 Opens a decoding session for a memory buffer. Returned handle must be closed with sox_close().
 @returns The handle for the new session, or null on failure.
@@ -1892,6 +1911,23 @@ sox_open_write(
     LSX_PARAM_IN_OPT_Z char               const * filetype, /**< Previously-determined file type, or NULL to auto-detect. */
     LSX_PARAM_IN_OPT   sox_oob_t          const * oob,      /**< Out-of-band data to add to file, or NULL if none. */
     LSX_PARAM_IN_OPT   sox_bool           (LSX_API * overwrite_permitted)(LSX_PARAM_IN_Z char const * filename) /**< Called if file exists to determine whether overwrite is ok. */
+    );
+
+/**
+Internal API:
+Opens an encoding session with handler-specific codec options.
+*/
+LSX_RETURN_OPT
+sox_format_t *
+LSX_API
+lsx_open_write_with_codec_options(
+    LSX_PARAM_IN_Z     char               const * path,
+    LSX_PARAM_IN       sox_signalinfo_t   const * signal,
+    LSX_PARAM_IN_OPT   sox_encodinginfo_t const * encoding,
+    LSX_PARAM_IN_OPT_Z char               const * filetype,
+    LSX_PARAM_IN_OPT   sox_oob_t          const * oob,
+    LSX_PARAM_IN_OPT   sox_bool           (LSX_API * overwrite_permitted)(LSX_PARAM_IN_Z char const * filename),
+    LSX_PARAM_IN_OPT_Z char               const * codec_options
     );
 
 /**

@@ -202,6 +202,8 @@ chmod +x build_static_libs.sh
 | OGG/Vorbis | Ogg container with Vorbis audio | libogg, libvorbis |
 | FLAC | Free Lossless Audio Codec | libFLAC |
 | Opus | Modern low-latency codec (decode and encode) | libopus, opusfile, libopusenc |
+| AC-3 | ATSC A/52 elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
+| E-AC-3 | Dolby Digital Plus elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -337,6 +339,8 @@ This will list all supported audio formats. Look for:
 - `mp3` - MP3 support
 - `ogg` - OGG/Vorbis support
 - `opus` - Opus support
+- `ac3` - AC-3 elementary stream support
+- `eac3` - E-AC-3 elementary stream support
 - `wav` - WAV support
 - `wavpack` - WavPack support
 
@@ -365,6 +369,12 @@ This will list all supported audio formats. Look for:
 # Encode standard 5.1 surround at 384 kbit/s
 ./output/sox input-5.1.wav -C 384 output-5.1.opus
 
+# Encode standard 5.1 AC-3 at 448 kbit/s
+./output/sox input-5.1.wav -C 448 output-5.1.ac3
+
+# Encode standard 5.1 E-AC-3 at 768 kbit/s
+./output/sox input-5.1.wav -C 768 output-5.1.eac3
+
 # Generate a test tone (5 seconds, 440Hz sine wave)
 ./output/sox -n test.wav synth 5 sine 440
 ```
@@ -375,6 +385,39 @@ family 1. SoX automatically converts between its canonical WAVE channel order
 and the Vorbis channel order required by multichannel Opus. Since SoX tracks
 the channel count but not an explicit channel layout, non-standard discrete
 layouts, ambisonics, and streams with more than 8 channels are not supported.
+
+AC-3 and E-AC-3 support use only FFmpeg's `libavcodec` and `libavutil`
+libraries; they do not invoke the `ffmpeg` executable or use `libavformat`.
+Both handlers read and write elementary streams at 32, 44.1, or 48 kHz.
+AC-3 supports canonical SoX layouts from mono through 5.1. E-AC-3 decoding
+supports canonical layouts through 7.1, while the FFmpeg encoder currently
+supports encoding through 5.1. SoX distinguishes AC-3 from E-AC-3 by parsing
+the shared syncframe header and its `bsid` field.
+
+When an E-AC-3 input contains Dolby Atmos JOC/OAMD spatial metadata, SoX
+warns that the metadata will be ignored and decodes only the channel-based
+audio presentation. Container formats and preservation or rendering of
+advanced Dolby metadata are outside these handlers.
+
+Additional `libavcodec` AVOptions can be passed to an FFmpeg-backed input or
+output with `--ffmpeg-opts`. Use `key=value:key=value` syntax and place the
+option immediately before the file it applies to:
+
+```bash
+# Encode E-AC-3 with additional encoder metadata/options
+./output/sox input.wav -C 640 \
+  --ffmpeg-opts 'dialnorm=-27:dmix_mode=loro:stereo_rematrixing=0' output.eac3
+
+# Configure the E-AC-3 decoder
+./output/sox --ffmpeg-opts 'drc_scale=0.5' input.eac3 output.wav
+```
+
+Unknown options, options unsupported by the selected encoder or decoder, and
+use with a non-FFmpeg format are errors. Options controlling bitrate, sample
+rate, channels/layout, sample format, downmixing, or time base remain owned by
+SoX and cannot be overridden through `--ffmpeg-opts`; use `-C`, `-r`, `-c`,
+and SoX effects such as `remix` instead. Available passthrough options depend
+on the installed FFmpeg version.
 
 ### 5. Verify Static Linking (Linux/macOS)
 

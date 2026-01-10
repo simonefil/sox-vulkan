@@ -149,6 +149,7 @@ typedef struct {
   char const * filetype;
   sox_signalinfo_t signal;
   sox_encodinginfo_t encoding;
+  char * codec_options;
   double volume;
   double replay_gain;
   sox_oob_t oob;
@@ -235,6 +236,7 @@ static void cleanup(void)
     if (files[i]->ft) {
       sox_close(files[i]->ft);
     }
+    free(files[i]->codec_options);
     free(files[i]->filename);
     free(files[i]);
   }
@@ -249,6 +251,7 @@ static void cleanup(void)
       }
       sox_close(ofile->ft); /* Assume we can unlink a file before closing it. */
     }
+    free(ofile->codec_options);
     free(ofile->filename);
     free(ofile);
   }
@@ -1521,8 +1524,9 @@ static void open_output_file(void)
     expand_fn = fndup_with_count(ofile->filename, ++output_count);
   else
     expand_fn = lsx_strdup(ofile->filename);
-  ofile->ft = sox_open_write(expand_fn, &ofile->signal, &ofile->encoding,
-      ofile->filetype, &oob, overwrite_permitted);
+  ofile->ft = lsx_open_write_with_codec_options(expand_fn, &ofile->signal,
+      &ofile->encoding, ofile->filetype, &oob, overwrite_permitted,
+      ofile->codec_options);
   sox_delete_comments(&oob.comments);
   free(expand_fn);
 
@@ -1986,6 +1990,7 @@ static void usage(char const * message)
 "-c|--channels CHANNELS   Number of channels of audio data; e.g. 2 = stereo",
 "-r|--rate RATE           Sample rate of audio",
 "-C|--compression FACTOR  Compression factor for output format",
+"--ffmpeg-opts OPTIONS    FFmpeg AVOptions for the following input/output file",
 "--add-comment TEXT       Append output file comment",
 "--comment TEXT           Specify comment text for the output file",
 "--comment-file FILENAME  File containing comment text for the output file",
@@ -2195,6 +2200,7 @@ static struct lsx_option_t const long_options[] = {
   {"no-clobber"      , lsx_option_arg_none    , NULL, 0},
   {"multi-threaded"  , lsx_option_arg_none    , NULL, 0},
   {"dft-min"         , lsx_option_arg_required, NULL, 0},
+  {"ffmpeg-opts"     , lsx_option_arg_required, NULL, 0},
 
   {"bits"            , lsx_option_arg_required, NULL, 'b'},
   {"channels"        , lsx_option_arg_required, NULL, 'c'},
@@ -2386,6 +2392,12 @@ static char parse_gopts_and_fopts(file_t * f)
           exit(1);
         }
         sox_globals.log2_dft_min_size = i;
+        break;
+      case 26:
+        if (!*optstate.arg)
+          usage("--ffmpeg-opts requires a non-empty option string");
+        free(f->codec_options);
+        f->codec_options = lsx_strdup(optstate.arg);
         break;
       }
       break;
@@ -2581,6 +2593,8 @@ static int add_file(file_t const * const opts, char const * const filename)
   file_t * f = lsx_malloc(sizeof(*f));
 
   *f = *opts;
+  f->codec_options = opts->codec_options ?
+      lsx_strdup(opts->codec_options) : NULL;
   if (!filename)
     usage("missing filename"); /* No return */
   f->filename = lsx_strdup(filename);
@@ -2625,6 +2639,12 @@ static void init_file(file_t * f)
   f->replay_gain = HUGE_VAL;
 }
 
+static void clear_file_options(file_t * f)
+{
+  free(f->codec_options);
+  f->codec_options = NULL;
+}
+
 static void parse_options_and_filenames(int argc, char **argv)
 {
   char const * env_opts = getenv(SOX_OPTS);
@@ -2651,7 +2671,8 @@ static void parse_options_and_filenames(int argc, char **argv)
   }
 
   lsx_getopt_init(argc, argv, getoptstr, long_options, lsx_getopt_flag_opterr, 1, &optstate);
-  for (; optstate.ind < argc && !sox_find_effect(argv[optstate.ind]); init_file(&opts)) {
+  for (; optstate.ind < argc && !sox_find_effect(argv[optstate.ind]);
+       clear_file_options(&opts), init_file(&opts)) {
     char c = parse_gopts_and_fopts(&opts);
     if (c == 'n') { /* is null file? */
       if (opts.filetype != NULL && strcmp(opts.filetype, "null") != 0)
@@ -2682,6 +2703,7 @@ static void parse_options_and_filenames(int argc, char **argv)
     add_file(&opts, set_default_device(&opts));
   else if (memcmp(&opts, &opts_none, sizeof(opts))) /* fopts but no file */
     add_file(&opts, device_name(opts.filetype));
+  clear_file_options(&opts);
 }
 
 static double soxi_total;
@@ -2944,7 +2966,8 @@ int main(int argc, char **argv)
         f->encoding = files[1]->encoding;
       }
     }
-    files[j]->ft = sox_open_read(f->filename, &f->signal, &f->encoding, f->filetype);
+    files[j]->ft = lsx_open_read_with_codec_options(f->filename, &f->signal,
+        &f->encoding, f->filetype, f->codec_options);
     if (!files[j]->ft)
       /* sox_open_read() will call lsx_warn for most errors.
        * Rely on that printing something. */

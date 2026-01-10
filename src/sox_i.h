@@ -219,8 +219,6 @@ typedef struct sox_formats_globals { /* Global parameters (for formats) */
   sox_globals_t * global_info;
 } sox_formats_globals;
 
-
-
 /*------------------------------ File Handlers -------------------------------*/
 
 int lsx_check_read_params(sox_format_t * ft, unsigned channels,

@@ -106,6 +106,7 @@ option(WITH_TWOLAME "TwoLAME MP2 encoder support" ON)
 option(WITH_ID3TAG "id3tag support" ON)
 option(WITH_OGGVORBIS "Ogg Vorbis support" ON)
 option(WITH_OPUS "Opus support" ON)
+option(WITH_FFMPEG_CODECS "FFmpeg libavcodec-based format support" ON)
 option(WITH_WAVPACK "WavPack support" ON)
 option(WITH_SNDFILE "libsndfile support" ON)
 option(WITH_AMRNB "AMR-NB support" ON)
@@ -402,6 +403,40 @@ if(WITH_OPUS)
 
     if(HAVE_OPUSFILE OR HAVE_OPUSENC)
         set(HAVE_OPUS TRUE)
+    endif()
+endif()
+
+# FFmpeg codecs (libavcodec/libavutil only; no libavformat or libswresample)
+if(WITH_FFMPEG_CODECS)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(FFMPEG_CODECS IMPORTED_TARGET
+            libavcodec>=61
+            libavutil>=59
+        )
+        if(FFMPEG_CODECS_FOUND)
+            set(FFMPEG_CODECS_LIBRARIES PkgConfig::FFMPEG_CODECS)
+        endif()
+    endif()
+    if(NOT FFMPEG_CODECS_FOUND)
+        find_library(AVCODEC_LIBRARY avcodec)
+        find_library(AVUTIL_LIBRARY avutil)
+        find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
+        find_path(AVUTIL_INCLUDE_DIR libavutil/avutil.h)
+        if(AVCODEC_LIBRARY AND AVUTIL_LIBRARY AND
+                AVCODEC_INCLUDE_DIR AND AVUTIL_INCLUDE_DIR)
+            set(FFMPEG_CODECS_LIBRARIES
+                ${AVCODEC_LIBRARY}
+                ${AVUTIL_LIBRARY}
+            )
+            set(FFMPEG_CODECS_INCLUDE_DIRS
+                ${AVCODEC_INCLUDE_DIR}
+                ${AVUTIL_INCLUDE_DIR}
+            )
+            set(FFMPEG_CODECS_FOUND TRUE)
+        endif()
+    endif()
+    if(FFMPEG_CODECS_FOUND)
+        set(HAVE_FFMPEG_CODECS TRUE)
     endif()
 endif()
 
@@ -775,6 +810,7 @@ message(STATUS "  MP3 (mad/lame/twolame):${HAVE_MP3}")
 message(STATUS "  Ogg Vorbis:            ${HAVE_OGG_VORBIS}")
 message(STATUS "  Opus decode:           ${HAVE_OPUSFILE}")
 message(STATUS "  Opus encode:           ${HAVE_OPUSENC}")
+message(STATUS "  FFmpeg codecs:         ${HAVE_FFMPEG_CODECS}")
 message(STATUS "  libsndfile:            ${HAVE_SNDFILE}")
 message(STATUS "  WavPack:               ${HAVE_WAVPACK}")
 message(STATUS "")

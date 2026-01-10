@@ -179,6 +179,7 @@ set(LIBSOX_FORMAT_SOURCES
 set(LIBSOX_FORMAT_HEADERS
     adpcm.h
     ima_rw.h
+    ffmpeg-codec.h
 )
 
 # Combine all sources
@@ -294,6 +295,18 @@ if(HAVE_OPUS)
     target_link_libraries(libsox PRIVATE ${OPUS_LIBRARIES})
     target_include_directories(libsox PRIVATE ${OPUS_INCLUDE_DIRS})
     target_compile_definitions(libsox PRIVATE STATIC_OPUS)
+endif()
+
+# FFmpeg libavcodec formats
+if(HAVE_FFMPEG_CODECS)
+    target_sources(libsox PRIVATE
+        ffmpeg-codec.c
+        ac3.c
+        eac3.c
+    )
+    target_link_libraries(libsox PRIVATE ${FFMPEG_CODECS_LIBRARIES})
+    target_include_directories(libsox PRIVATE ${FFMPEG_CODECS_INCLUDE_DIRS})
+    target_compile_definitions(libsox PRIVATE STATIC_FFMPEG_CODECS)
 endif()
 
 # MP3 format (mad/lame/twolame)
@@ -492,6 +505,9 @@ if(NOT BUILD_SHARED_LIBS AND EXISTS "${STATIC_LIBS_DIR}/lib")
         if(OPUS_LIBRARY)
             target_link_libraries(sox_exe PRIVATE ${OPUS_LIBRARY})
         endif()
+    endif()
+    if(HAVE_FFMPEG_CODECS)
+        target_link_libraries(sox_exe PRIVATE ${FFMPEG_CODECS_LIBRARIES})
     endif()
     if(HAVE_WAVPACK)
         target_link_libraries(sox_exe PRIVATE ${WAVPACK_LIBRARIES})

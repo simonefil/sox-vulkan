@@ -38,6 +38,10 @@
   #include <magic.h>
 #endif
 
+#ifdef HAVE_FFMPEG_CODECS
+  #include <libavcodec/ac3_parser.h>
+#endif
+
 #ifdef HAVE_UNISTD_H
 #  include <unistd.h>
 #endif
@@ -63,6 +67,17 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(sndt  , 0, 0, ""     , 0,  6, "SOUND\x1a")
   CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
   CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
+#ifdef HAVE_FFMPEG_CODECS
+  if (len >= 7 && (unsigned char)data[0] == 0x0b &&
+      (unsigned char)data[1] == 0x77) {
+    uint8_t bitstream_id;
+    uint16_t frame_size;
+
+    if (av_ac3_parse_header((uint8_t const *)data, len,
+          &bitstream_id, &frame_size) >= 0)
+      return bitstream_id <= 10 ? "ac3" : "eac3";
+  }
+#endif
   CHECK(speex , 0, 4, "OggS" , 28, 6, "Speex")
   CHECK(hcom  ,65, 4, "FSSD" , 128,4, "HCOM")
   CHECK(wav   , 0, 4, "RIFF" , 8,  4, "WAVE")
@@ -150,7 +165,9 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_lossy2, "CVSD"         , "CVSD"},
   {sox_encodings_lossy2, "LPC10"        , "LPC10"},
   {sox_encodings_lossy2, "Opus"         , "Opus"},
+  {sox_encodings_lossy2, "AC-3"         , "ATSC A/52 AC-3"},
   {sox_encodings_none  , "DSD"          , "Direct Stream Digital"},
+  {sox_encodings_lossy2, "E-AC-3"       , "ATSC A/52 E-AC-3"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -193,6 +210,8 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_GSM:
     case SOX_ENCODING_VORBIS:
     case SOX_ENCODING_OPUS:
+    case SOX_ENCODING_AC3:
+    case SOX_ENCODING_EAC3:
     case SOX_ENCODING_AMR_WB:
     case SOX_ENCODING_AMR_NB:
     case SOX_ENCODING_LPC10:      return !bits_per_sample? 16: 0;
@@ -491,7 +510,8 @@ static sox_format_t * open_read(
     size_t                     buffer_size UNUSED,
     sox_signalinfo_t   const * signal,
     sox_encodinginfo_t const * encoding,
-    char               const * filetype)
+    char               const * filetype,
+    char               const * codec_options)
 {
   sox_format_t * ft = lsx_calloc(1, sizeof(*ft));
   sox_format_handler_t const * handler;
@@ -586,6 +606,11 @@ static sox_format_t * open_read(
   ft->mode = 'r';
   ft->filetype = lsx_strdup(filetype);
   ft->filename = lsx_strdup(path);
+  ft->codec_options = codec_options;
+  if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
+    lsx_fail("codec options are unsupported for file type `%s'", filetype);
+    goto error;
+  }
   if (signal)
     ft->signal = *signal;
 
@@ -639,7 +664,18 @@ sox_format_t * sox_open_read(
     sox_encodinginfo_t const * encoding,
     char               const * filetype)
 {
-  return open_read(path, NULL, (size_t)0, signal, encoding, filetype);
+  return open_read(path, NULL, (size_t)0, signal, encoding, filetype, NULL);
+}
+
+sox_format_t * lsx_open_read_with_codec_options(
+    char               const * path,
+    sox_signalinfo_t   const * signal,
+    sox_encodinginfo_t const * encoding,
+    char               const * filetype,
+    char               const * codec_options)
+{
+  return open_read(path, NULL, (size_t)0, signal, encoding, filetype,
+      codec_options);
 }
 
 sox_format_t * sox_open_mem_read(
@@ -649,7 +685,7 @@ sox_format_t * sox_open_mem_read(
     sox_encodinginfo_t const * encoding,
     char               const * filetype)
 {
-  return open_read("", buffer, buffer_size, signal,encoding,filetype);
+  return open_read("", buffer, buffer_size, signal, encoding, filetype, NULL);
 }
 
 sox_bool sox_format_supports_encoding(
@@ -884,7 +920,8 @@ static sox_format_t * open_write(
     sox_encodinginfo_t const * encoding,
     char               const * filetype,
     sox_oob_t          const * oob,
-    sox_bool           (*overwrite_permitted)(const char *filename))
+    sox_bool           (*overwrite_permitted)(const char *filename),
+    char               const * codec_options)
 {
   sox_format_t * ft = lsx_calloc(sizeof(*ft), 1);
   sox_format_handler_t const * handler;
@@ -898,6 +935,11 @@ static sox_format_t * open_write(
     goto error;
 
   ft->handler = *handler;
+  ft->codec_options = codec_options;
+  if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
+    lsx_fail("codec options are unsupported for file type `%s'", filetype);
+    goto error;
+  }
 
   if (!(ft->handler.flags & SOX_FILE_NOSTDIO)) {
     if (!strcmp(path, "-")) { /* Use stdout if the filename is "-" */
@@ -1002,7 +1044,21 @@ sox_format_t * sox_open_write(
     sox_oob_t          const * oob,
     sox_bool           (*overwrite_permitted)(const char *filename))
 {
-  return open_write(path, NULL, (size_t)0, NULL, NULL, signal, encoding, filetype, oob, overwrite_permitted);
+  return open_write(path, NULL, (size_t)0, NULL, NULL, signal, encoding,
+      filetype, oob, overwrite_permitted, NULL);
+}
+
+sox_format_t * lsx_open_write_with_codec_options(
+    char               const * path,
+    sox_signalinfo_t   const * signal,
+    sox_encodinginfo_t const * encoding,
+    char               const * filetype,
+    sox_oob_t          const * oob,
+    sox_bool           (*overwrite_permitted)(char const * filename),
+    char               const * codec_options)
+{
+  return open_write(path, NULL, (size_t)0, NULL, NULL, signal, encoding,
+      filetype, oob, overwrite_permitted, codec_options);
 }
 
 sox_format_t * sox_open_mem_write(
@@ -1013,7 +1069,8 @@ sox_format_t * sox_open_mem_write(
     char               const * filetype,
     sox_oob_t          const * oob)
 {
-  return open_write("", buffer, buffer_size, NULL, NULL, signal, encoding, filetype, oob, NULL);
+  return open_write("", buffer, buffer_size, NULL, NULL, signal, encoding,
+      filetype, oob, NULL, NULL);
 }
 
 sox_format_t * sox_open_memstream_write(
@@ -1024,7 +1081,8 @@ sox_format_t * sox_open_memstream_write(
     char               const * filetype,
     sox_oob_t          const * oob)
 {
-  return open_write("", NULL, (size_t)0, buffer_ptr, buffer_size_ptr, signal, encoding, filetype, oob, NULL);
+  return open_write("", NULL, (size_t)0, buffer_ptr, buffer_size_ptr, signal,
+      encoding, filetype, oob, NULL, NULL);
 }
 
 size_t sox_read(sox_format_t * ft, sox_sample_t * buf, size_t len)

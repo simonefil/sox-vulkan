@@ -98,6 +98,11 @@
 #if defined HAVE_OPUS && (defined STATIC_OPUS || !defined HAVE_LIBLTDL)
   FORMAT(opus)
 #endif
+#if defined HAVE_FFMPEG_CODECS && \
+    (defined STATIC_FFMPEG_CODECS || !defined HAVE_LIBLTDL)
+  FORMAT(ac3)
+  FORMAT(eac3)
+#endif
 #if defined HAVE_OSS && (defined STATIC_OSS || !defined HAVE_LIBLTDL)
   FORMAT(oss)
 #endif

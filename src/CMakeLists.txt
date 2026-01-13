@@ -301,6 +301,7 @@ endif()
 if(HAVE_FFMPEG_CODECS)
     target_sources(libsox PRIVATE
         ffmpeg-codec.c
+        aac.c
         ac3.c
         eac3.c
     )

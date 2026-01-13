@@ -40,6 +40,7 @@
 
 #ifdef HAVE_FFMPEG_CODECS
   #include <libavcodec/ac3_parser.h>
+  #include <libavcodec/adts_parser.h>
 #endif
 
 #ifdef HAVE_UNISTD_H
@@ -48,6 +49,48 @@
 
 #define PIPE_AUTO_DETECT_SIZE 256 /* Only as much as we can rewind a pipe */
 #define AUTO_DETECT_SIZE 4096     /* For seekable file, so no restriction */
+
+#ifdef HAVE_FFMPEG_CODECS
+static sox_bool is_adts_header(
+    unsigned char const * data,
+    size_t length)
+{
+  unsigned frame_size;
+  unsigned header_size;
+  uint32_t samples;
+  uint8_t frames;
+
+  if (length < AV_AAC_ADTS_HEADER_SIZE ||
+      data[0] != 0xff || (data[1] & 0xf6) != 0xf0)
+    return sox_false;
+  frame_size =
+      ((data[3] & 3) << 11) | (data[4] << 3) | (data[5] >> 5);
+  header_size = (data[1] & 1) ? 7 : 9;
+  return length >= header_size && frame_size >= header_size &&
+      av_adts_header_parse(data, &samples, &frames) >= 0;
+}
+
+static size_t leading_id3v2_size(
+    unsigned char const * data,
+    size_t length)
+{
+  size_t size;
+
+  if (length < 10 || memcmp(data, "ID3", 3) ||
+      data[3] < 2 || data[3] > 4 || data[4] == 0xff ||
+      (data[6] & 0x80) || (data[7] & 0x80) ||
+      (data[8] & 0x80) || (data[9] & 0x80))
+    return 0;
+  size = 10 +
+      ((size_t)data[6] << 21) +
+      ((size_t)data[7] << 14) +
+      ((size_t)data[8] << 7) +
+      data[9];
+  if (data[3] == 4 && (data[5] & 0x10))
+    size += 10;
+  return size;
+}
+#endif
 
 static char const * auto_detect_format(sox_format_t * ft, char const * ext)
 {
@@ -68,6 +111,25 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
   CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
 #ifdef HAVE_FFMPEG_CODECS
+  {
+    unsigned char const * bytes = (unsigned char const *)data;
+    size_t offset = 0;
+
+    while (offset < len) {
+      size_t id3v2_size =
+          leading_id3v2_size(bytes + offset, len - offset);
+
+      if (!id3v2_size)
+        break;
+      if (id3v2_size > len - offset) {
+        offset = len;
+        break;
+      }
+      offset += id3v2_size;
+    }
+    if (offset < len && is_adts_header(bytes + offset, len - offset))
+      return "aac";
+  }
   if (len >= 7 && (unsigned char)data[0] == 0x0b &&
       (unsigned char)data[1] == 0x77) {
     uint8_t bitstream_id;
@@ -168,6 +230,7 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_lossy2, "AC-3"         , "ATSC A/52 AC-3"},
   {sox_encodings_none  , "DSD"          , "Direct Stream Digital"},
   {sox_encodings_lossy2, "E-AC-3"       , "ATSC A/52 E-AC-3"},
+  {sox_encodings_lossy2, "AAC"           , "Advanced Audio Coding"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -212,6 +275,7 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_OPUS:
     case SOX_ENCODING_AC3:
     case SOX_ENCODING_EAC3:
+    case SOX_ENCODING_AAC:
     case SOX_ENCODING_AMR_WB:
     case SOX_ENCODING_AMR_NB:
     case SOX_ENCODING_LPC10:      return !bits_per_sample? 16: 0;

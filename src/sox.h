@@ -552,6 +552,7 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_AC3       , /**< ATSC A/52 AC-3 compression */
   SOX_ENCODING_DSD       , /**< Direct Stream Digital */
   SOX_ENCODING_EAC3      , /**< ATSC A/52 E-AC-3 compression */
+  SOX_ENCODING_AAC       , /**< Advanced Audio Coding */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;

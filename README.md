@@ -204,6 +204,7 @@ chmod +x build_static_libs.sh
 | Opus | Modern low-latency codec (decode and encode) | libopus, opusfile, libopusenc |
 | AC-3 | ATSC A/52 elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | E-AC-3 | Dolby Digital Plus elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
+| AAC/ADTS | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -385,6 +386,14 @@ family 1. SoX automatically converts between its canonical WAVE channel order
 and the Vorbis channel order required by multichannel Opus. Since SoX tracks
 the channel count but not an explicit channel layout, non-standard discrete
 layouts, ambisonics, and streams with more than 8 channels are not supported.
+
+AAC/ADTS encoding supports AAC-LC in the canonical SoX layouts from mono
+through 7.1. AAC-LC, HE-AAC and HE-AACv2 decoding are supported. Quad, 6.1
+and 7.1 streams use an MPEG-4 Program Config Element (PCE), avoiding the
+ambiguous ADTS 7.1 channel configuration and preserving SoX's canonical
+channel order: `FL FR BL BR` for quad, `FL FR FC LFE BC SL SR` for 6.1,
+and `FL FR FC LFE BL BR SL SR` for 7.1. Non-standard discrete layouts are
+not supported.
 
 AC-3 and E-AC-3 support use only FFmpeg's `libavcodec` and `libavutil`
 libraries; they do not invoke the `ffmpeg` executable or use `libavformat`.

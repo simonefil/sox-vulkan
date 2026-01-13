@@ -20,12 +20,16 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   SOX_ENCODING_AC3,
   "AC-3",
   6,
+  sox_false,
   6,
   24,
   448000,
   32000,
   640000,
   AV_PROFILE_UNKNOWN,
+  NULL,
+  NULL,
+  NULL,
   NULL
 };
 

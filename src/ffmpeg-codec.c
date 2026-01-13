@@ -146,7 +146,8 @@ static void destroy_state(lsx_ffmpeg_codec_t ** state)
   if (state == NULL || *state == NULL)
     return;
   p = *state;
-  av_parser_close(p->parser);
+  if (p->parser != NULL)
+    av_parser_close(p->parser);
   av_packet_free(&p->packet);
   av_frame_free(&p->frame);
   avcodec_free_context(&p->context);
@@ -220,14 +221,18 @@ static int canonical_layout(unsigned channels, AVChannelLayout * layout)
   }
 }
 
-static sox_bool is_supported_layout(AVChannelLayout const * layout)
+static sox_bool is_supported_layout(
+    AVChannelLayout const * layout,
+    lsx_ffmpeg_codec_definition_t const * definition)
 {
   uint64_t mask;
 
   if (!av_channel_layout_check(layout))
     return sox_false;
   if (layout->order == AV_CHANNEL_ORDER_UNSPEC)
-    return layout->nb_channels >= 1 && layout->nb_channels <= 6;
+    return layout->nb_channels >= 1 &&
+        (layout->nb_channels <= 6 ||
+         definition->accept_unspecified_decode_layout);
   if (layout->order != AV_CHANNEL_ORDER_NATIVE)
     return sox_false;
 
@@ -268,7 +273,7 @@ static int validate_decoded_frame(
 
   if (layout->nb_channels == 0)
     layout = &state->context->ch_layout;
-  if (!is_supported_layout(layout) ||
+  if (!is_supported_layout(layout, state->definition) ||
       (unsigned)layout->nb_channels >
           state->definition->max_decode_channels) {
     if (av_channel_layout_describe(layout, description,
@@ -425,6 +430,9 @@ static int read_parsed_packet(
     sox_format_t * ft,
     lsx_ffmpeg_codec_t * state)
 {
+  if (state->definition->packet_reader != NULL)
+    return state->definition->packet_reader(ft, state->packet);
+
   for (;;) {
     uint8_t * packet_data = NULL;
     int packet_size = 0;
@@ -536,12 +544,14 @@ int lsx_ffmpeg_codec_startread(
   if (allocate_state(ft, state, definition, sox_false) != SOX_SUCCESS)
     return SOX_EOF;
   p = *state;
-  p->parser = av_parser_init(definition->codec_id);
-  if (p->parser == NULL) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "FFmpeg parser for %s is unavailable", definition->name);
-    destroy_state(state);
-    return SOX_EOF;
+  if (definition->packet_reader == NULL) {
+    p->parser = av_parser_init(definition->codec_id);
+    if (p->parser == NULL) {
+      lsx_fail_errno(ft, SOX_EFMT,
+          "FFmpeg parser for %s is unavailable", definition->name);
+      destroy_state(state);
+      return SOX_EOF;
+    }
   }
 
   result = open_codec(ft, p, sox_false);
@@ -809,8 +819,14 @@ static int write_available_packets(
     if (result < 0)
       return fail_av(ft, SOX_EFMT,
           "Unable to receive encoded audio packet", result);
-    if (lsx_writebuf(ft, state->packet->data,
-          (size_t)state->packet->size) != (size_t)state->packet->size) {
+    if (state->definition->packet_writer != NULL)
+      result = state->definition->packet_writer(
+          ft, state->context, state->packet);
+    else
+      result = lsx_writebuf(ft, state->packet->data,
+          (size_t)state->packet->size) == (size_t)state->packet->size ?
+          SOX_SUCCESS : SOX_EOF;
+    if (result != SOX_SUCCESS) {
       av_packet_unref(state->packet);
       return SOX_EOF;
     }
@@ -894,6 +910,15 @@ int lsx_ffmpeg_codec_startwrite(
         "Unable to configure FFmpeg channel layout", result);
     destroy_state(state);
     return SOX_EOF;
+  }
+  if (definition->prepare_encoder != NULL) {
+    result = definition->prepare_encoder(p->context);
+    if (result < 0) {
+      fail_av(ft, SOX_EFMT,
+          "Unable to prepare FFmpeg encoder", result);
+      destroy_state(state);
+      return SOX_EOF;
+    }
   }
 
   result = open_codec(ft, p, sox_true);

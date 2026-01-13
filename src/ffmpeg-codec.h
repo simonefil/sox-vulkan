@@ -15,11 +15,24 @@
 
 typedef struct lsx_ffmpeg_codec_t lsx_ffmpeg_codec_t;
 
+typedef int (*lsx_ffmpeg_codec_encoder_preparer_t)(
+    AVCodecContext * context);
+
+typedef int (*lsx_ffmpeg_codec_packet_reader_t)(
+    sox_format_t * ft,
+    AVPacket * packet);
+
+typedef int (*lsx_ffmpeg_codec_packet_writer_t)(
+    sox_format_t * ft,
+    AVCodecContext const * context,
+    AVPacket const * packet);
+
 typedef struct {
   enum AVCodecID codec_id;
   sox_encoding_t encoding;
   char const * name;
   unsigned max_decode_channels;
+  sox_bool accept_unspecified_decode_layout;
   unsigned max_encode_channels;
   unsigned precision;
   int64_t default_bit_rate;
@@ -27,6 +40,9 @@ typedef struct {
   int64_t maximum_bit_rate;
   int ignored_metadata_profile;
   char const * ignored_metadata_name;
+  lsx_ffmpeg_codec_encoder_preparer_t prepare_encoder;
+  lsx_ffmpeg_codec_packet_reader_t packet_reader;
+  lsx_ffmpeg_codec_packet_writer_t packet_writer;
 } lsx_ffmpeg_codec_definition_t;
 
 int lsx_ffmpeg_codec_startread(

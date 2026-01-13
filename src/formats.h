@@ -100,6 +100,7 @@
 #endif
 #if defined HAVE_FFMPEG_CODECS && \
     (defined STATIC_FFMPEG_CODECS || !defined HAVE_LIBLTDL)
+  FORMAT(aac)
   FORMAT(ac3)
   FORMAT(eac3)
 #endif

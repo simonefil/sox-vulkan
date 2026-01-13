@@ -20,13 +20,17 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   SOX_ENCODING_EAC3,
   "E-AC-3",
   8,
+  sox_false,
   6,
   24,
   640000,
   32000,
   6144000,
   AV_PROFILE_EAC3_DDP_ATMOS,
-  "Dolby Atmos JOC/OAMD"
+  "Dolby Atmos JOC/OAMD",
+  NULL,
+  NULL,
+  NULL
 };
 
 static int startread(sox_format_t * ft)

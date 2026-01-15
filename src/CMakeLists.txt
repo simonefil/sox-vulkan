@@ -304,6 +304,7 @@ if(HAVE_FFMPEG_CODECS)
         aac.c
         ac3.c
         eac3.c
+        usac.c
     )
     target_link_libraries(libsox PRIVATE ${FFMPEG_CODECS_LIBRARIES})
     target_include_directories(libsox PRIVATE ${FFMPEG_CODECS_INCLUDE_DIRS})

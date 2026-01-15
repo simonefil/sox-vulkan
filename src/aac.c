@@ -443,6 +443,8 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   0,
   AV_PROFILE_UNKNOWN,
   NULL,
+  AV_PROFILE_UNKNOWN,
+  NULL,
   prepare_aac_encoder,
   read_adts_packet,
   write_adts_packet

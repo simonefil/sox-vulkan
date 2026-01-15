@@ -205,6 +205,7 @@ chmod +x build_static_libs.sh
 | AC-3 | ATSC A/52 elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | E-AC-3 | Dolby Digital Plus elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | AAC/ADTS | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
+| xHE-AAC/USAC | LOAS/LATM elementary stream (decode only) | FFmpeg libavcodec, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -342,6 +343,7 @@ This will list all supported audio formats. Look for:
 - `opus` - Opus support
 - `ac3` - AC-3 elementary stream support
 - `eac3` - E-AC-3 elementary stream support
+- `usac` - xHE-AAC/USAC with LOAS/LATM framing
 - `wav` - WAV support
 - `wavpack` - WavPack support
 
@@ -394,6 +396,15 @@ ambiguous ADTS 7.1 channel configuration and preserving SoX's canonical
 channel order: `FL FR BL BR` for quad, `FL FR FC LFE BC SL SR` for 6.1,
 and `FL FR FC LFE BL BR SL SR` for 7.1. Non-standard discrete layouts are
 not supported.
+
+xHE-AAC/USAC decoding accepts LOAS/LATM elementary streams through the
+`usac`, `xheaac`, and `xhe-aac` format names. SoX parses the LOAS/LATM
+transport and passes raw USAC access units plus their `AudioSpecificConfig`
+to FFmpeg 8 or later. The supported LATM subset has one synchronous program
+and layer, no additional subframes or `otherData`, `audioMuxVersion` 1, and
+`frameLengthType` 0. Encoding and container formats are not supported.
+xHE-AAC loudness and dynamic-range metadata, if present, are not applied and
+produces a warning.
 
 AC-3 and E-AC-3 support use only FFmpeg's `libavcodec` and `libavutil`
 libraries; they do not invoke the `ffmpeg` executable or use `libavformat`.

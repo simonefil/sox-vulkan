@@ -271,6 +271,13 @@ static int validate_decoded_frame(
       state->frame->sample_rate : state->context->sample_rate;
   char description[128];
 
+  if (state->definition->required_decode_profile != AV_PROFILE_UNKNOWN &&
+      state->context->profile !=
+          state->definition->required_decode_profile) {
+    lsx_fail_errno(ft, SOX_EFMT,
+        "The input is not %s audio", state->definition->name);
+    return SOX_EOF;
+  }
   if (layout->nb_channels == 0)
     layout = &state->context->ch_layout;
   if (!is_supported_layout(layout, state->definition) ||
@@ -544,6 +551,11 @@ int lsx_ffmpeg_codec_startread(
   if (allocate_state(ft, state, definition, sox_false) != SOX_SUCCESS)
     return SOX_EOF;
   p = *state;
+  if (definition->prepare_decoder != NULL &&
+      definition->prepare_decoder(ft, p->context) != SOX_SUCCESS) {
+    destroy_state(state);
+    return SOX_EOF;
+  }
   if (definition->packet_reader == NULL) {
     p->parser = av_parser_init(definition->codec_id);
     if (p->parser == NULL) {

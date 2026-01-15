@@ -28,6 +28,8 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   640000,
   AV_PROFILE_UNKNOWN,
   NULL,
+  AV_PROFILE_UNKNOWN,
+  NULL,
   NULL,
   NULL,
   NULL

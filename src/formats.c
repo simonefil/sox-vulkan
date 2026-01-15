@@ -70,6 +70,95 @@ static sox_bool is_adts_header(
       av_adts_header_parse(data, &samples, &frames) >= 0;
 }
 
+typedef struct {
+  unsigned char const * data;
+  size_t size_bits;
+  size_t position;
+} auto_bit_reader_t;
+
+static sox_bool read_auto_bits(
+    auto_bit_reader_t * reader,
+    unsigned count,
+    uint32_t * value)
+{
+  uint32_t result = 0;
+  unsigned i;
+
+  if (count > 32 || reader->position > reader->size_bits ||
+      count > reader->size_bits - reader->position)
+    return sox_false;
+  for (i = 0; i < count; ++i) {
+    size_t position = reader->position++;
+
+    result = (result << 1) |
+        ((reader->data[position / 8] >> (7 - position % 8)) & 1);
+  }
+  if (value != NULL)
+    *value = result;
+  return sox_true;
+}
+
+static sox_bool read_auto_latm_value(
+    auto_bit_reader_t * reader,
+    uint32_t * value)
+{
+  uint32_t bytes_for_value;
+  uint32_t result = 0;
+  uint32_t byte;
+  unsigned i;
+
+  if (!read_auto_bits(reader, 2, &bytes_for_value))
+    return sox_false;
+  for (i = 0; i <= bytes_for_value; ++i) {
+    if (!read_auto_bits(reader, 8, &byte))
+      return sox_false;
+    result = (result << 8) | byte;
+  }
+  *value = result;
+  return sox_true;
+}
+
+static sox_bool is_usac_loas(
+    unsigned char const * data,
+    size_t length)
+{
+  auto_bit_reader_t reader;
+  size_t mux_length;
+  size_t available;
+  uint32_t value;
+  uint32_t asc_bits;
+  uint32_t object_type;
+
+  if (length < 3 || data[0] != 0x56 || (data[1] & 0xe0) != 0xe0)
+    return sox_false;
+  mux_length = ((size_t)(data[1] & 0x1f) << 8) | data[2];
+  if (mux_length == 0)
+    return sox_false;
+  available = min(mux_length, length - 3);
+  reader.data = data + 3;
+  reader.size_bits = available * 8;
+  reader.position = 0;
+
+  if (!read_auto_bits(&reader, 1, &value) || value != 0 ||
+      !read_auto_bits(&reader, 1, &value) || value != 1 ||
+      !read_auto_bits(&reader, 1, &value) || value != 0 ||
+      !read_auto_latm_value(&reader, &value) ||
+      !read_auto_bits(&reader, 1, &value) || value != 1 ||
+      !read_auto_bits(&reader, 6, &value) || value != 0 ||
+      !read_auto_bits(&reader, 4, &value) || value != 0 ||
+      !read_auto_bits(&reader, 3, &value) || value != 0 ||
+      !read_auto_latm_value(&reader, &asc_bits) ||
+      asc_bits < 11 ||
+      !read_auto_bits(&reader, 5, &object_type))
+    return sox_false;
+  if (object_type == 31) {
+    if (!read_auto_bits(&reader, 6, &value))
+      return sox_false;
+    object_type = 32 + value;
+  }
+  return object_type == 42;
+}
+
 static size_t leading_id3v2_size(
     unsigned char const * data,
     size_t length)
@@ -111,6 +200,8 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
   CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
 #ifdef HAVE_FFMPEG_CODECS
+  if (is_usac_loas((unsigned char const *)data, len))
+    return "usac";
   {
     unsigned char const * bytes = (unsigned char const *)data;
     size_t offset = 0;
@@ -231,6 +322,7 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_none  , "DSD"          , "Direct Stream Digital"},
   {sox_encodings_lossy2, "E-AC-3"       , "ATSC A/52 E-AC-3"},
   {sox_encodings_lossy2, "AAC"           , "Advanced Audio Coding"},
+  {sox_encodings_lossy2, "xHE-AAC"       , "xHE-AAC/USAC"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -276,6 +368,7 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_AC3:
     case SOX_ENCODING_EAC3:
     case SOX_ENCODING_AAC:
+    case SOX_ENCODING_USAC:
     case SOX_ENCODING_AMR_WB:
     case SOX_ENCODING_AMR_NB:
     case SOX_ENCODING_LPC10:      return !bits_per_sample? 16: 0;

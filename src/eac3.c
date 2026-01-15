@@ -28,6 +28,8 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   6144000,
   AV_PROFILE_EAC3_DDP_ATMOS,
   "Dolby Atmos JOC/OAMD",
+  AV_PROFILE_UNKNOWN,
+  NULL,
   NULL,
   NULL,
   NULL

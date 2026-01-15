@@ -15,6 +15,10 @@
 
 typedef struct lsx_ffmpeg_codec_t lsx_ffmpeg_codec_t;
 
+typedef int (*lsx_ffmpeg_codec_decoder_preparer_t)(
+    sox_format_t * ft,
+    AVCodecContext * context);
+
 typedef int (*lsx_ffmpeg_codec_encoder_preparer_t)(
     AVCodecContext * context);
 
@@ -40,6 +44,8 @@ typedef struct {
   int64_t maximum_bit_rate;
   int ignored_metadata_profile;
   char const * ignored_metadata_name;
+  int required_decode_profile;
+  lsx_ffmpeg_codec_decoder_preparer_t prepare_decoder;
   lsx_ffmpeg_codec_encoder_preparer_t prepare_encoder;
   lsx_ffmpeg_codec_packet_reader_t packet_reader;
   lsx_ffmpeg_codec_packet_writer_t packet_writer;

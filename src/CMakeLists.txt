@@ -301,9 +301,11 @@ endif()
 if(HAVE_FFMPEG_CODECS)
     target_sources(libsox PRIVATE
         ffmpeg-codec.c
+        latm-common.c
         aac.c
         ac3.c
         eac3.c
+        latm.c
         usac.c
     )
     target_link_libraries(libsox PRIVATE ${FFMPEG_CODECS_LIBRARIES})

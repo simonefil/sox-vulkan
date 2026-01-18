@@ -8,6 +8,7 @@
 
 #include "sox_i.h"
 #include "ffmpeg-codec.h"
+#include "latm-common.h"
 
 #ifdef HAVE_FFMPEG_CODECS
 
@@ -16,7 +17,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#define LOAS_MAX_FRAME_SIZE 0x1fff
 #define USAC_MAX_CONFIG_SIZE 1024
 
 /* Keep the other FFmpeg-backed formats buildable with libavcodec 61.
@@ -27,8 +27,8 @@
 
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
-  uint8_t loas_frame[LOAS_MAX_FRAME_SIZE];
-  uint8_t pending_packet[LOAS_MAX_FRAME_SIZE];
+  uint8_t loas_frame[LSX_LOAS_MAX_PACKET_SIZE];
+  uint8_t pending_packet[LSX_LOAS_MAX_FRAME_SIZE];
   size_t pending_size;
   uint8_t config[USAC_MAX_CONFIG_SIZE];
   size_t config_size;
@@ -41,28 +41,6 @@ typedef struct {
   size_t size_bits;
   size_t position;
 } bit_reader_t;
-
-static int read_exact(
-    sox_format_t * ft,
-    uint8_t * data,
-    size_t size,
-    sox_bool clean_eof)
-{
-  size_t done = 0;
-
-  while (done < size) {
-    size_t count = lsx_readbuf(ft, data + done, size - done);
-
-    if (count == 0) {
-      if (done == 0 && clean_eof)
-        return 0;
-      lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC LOAS frame");
-      return SOX_EOF;
-    }
-    done += count;
-  }
-  return 1;
-}
 
 static int read_bits(
     bit_reader_t * reader,
@@ -235,7 +213,11 @@ static int parse_audio_mux_element(
     sox_bool * config_changed,
     size_t frame_size)
 {
-  bit_reader_t reader = {p->loas_frame, frame_size * 8, 0};
+  bit_reader_t reader = {
+    p->loas_frame + LSX_LOAS_HEADER_SIZE,
+    (frame_size - LSX_LOAS_HEADER_SIZE) * 8,
+    0
+  };
   uint32_t value;
   size_t payload_size = 0;
 
@@ -257,7 +239,7 @@ static int parse_audio_mux_element(
 
   do {
     if (read_bits(&reader, 8, &value) != SOX_SUCCESS ||
-        payload_size > LOAS_MAX_FRAME_SIZE - value) {
+        payload_size > LSX_LOAS_MAX_FRAME_SIZE - value) {
       lsx_fail_errno(ft, SOX_EHDR,
           "Invalid xHE-AAC LATM payload length");
       return SOX_EOF;
@@ -283,21 +265,12 @@ static int read_loas_access_unit(
     sox_bool * config_changed,
     sox_bool clean_eof)
 {
-  uint8_t header[3];
   size_t frame_size;
-  int result = read_exact(ft, header, sizeof(header), clean_eof);
+  int result = lsx_loas_read_packet(ft, p->loas_frame,
+      sizeof(p->loas_frame), &frame_size, clean_eof, "xHE-AAC");
 
   if (result != 1)
     return result;
-  if (header[0] != 0x56 || (header[1] & 0xe0) != 0xe0) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Invalid xHE-AAC LOAS sync word");
-    return SOX_EOF;
-  }
-  frame_size = ((size_t)(header[1] & 0x1f) << 8) | header[2];
-  if (frame_size == 0 ||
-      read_exact(ft, p->loas_frame, frame_size, sox_false) != 1)
-    return SOX_EOF;
   return parse_audio_mux_element(ft, p, destination,
       destination_size, config_changed, frame_size) == SOX_SUCCESS ? 1 :
       SOX_EOF;
@@ -343,7 +316,7 @@ static int read_usac_packet(
     AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
-  uint8_t access_unit[LOAS_MAX_FRAME_SIZE];
+  uint8_t access_unit[LSX_LOAS_MAX_FRAME_SIZE];
   uint8_t * new_config;
   size_t access_unit_size;
   sox_bool config_changed = sox_false;

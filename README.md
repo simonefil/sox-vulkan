@@ -205,6 +205,7 @@ chmod +x build_static_libs.sh
 | AC-3 | ATSC A/52 elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | E-AC-3 | Dolby Digital Plus elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | AAC/ADTS | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
+| AAC/LOAS-LATM | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | xHE-AAC/USAC | LOAS/LATM elementary stream (decode only) | FFmpeg libavcodec, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
@@ -343,6 +344,8 @@ This will list all supported audio formats. Look for:
 - `opus` - Opus support
 - `ac3` - AC-3 elementary stream support
 - `eac3` - E-AC-3 elementary stream support
+- `aac`, `adts` - AAC with ADTS framing
+- `latm`, `loas` - AAC with LOAS/LATM framing
 - `usac` - xHE-AAC/USAC with LOAS/LATM framing
 - `wav` - WAV support
 - `wavpack` - WavPack support
@@ -378,6 +381,9 @@ This will list all supported audio formats. Look for:
 # Encode standard 5.1 E-AC-3 at 768 kbit/s
 ./output/sox input-5.1.wav -C 768 output-5.1.eac3
 
+# Encode AAC-LC with LOAS/LATM framing at 128 kbit/s
+./output/sox input.wav -C 128 output.latm
+
 # Generate a test tone (5 seconds, 440Hz sine wave)
 ./output/sox -n test.wav synth 5 sine 440
 ```
@@ -389,13 +395,15 @@ and the Vorbis channel order required by multichannel Opus. Since SoX tracks
 the channel count but not an explicit channel layout, non-standard discrete
 layouts, ambisonics, and streams with more than 8 channels are not supported.
 
-AAC/ADTS encoding supports AAC-LC in the canonical SoX layouts from mono
-through 7.1. AAC-LC, HE-AAC and HE-AACv2 decoding are supported. Quad, 6.1
-and 7.1 streams use an MPEG-4 Program Config Element (PCE), avoiding the
-ambiguous ADTS 7.1 channel configuration and preserving SoX's canonical
-channel order: `FL FR BL BR` for quad, `FL FR FC LFE BC SL SR` for 6.1,
-and `FL FR FC LFE BL BR SL SR` for 7.1. Non-standard discrete layouts are
-not supported.
+AAC encoding supports AAC-LC with either ADTS (`aac`, `adts`) or LOAS/LATM
+(`latm`, `loas`) framing in the canonical SoX layouts from mono through 7.1.
+Both handlers decode AAC-LC, HE-AAC and HE-AACv2. Quad, 6.1 and 7.1 streams
+use an MPEG-4 Program Config Element (PCE), avoiding the ambiguous ADTS 7.1
+channel configuration and preserving SoX's canonical channel order:
+`FL FR BL BR` for quad, `FL FR FC LFE BC SL SR` for 6.1, and
+`FL FR FC LFE BL BR SL SR` for 7.1. Non-standard discrete layouts are not
+supported. SoX writes a `StreamMuxConfig` every 20 frames in LOAS/LATM
+output so decoding can recover after joining a stream mid-file.
 
 xHE-AAC/USAC decoding accepts LOAS/LATM elementary streams through the
 `usac`, `xheaac`, and `xhe-aac` format names. SoX parses the LOAS/LATM

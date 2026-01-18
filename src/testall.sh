@@ -156,6 +156,51 @@ if ${bindir}/sox${EXEEXT} --help-format aac 2>/dev/null | grep -q '^Writes:$'; t
 	${bindir}/sox${EXEEXT} /tmp/aac-autodetect.bin /tmp/aac-autodetect.wav
 fi
 
+if ${bindir}/sox${EXEEXT} --help-format latm 2>/dev/null | grep -q '^Writes:$'; then
+	echo "Format: latm   Options: -C 128, stereo LOAS/LATM"
+	${bindir}/sox${EXEEXT} -R -n -r 44100 -c 2 /tmp/latm-stereo.wav \
+		synth .1 sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} /tmp/latm-stereo.wav -C 128 /tmp/monkey.latm
+	${bindir}/sox${EXEEXT} /tmp/monkey.latm /tmp/latm-stereo-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/latm-stereo-decoded.wav`" = 2 ||
+		exit 1
+
+	echo "Format: latm   Options: -C 256, quad PCE"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 4 /tmp/latm-quad.wav \
+		synth .1 sine 220 sine 330 sine 440 sine 550 vol .1
+	${bindir}/sox${EXEEXT} /tmp/latm-quad.wav -C 256 /tmp/latm-quad.latm
+	${bindir}/sox${EXEEXT} /tmp/latm-quad.latm /tmp/latm-quad-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/latm-quad-decoded.wav`" = 4 ||
+		exit 1
+	check_channel_frequencies /tmp/latm-quad-decoded.wav 220 330 440 550
+
+	echo "Format: latm   Options: -C 448, 6.1 PCE"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 7 /tmp/latm-6.1.wav \
+		synth .1 sine 220 sine 330 sine 440 sine 110 sine 550 sine 660 \
+		sine 770 vol .1
+	${bindir}/sox${EXEEXT} /tmp/latm-6.1.wav -C 448 /tmp/latm-6.1.latm
+	${bindir}/sox${EXEEXT} /tmp/latm-6.1.latm /tmp/latm-6.1-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/latm-6.1-decoded.wav`" = 7 ||
+		exit 1
+	check_channel_frequencies /tmp/latm-6.1-decoded.wav \
+		220 330 440 110 550 660 770
+
+	echo "Format: latm   Options: -C 512, 7.1 PCE"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 8 /tmp/latm-7.1.wav \
+		synth .1 sine 220 sine 330 sine 440 sine 110 sine 550 sine 660 \
+		sine 770 sine 880 vol .1
+	${bindir}/sox${EXEEXT} /tmp/latm-7.1.wav -C 512 /tmp/latm-7.1.latm
+	${bindir}/sox${EXEEXT} /tmp/latm-7.1.latm /tmp/latm-7.1-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/latm-7.1-decoded.wav`" = 8 ||
+		exit 1
+	check_channel_frequencies /tmp/latm-7.1-decoded.wav \
+		220 330 440 110 550 660 770 880
+
+	cp /tmp/monkey.latm /tmp/latm-autodetect.bin
+	${bindir}/sox${EXEEXT} /tmp/latm-autodetect.bin \
+		/tmp/latm-autodetect.wav
+fi
+
 if ${bindir}/sox${EXEEXT} --help-format ac3 2>/dev/null | grep -q '^Writes:$'; then
 	echo "Format: ac3    Options: -C 448, 6-channel"
 	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 6 /tmp/ac3-5.1.wav \

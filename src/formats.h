@@ -103,6 +103,7 @@
   FORMAT(aac)
   FORMAT(ac3)
   FORMAT(eac3)
+  FORMAT(latm)
   FORMAT(usac)
 #endif
 #if defined HAVE_OSS && (defined STATIC_OSS || !defined HAVE_LIBLTDL)

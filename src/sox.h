@@ -554,6 +554,7 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_EAC3      , /**< ATSC A/52 E-AC-3 compression */
   SOX_ENCODING_AAC       , /**< Advanced Audio Coding */
   SOX_ENCODING_USAC      , /**< xHE-AAC/Unified Speech and Audio Coding */
+  SOX_ENCODING_ALAC      , /**< Apple Lossless Audio Codec */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;
@@ -1057,6 +1058,7 @@ if clipping occurs.
 #define SOX_FILE_STEREO  0x0200 /**< Client API: Do channel restrictions allow stereo? */
 #define SOX_FILE_QUAD    0x0400 /**< Client API: Do channel restrictions allow quad? */
 #define SOX_FILE_CODEC_OPTIONS 0x0800 /**< Client API: Accepts implementation-specific codec options */
+#define SOX_FILE_CHANNEL_LAYOUT 0x1000 /**< Client API: Accepts an explicit output channel layout */
 
 #define SOX_FILE_CHANS   (SOX_FILE_MONO | SOX_FILE_STEREO | SOX_FILE_QUAD) /**< Client API: No channel restrictions */
 #define SOX_FILE_LIT_END (SOX_FILE_ENDIAN | 0)                             /**< Client API: File is little-endian */
@@ -1543,6 +1545,7 @@ struct sox_format_t {
   sox_format_handler_t handler;     /**< Format handler for this file */
   void             * priv;          /**< Format handler's private data area */
   char const       * codec_options; /**< Internal codec options, if supported by the handler */
+  char const       * channel_layout; /**< Explicit output channel layout, if supported by the handler */
 };
 
 /**
@@ -1555,6 +1558,15 @@ typedef struct sox_format_tab_t {
   char *name;         /**< Name of format handler */
   sox_format_fn_t fn; /**< Function to call to get format handler's information */
 } sox_format_tab_t;
+
+/**
+Internal API:
+Prints any explicit output channel layouts supported by a format handler.
+*/
+void
+LSX_API
+lsx_print_format_channel_layouts(
+    LSX_PARAM_IN_Z char const * name);
 
 /**
 Client API:
@@ -1917,7 +1929,8 @@ sox_open_write(
 
 /**
 Internal API:
-Opens an encoding session with handler-specific codec options.
+Opens an encoding session with handler-specific codec options and an explicit
+channel layout.
 */
 LSX_RETURN_OPT
 sox_format_t *
@@ -1929,7 +1942,8 @@ lsx_open_write_with_codec_options(
     LSX_PARAM_IN_OPT_Z char               const * filetype,
     LSX_PARAM_IN_OPT   sox_oob_t          const * oob,
     LSX_PARAM_IN_OPT   sox_bool           (LSX_API * overwrite_permitted)(LSX_PARAM_IN_Z char const * filename),
-    LSX_PARAM_IN_OPT_Z char               const * codec_options
+    LSX_PARAM_IN_OPT_Z char               const * codec_options,
+    LSX_PARAM_IN_OPT_Z char               const * channel_layout
     );
 
 /**

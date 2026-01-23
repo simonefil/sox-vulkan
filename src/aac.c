@@ -447,7 +447,12 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   NULL,
   prepare_aac_encoder,
   read_adts_packet,
-  write_adts_packet
+  write_adts_packet,
+  sox_false,
+  0,
+  0,
+  0,
+  NULL
 };
 
 static int startread(sox_format_t * ft)
@@ -510,7 +515,7 @@ LSX_FORMAT_HANDLER(aac)
     SOX_LIB_VERSION_CODE,
     "AAC-LC, HE-AAC and HE-AACv2 with ADTS framing",
     names,
-    SOX_FILE_CODEC_OPTIONS,
+    SOX_FILE_CODEC_OPTIONS | SOX_FILE_CHANNEL_LAYOUT,
     startread,
     read_samples,
     stopread,

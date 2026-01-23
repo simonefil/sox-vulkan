@@ -31,6 +31,10 @@ typedef int (*lsx_ffmpeg_codec_packet_writer_t)(
     AVCodecContext const * context,
     AVPacket const * packet);
 
+typedef int (*lsx_ffmpeg_codec_layout_selector_t)(
+    unsigned channels,
+    AVChannelLayout * layout);
+
 typedef struct {
   enum AVCodecID codec_id;
   sox_encoding_t encoding;
@@ -49,6 +53,11 @@ typedef struct {
   lsx_ffmpeg_codec_encoder_preparer_t prepare_encoder;
   lsx_ffmpeg_codec_packet_reader_t packet_reader;
   lsx_ffmpeg_codec_packet_writer_t packet_writer;
+  sox_bool use_compression_level;
+  int default_compression_level;
+  int minimum_compression_level;
+  int maximum_compression_level;
+  lsx_ffmpeg_codec_layout_selector_t select_layout;
 } lsx_ffmpeg_codec_definition_t;
 
 int lsx_ffmpeg_codec_startread(
@@ -78,5 +87,10 @@ size_t lsx_ffmpeg_codec_write(
 int lsx_ffmpeg_codec_stopwrite(
     sox_format_t * ft,
     lsx_ffmpeg_codec_t ** state);
+
+AVCodecContext const * lsx_ffmpeg_codec_context(
+    lsx_ffmpeg_codec_t const * state);
+
+void lsx_ffmpeg_codec_print_format_layouts(char const * format_name);
 
 #endif

@@ -313,6 +313,17 @@ if(HAVE_FFMPEG_CODECS)
     target_compile_definitions(libsox PRIVATE STATIC_FFMPEG_CODECS)
 endif()
 
+# FFmpeg libavformat containers
+if(HAVE_FFMPEG_FORMATS)
+    target_sources(libsox PRIVATE
+        ffmpeg-container.c
+        alac.c
+    )
+    target_link_libraries(libsox PRIVATE ${FFMPEG_FORMATS_LIBRARIES})
+    target_include_directories(libsox PRIVATE ${FFMPEG_FORMATS_INCLUDE_DIRS})
+    target_compile_definitions(libsox PRIVATE STATIC_FFMPEG_FORMATS)
+endif()
+
 # MP3 format (mad/lame/twolame)
 if(HAVE_MP3)
     target_sources(libsox PRIVATE mp3.c)
@@ -512,6 +523,9 @@ if(NOT BUILD_SHARED_LIBS AND EXISTS "${STATIC_LIBS_DIR}/lib")
     endif()
     if(HAVE_FFMPEG_CODECS)
         target_link_libraries(sox_exe PRIVATE ${FFMPEG_CODECS_LIBRARIES})
+    endif()
+    if(HAVE_FFMPEG_FORMATS)
+        target_link_libraries(sox_exe PRIVATE ${FFMPEG_FORMATS_LIBRARIES})
     endif()
     if(HAVE_WAVPACK)
         target_link_libraries(sox_exe PRIVATE ${WAVPACK_LIBRARIES})

@@ -41,6 +41,7 @@
 #cmakedefine HAVE_OPUSFILE            1
 #cmakedefine HAVE_OPUSENC             1
 #cmakedefine HAVE_FFMPEG_CODECS       1
+#cmakedefine HAVE_FFMPEG_FORMATS      1
 #cmakedefine HAVE_SNDFILE             1
 #cmakedefine HAVE_WAVPACK             1
 

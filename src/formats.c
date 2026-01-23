@@ -21,6 +21,10 @@
 #define _GNU_SOURCE
 #include "sox_i.h"
 
+#ifdef STATIC_FFMPEG_CODECS
+#include "ffmpeg-codec.h"
+#endif
+
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -91,6 +95,33 @@ static size_t leading_id3v2_size(
     size += 10;
   return size;
 }
+
+#ifdef HAVE_FFMPEG_FORMATS
+static sox_bool is_m4a_header(
+    unsigned char const * data,
+    size_t length)
+{
+  size_t atom_size;
+  size_t limit;
+  size_t position;
+
+  if (length < 12 || memcmp(data + 4, "ftyp", 4))
+    return sox_false;
+  atom_size = ((size_t)data[0] << 24) |
+      ((size_t)data[1] << 16) |
+      ((size_t)data[2] << 8) |
+      data[3];
+  if (atom_size < 12)
+    return sox_false;
+  limit = min(atom_size, length);
+  if (!memcmp(data + 8, "M4A ", 4))
+    return sox_true;
+  for (position = 16; position + 4 <= limit; position += 4)
+    if (!memcmp(data + position, "M4A ", 4))
+      return sox_true;
+  return sox_false;
+}
+#endif
 #endif
 
 static char const * auto_detect_format(sox_format_t * ft, char const * ext)
@@ -112,6 +143,10 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
   CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
 #ifdef HAVE_FFMPEG_CODECS
+#ifdef HAVE_FFMPEG_FORMATS
+  if (is_m4a_header((unsigned char const *)data, len))
+    return "m4a";
+#endif
   {
     uint32_t object_type;
     int config = lsx_latm_config_object_type(
@@ -245,6 +280,7 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_lossy2, "E-AC-3"       , "ATSC A/52 E-AC-3"},
   {sox_encodings_lossy2, "AAC"           , "Advanced Audio Coding"},
   {sox_encodings_lossy2, "xHE-AAC"       , "xHE-AAC/USAC"},
+  {sox_encodings_none  , "ALAC"          , "Apple Lossless Audio Codec"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -264,6 +300,11 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_HCOM:       return !(bits_per_sample & 7) && (bits_per_sample >> 3) - 1 < 1? bits_per_sample: 0;
     case SOX_ENCODING_WAVPACK:
     case SOX_ENCODING_FLAC:       return !(bits_per_sample & 7) && (bits_per_sample >> 3) - 1 < 4? bits_per_sample: 0;
+    case SOX_ENCODING_ALAC:       return bits_per_sample == 16 ||
+                                         bits_per_sample == 20 ||
+                                         bits_per_sample == 24 ||
+                                         bits_per_sample == 32 ?
+                                         bits_per_sample : 0;
     case SOX_ENCODING_SIGN2:      return bits_per_sample <= 32? bits_per_sample : 0;
     case SOX_ENCODING_UNSIGNED:   return !(bits_per_sample & 7) && (bits_per_sample >> 3) - 1 < 4? bits_per_sample: 0;
 
@@ -1000,7 +1041,8 @@ static sox_format_t * open_write(
     char               const * filetype,
     sox_oob_t          const * oob,
     sox_bool           (*overwrite_permitted)(const char *filename),
-    char               const * codec_options)
+    char               const * codec_options,
+    char               const * channel_layout)
 {
   sox_format_t * ft = lsx_calloc(sizeof(*ft), 1);
   sox_format_handler_t const * handler;
@@ -1015,8 +1057,14 @@ static sox_format_t * open_write(
 
   ft->handler = *handler;
   ft->codec_options = codec_options;
+  ft->channel_layout = channel_layout;
   if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
     lsx_fail("codec options are unsupported for file type `%s'", filetype);
+    goto error;
+  }
+  if (channel_layout &&
+      !(ft->handler.flags & SOX_FILE_CHANNEL_LAYOUT)) {
+    lsx_fail("channel layouts are unsupported for file type `%s'", filetype);
     goto error;
   }
 
@@ -1124,7 +1172,7 @@ sox_format_t * sox_open_write(
     sox_bool           (*overwrite_permitted)(const char *filename))
 {
   return open_write(path, NULL, (size_t)0, NULL, NULL, signal, encoding,
-      filetype, oob, overwrite_permitted, NULL);
+      filetype, oob, overwrite_permitted, NULL, NULL);
 }
 
 sox_format_t * lsx_open_write_with_codec_options(
@@ -1134,10 +1182,11 @@ sox_format_t * lsx_open_write_with_codec_options(
     char               const * filetype,
     sox_oob_t          const * oob,
     sox_bool           (*overwrite_permitted)(char const * filename),
-    char               const * codec_options)
+    char               const * codec_options,
+    char               const * channel_layout)
 {
   return open_write(path, NULL, (size_t)0, NULL, NULL, signal, encoding,
-      filetype, oob, overwrite_permitted, codec_options);
+      filetype, oob, overwrite_permitted, codec_options, channel_layout);
 }
 
 sox_format_t * sox_open_mem_write(
@@ -1149,7 +1198,7 @@ sox_format_t * sox_open_mem_write(
     sox_oob_t          const * oob)
 {
   return open_write("", buffer, buffer_size, NULL, NULL, signal, encoding,
-      filetype, oob, NULL, NULL);
+      filetype, oob, NULL, NULL, NULL);
 }
 
 sox_format_t * sox_open_memstream_write(
@@ -1161,7 +1210,16 @@ sox_format_t * sox_open_memstream_write(
     sox_oob_t          const * oob)
 {
   return open_write("", NULL, (size_t)0, buffer_ptr, buffer_size_ptr, signal,
-      encoding, filetype, oob, NULL, NULL);
+      encoding, filetype, oob, NULL, NULL, NULL);
+}
+
+void LSX_API lsx_print_format_channel_layouts(char const * name)
+{
+#ifdef STATIC_FFMPEG_CODECS
+  lsx_ffmpeg_codec_print_format_layouts(name);
+#else
+  (void)name;
+#endif
 }
 
 size_t sox_read(sox_format_t * ft, sox_sample_t * buf, size_t len)

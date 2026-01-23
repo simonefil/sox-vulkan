@@ -65,6 +65,50 @@ check_channel_frequencies() {
 	done
 }
 
+test_explicit_layout() {
+	format=$1
+	source=$2
+	layout=$3
+	id=$4
+	channels=$5
+	compression=$6
+	output=/tmp/${format}-${id}.${format}
+	decoded=/tmp/${format}-${id}-decoded.wav
+	log=/tmp/${format}-${id}-decode.log
+
+	echo "Format: $format   Options: --channel-layout $layout"
+	${bindir}/sox${EXEEXT} --help-format "$format" 2>/dev/null |
+		grep -F "$layout" >/dev/null ||
+		exit 1
+	${bindir}/sox${EXEEXT} "$source" -C "$compression" \
+		--channel-layout "$layout" "$output"
+	${bindir}/sox${EXEEXT} "$output" "$decoded" 2>"$log"
+	test "`${bindir}/sox${EXEEXT} --i -c "$decoded"`" = "$channels" ||
+		exit 1
+}
+
+test_alac_layout() {
+	source=$1
+	layout=$2
+	id=$3
+	channels=$4
+	pcm=/tmp/alac-layout-${id}.wav
+	reference=/tmp/alac-layout-${id}-reference.s16
+	output=/tmp/alac-layout-${id}.m4a
+	decoded=/tmp/alac-layout-${id}-decoded.s16
+
+	echo "Format: m4a    Options: --channel-layout $layout"
+	${bindir}/sox${EXEEXT} --help-format m4a 2>/dev/null |
+		grep -F "$layout" >/dev/null ||
+		exit 1
+	${bindir}/sox${EXEEXT} "$source" -c "$channels" -b 16 "$pcm"
+	${bindir}/sox${EXEEXT} "$pcm" -t s16 "$reference"
+	${bindir}/sox${EXEEXT} "$pcm" --channel-layout "$layout" "$output"
+	${bindir}/sox${EXEEXT} "$output" -t s16 "$decoded"
+	cmp "$reference" "$decoded" ||
+		exit 1
+}
+
 t 8svx
 t aiff
 t aifc
@@ -101,6 +145,123 @@ if ${bindir}/sox${EXEEXT} --help-format opus 2>/dev/null | grep -q '^Writes:$'; 
 	test "`${bindir}/sox${EXEEXT} --i -c /tmp/opus-5.1-decoded.wav`" = 6
 fi
 
+if ${bindir}/sox${EXEEXT} --help-format m4a 2>/dev/null | grep -q '^Writes:$'; then
+	echo "Format: m4a    Options: -C 2, 16-bit stereo ALAC"
+	${bindir}/sox${EXEEXT} -R -n -r 44100 -c 2 -b 16 \
+		/tmp/alac-stereo.wav synth .1 sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} /tmp/alac-stereo.wav \
+		-t s16 /tmp/alac-stereo-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/alac-stereo.wav -C 2 /tmp/alac-stereo.m4a
+	${bindir}/sox${EXEEXT} /tmp/alac-stereo.m4a \
+		-t s16 /tmp/alac-stereo-decoded.s16
+	cmp /tmp/alac-stereo-reference.s16 /tmp/alac-stereo-decoded.s16 ||
+		exit 1
+
+	echo "Format: m4a    Options: -C 0, 24-bit stereo ALAC"
+	${bindir}/sox${EXEEXT} -R -n -r 96000 -c 2 -b 24 \
+		/tmp/alac-24.wav synth .1 sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} /tmp/alac-24.wav \
+		-t s32 /tmp/alac-24-reference.s32
+	${bindir}/sox${EXEEXT} /tmp/alac-24.wav -C 0 /tmp/alac-24.m4a
+	${bindir}/sox${EXEEXT} /tmp/alac-24.m4a \
+		-t s32 /tmp/alac-24-decoded.s32
+	cmp /tmp/alac-24-reference.s32 /tmp/alac-24-decoded.s32 ||
+		exit 1
+
+	echo "Format: m4a    Options: lossless 5.1(back) ALAC"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 6 -b 16 \
+		/tmp/alac-5.1.wav synth .1 sine 220 sine 330 sine 440 \
+		sine 110 sine 550 sine 660 vol .1
+	${bindir}/sox${EXEEXT} /tmp/alac-5.1.wav \
+		-t s16 /tmp/alac-5.1-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/alac-5.1.wav /tmp/alac-5.1.m4a
+	${bindir}/sox${EXEEXT} /tmp/alac-5.1.m4a \
+		-t s16 /tmp/alac-5.1-decoded.s16
+	cmp /tmp/alac-5.1-reference.s16 /tmp/alac-5.1-decoded.s16 ||
+		exit 1
+
+	cp /tmp/alac-stereo.m4a /tmp/alac-autodetect.bin
+	${bindir}/sox${EXEEXT} /tmp/alac-autodetect.bin \
+		/tmp/alac-autodetect.wav
+
+	echo "Format: m4a    Options: MPEG 4.0 B without automatic remix"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 4 -b 16 \
+		/tmp/alac-quad.wav synth .1 sine 220 sine 330 sine 440 sine 550
+	${bindir}/sox${EXEEXT} /tmp/alac-quad.wav \
+		-t s16 /tmp/alac-quad-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/alac-quad.wav /tmp/alac-quad.m4a \
+		2>/tmp/alac-quad-encode.log
+	grep -q 'MPEG 4.0 B without remixing' /tmp/alac-quad-encode.log ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/alac-quad.m4a \
+		-t s16 /tmp/alac-quad-decoded.s16
+	cmp /tmp/alac-quad-reference.s16 /tmp/alac-quad-decoded.s16 ||
+		exit 1
+
+	echo "Format: m4a    Options: Apple AAC 6.1 without automatic remix"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 7 -b 16 \
+		/tmp/alac-6.1.wav synth .1 sine 220 sine 330 sine 440 \
+		sine 110 sine 550 sine 660 sine 770 vol .1
+	${bindir}/sox${EXEEXT} /tmp/alac-6.1.wav \
+		-t s16 /tmp/alac-6.1-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/alac-6.1.wav /tmp/alac-6.1.m4a \
+		2>/tmp/alac-6.1-encode.log
+	grep -q 'Apple AAC 6.1 without remixing' /tmp/alac-6.1-encode.log ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/alac-6.1.m4a \
+		-t s16 /tmp/alac-6.1-decoded.s16
+	cmp /tmp/alac-6.1-reference.s16 /tmp/alac-6.1-decoded.s16 ||
+		exit 1
+
+	echo "Format: m4a    Options: MPEG 7.1 B without automatic remix"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 8 -b 16 \
+		/tmp/alac-7.1.wav synth .1 sine 220 sine 330 sine 440 \
+		sine 110 sine 550 sine 660 sine 770 sine 880 vol .1
+	${bindir}/sox${EXEEXT} /tmp/alac-7.1.wav \
+		-t s16 /tmp/alac-7.1-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/alac-7.1.wav /tmp/alac-7.1.m4a \
+		2>/tmp/alac-7.1-encode.log
+	grep -q 'MPEG 7.1 B without remixing' /tmp/alac-7.1-encode.log ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/alac-7.1.m4a \
+		-t s16 /tmp/alac-7.1-decoded.s16
+	cmp /tmp/alac-7.1-reference.s16 /tmp/alac-7.1-decoded.s16 ||
+		exit 1
+
+	echo "Format: m4a    Options: explicit MPEG 7.1 B"
+	${bindir}/sox${EXEEXT} --help-format m4a 2>/dev/null |
+		grep -F '7.1(wide)          FL FR FC LFE BL BR FLC FRC' \
+		>/dev/null ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/alac-7.1.wav -b 16 \
+		--channel-layout '7.1(wide)' /tmp/alac-7.1-explicit.m4a \
+		2>/tmp/alac-7.1-explicit-encode.log
+	if grep -q 'Encoding 8-channel ALAC' \
+		/tmp/alac-7.1-explicit-encode.log; then
+		echo "Explicit ALAC layout produced a redundant warning"
+		exit 1
+	fi
+	${bindir}/sox${EXEEXT} /tmp/alac-7.1-explicit.m4a \
+		-t s16 /tmp/alac-7.1-explicit-decoded.s16
+	cmp /tmp/alac-7.1-reference.s16 \
+		/tmp/alac-7.1-explicit-decoded.s16 ||
+		exit 1
+	if ${bindir}/sox${EXEEXT} /tmp/alac-7.1.wav -b 16 \
+		--channel-layout 7.1 /tmp/alac-invalid-layout.m4a \
+		2>/dev/null; then
+		echo "ALAC accepted a non-official 7.1 layout"
+		exit 1
+	fi
+	test_alac_layout /tmp/alac-7.1.wav mono 1 1
+	test_alac_layout /tmp/alac-7.1.wav stereo 2 2
+	test_alac_layout /tmp/alac-7.1.wav 3.0 3 3
+	test_alac_layout /tmp/alac-7.1.wav 4.0 4 4
+	test_alac_layout /tmp/alac-7.1.wav 5.0 5 5
+	test_alac_layout /tmp/alac-7.1.wav 5.1 6 6
+	test_alac_layout /tmp/alac-7.1.wav '6.1(back)' 7 7
+	test_alac_layout /tmp/alac-7.1.wav '7.1(wide)' 8 8
+fi
+
 if ${bindir}/sox${EXEEXT} --help-format aac 2>/dev/null | grep -q '^Writes:$'; then
 	echo "Format: aac    Options: -C 128, stereo ADTS"
 	${bindir}/sox${EXEEXT} -R -n -r 44100 -c 2 /tmp/aac-stereo.wav \
@@ -129,6 +290,10 @@ if ${bindir}/sox${EXEEXT} --help-format aac 2>/dev/null | grep -q '^Writes:$'; t
 	test "`${bindir}/sox${EXEEXT} --i -c /tmp/aac-quad-decoded.wav`" = 4 ||
 		exit 1
 	check_channel_frequencies /tmp/aac-quad-decoded.wav 220 330 440 550
+	test_explicit_layout aac /tmp/aac-quad.wav 4.0 4-0 4 256
+	grep -q 'without remixing' /tmp/aac-4-0-decode.log ||
+		exit 1
+	test_explicit_layout aac /tmp/aac-quad.wav quad quad 4 256
 
 	echo "Format: aac    Options: -C 448, 6.1 PCE"
 	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 7 /tmp/aac-6.1.wav \
@@ -140,6 +305,9 @@ if ${bindir}/sox${EXEEXT} --help-format aac 2>/dev/null | grep -q '^Writes:$'; t
 		exit 1
 	check_channel_frequencies /tmp/aac-6.1-decoded.wav \
 		220 330 440 110 550 660 770
+	test_explicit_layout aac /tmp/aac-6.1.wav 6.1 6-1 7 448
+	test_explicit_layout aac /tmp/aac-6.1.wav '6.1(back)' \
+		6-1-back 7 448
 
 	echo "Format: aac    Options: -C 512, 7.1 PCE"
 	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 8 /tmp/aac-7.1.wav \
@@ -151,6 +319,41 @@ if ${bindir}/sox${EXEEXT} --help-format aac 2>/dev/null | grep -q '^Writes:$'; t
 		exit 1
 	check_channel_frequencies /tmp/aac-7.1-decoded.wav \
 		220 330 440 110 550 660 770 880
+	test_explicit_layout aac /tmp/aac-7.1.wav 7.1 7-1 8 512
+	test_explicit_layout aac /tmp/aac-7.1.wav '7.1(wide)' \
+		7-1-wide 8 512
+	test_explicit_layout aac /tmp/aac-7.1.wav '7.1(wide-side)' \
+		7-1-wide-side 8 512
+
+	if ${bindir}/sox${EXEEXT} /tmp/aac-7.1.wav \
+		--channel-layout nonsense /tmp/aac-invalid-layout.aac \
+		2>/dev/null; then
+		echo "AAC accepted an unknown channel layout"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/aac-6.1.wav \
+		--channel-layout '7.1(wide)' /tmp/aac-layout-mismatch.aac \
+		2>/dev/null; then
+		echo "AAC accepted a layout with the wrong channel count"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/aac-7.1.wav \
+		--channel-layout cube /tmp/aac-unsupported-layout.aac \
+		2>/dev/null; then
+		echo "AAC accepted a layout unsupported by its encoder"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/aac-7.1.wav \
+		--channel-layout 7.1 /tmp/aac-layout.wav 2>/dev/null; then
+		echo "A non-FFmpeg format accepted --channel-layout"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/aac-7.1.wav \
+		--ffmpeg-opts ch_layout=7.1 /tmp/aac-raw-layout.aac \
+		2>/dev/null; then
+		echo "A raw FFmpeg channel layout override was accepted"
+		exit 1
+	fi
 
 	cp /tmp/monkey.aac /tmp/aac-autodetect.bin
 	${bindir}/sox${EXEEXT} /tmp/aac-autodetect.bin /tmp/aac-autodetect.wav
@@ -173,6 +376,10 @@ if ${bindir}/sox${EXEEXT} --help-format latm 2>/dev/null | grep -q '^Writes:$'; 
 	test "`${bindir}/sox${EXEEXT} --i -c /tmp/latm-quad-decoded.wav`" = 4 ||
 		exit 1
 	check_channel_frequencies /tmp/latm-quad-decoded.wav 220 330 440 550
+	test_explicit_layout latm /tmp/latm-quad.wav 4.0 4-0 4 256
+	grep -q 'without remixing' /tmp/latm-4-0-decode.log ||
+		exit 1
+	test_explicit_layout latm /tmp/latm-quad.wav quad quad 4 256
 
 	echo "Format: latm   Options: -C 448, 6.1 PCE"
 	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 7 /tmp/latm-6.1.wav \
@@ -184,6 +391,9 @@ if ${bindir}/sox${EXEEXT} --help-format latm 2>/dev/null | grep -q '^Writes:$'; 
 		exit 1
 	check_channel_frequencies /tmp/latm-6.1-decoded.wav \
 		220 330 440 110 550 660 770
+	test_explicit_layout latm /tmp/latm-6.1.wav 6.1 6-1 7 448
+	test_explicit_layout latm /tmp/latm-6.1.wav '6.1(back)' \
+		6-1-back 7 448
 
 	echo "Format: latm   Options: -C 512, 7.1 PCE"
 	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 8 /tmp/latm-7.1.wav \
@@ -195,6 +405,11 @@ if ${bindir}/sox${EXEEXT} --help-format latm 2>/dev/null | grep -q '^Writes:$'; 
 		exit 1
 	check_channel_frequencies /tmp/latm-7.1-decoded.wav \
 		220 330 440 110 550 660 770 880
+	test_explicit_layout latm /tmp/latm-7.1.wav 7.1 7-1 8 512
+	test_explicit_layout latm /tmp/latm-7.1.wav '7.1(wide)' \
+		7-1-wide 8 512
+	test_explicit_layout latm /tmp/latm-7.1.wav '7.1(wide-side)' \
+		7-1-wide-side 8 512
 
 	cp /tmp/monkey.latm /tmp/latm-autodetect.bin
 	${bindir}/sox${EXEEXT} /tmp/latm-autodetect.bin \

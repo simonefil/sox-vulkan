@@ -46,6 +46,7 @@ struct lsx_ffmpeg_codec_t {
   unsigned decoded_channels;
   int decoded_rate;
   sox_bool ignored_metadata_warning_shown;
+  sox_bool layout_warning_shown;
 
   sox_sample_t * pending;
   size_t pending_capacity;
@@ -76,6 +77,7 @@ static sox_bool is_reserved_codec_option(char const * key)
     "ar", "sample_rate",
     "ac", "channels", "channel_layout", "ch_layout", "downmix",
     "sample_fmt", "request_sample_fmt", "time_base",
+    "compression_level",
     NULL
   };
   size_t i;
@@ -221,45 +223,207 @@ static int canonical_layout(unsigned channels, AVChannelLayout * layout)
   }
 }
 
+static int select_layout(
+    lsx_ffmpeg_codec_definition_t const * definition,
+    unsigned channels,
+    AVChannelLayout * layout)
+{
+  return definition->select_layout != NULL ?
+      definition->select_layout(channels, layout) :
+      canonical_layout(channels, layout);
+}
+
+static char const * const aac_layout_names[] = {
+  "mono",
+  "stereo",
+  "2.1",
+  "3.0",
+  "3.0(back)",
+  "3.1",
+  "quad",
+  "quad(side)",
+  "4.0",
+  "4.1",
+  "5.0",
+  "5.0(side)",
+  "5.1",
+  "5.1(side)",
+  "6.0",
+  "6.0(front)",
+  "hexagonal",
+  "6.1",
+  "6.1(back)",
+  "6.1(front)",
+  "7.0",
+  "7.0(front)",
+  "7.1",
+  "7.1(wide)",
+  "7.1(wide-side)",
+  "octagonal",
+  NULL
+};
+
+static char const * const * codec_layout_names(enum AVCodecID codec_id)
+{
+  return codec_id == AV_CODEC_ID_AAC ?
+      aac_layout_names : NULL;
+}
+
+static int format_encoder(
+    char const * format_name,
+    enum AVCodecID * codec_id,
+    unsigned * max_channels)
+{
+  if (!strcmp(format_name, "aac") ||
+      !strcmp(format_name, "latm")) {
+    *codec_id = AV_CODEC_ID_AAC;
+    *max_channels = 8;
+    return 1;
+  }
+  if (!strcmp(format_name, "ac3")) {
+    *codec_id = AV_CODEC_ID_AC3;
+    *max_channels = 6;
+    return 1;
+  }
+  if (!strcmp(format_name, "eac3")) {
+    *codec_id = AV_CODEC_ID_EAC3;
+    *max_channels = 6;
+    return 1;
+  }
+  if (!strcmp(format_name, "m4a")) {
+    *codec_id = AV_CODEC_ID_ALAC;
+    *max_channels = 8;
+    return 1;
+  }
+  return 0;
+}
+
+static void print_channel_order(AVChannelLayout const * layout)
+{
+  int i;
+
+  for (i = 0; i < layout->nb_channels; ++i) {
+    enum AVChannel channel =
+        av_channel_layout_channel_from_index(layout, (unsigned)i);
+    char name[16];
+
+    if (av_channel_name(name, sizeof(name), channel) < 0)
+      strcpy(name, "?");
+    printf("%s%s", i ? " " : "", name);
+  }
+}
+
+static void print_layout(AVChannelLayout const * layout)
+{
+  char description[128];
+
+  if (av_channel_layout_describe(
+        layout, description, sizeof(description)) < 0)
+    strcpy(description, "unknown");
+  printf("  %-18s ", description);
+  print_channel_order(layout);
+  putchar('\n');
+}
+
+void lsx_ffmpeg_codec_print_format_layouts(char const * format_name)
+{
+  enum AVCodecID codec_id;
+  AVCodec const * codec;
+  void const * configurations;
+  AVChannelLayout const * layouts;
+  char const * const * layout_names;
+  unsigned max_channels;
+  int count;
+  int i;
+  int result;
+
+  if (!format_encoder(format_name, &codec_id, &max_channels))
+    return;
+  codec = avcodec_find_encoder(codec_id);
+  if (codec == NULL)
+    return;
+  result = avcodec_get_supported_config(NULL, codec,
+      AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, &configurations, &count);
+  if (result < 0)
+    return;
+
+  puts("Output channel layouts (--channel-layout LAYOUT):");
+  if (configurations == NULL || count <= 0) {
+    layout_names = codec_layout_names(codec_id);
+    if (layout_names == NULL)
+      return;
+    while (*layout_names != NULL) {
+      AVChannelLayout layout = {0};
+
+      if (av_channel_layout_from_string(
+            &layout, *layout_names) >= 0 &&
+          layout.nb_channels >= 1 &&
+          (unsigned)layout.nb_channels <= max_channels)
+        print_layout(&layout);
+      av_channel_layout_uninit(&layout);
+      ++layout_names;
+    }
+    return;
+  }
+
+  layouts = configurations;
+  for (i = 0; i < count; ++i) {
+    if (layouts[i].nb_channels < 1 ||
+        (unsigned)layouts[i].nb_channels > max_channels)
+      continue;
+    print_layout(&layouts[i]);
+  }
+}
+
 static sox_bool is_supported_layout(
     AVChannelLayout const * layout,
     lsx_ffmpeg_codec_definition_t const * definition)
 {
-  uint64_t mask;
+  AVChannelLayout expected = {0};
 
-  if (!av_channel_layout_check(layout))
+  if (!av_channel_layout_check(layout) ||
+      layout->nb_channels < 1)
     return sox_false;
+  if (definition->select_layout != NULL)
+    return select_layout(definition,
+        (unsigned)layout->nb_channels, &expected) >= 0 &&
+        av_channel_layout_compare(layout, &expected) == 0;
   if (layout->order == AV_CHANNEL_ORDER_UNSPEC)
     return layout->nb_channels >= 1 &&
         (layout->nb_channels <= 6 ||
          definition->accept_unspecified_decode_layout);
-  if (layout->order != AV_CHANNEL_ORDER_NATIVE)
-    return sox_false;
+  return sox_true;
+}
 
-  mask = layout->u.mask;
-  switch (layout->nb_channels) {
-    case 1:
-      return mask == AV_CH_LAYOUT_MONO;
-    case 2:
-      return mask == AV_CH_LAYOUT_STEREO;
-    case 3:
-      return mask == AV_CH_LAYOUT_SURROUND;
-    case 4:
-      return mask == AV_CH_LAYOUT_QUAD || mask == AV_CH_LAYOUT_2_2;
-    case 5:
-      return mask == AV_CH_LAYOUT_5POINT0 ||
-          mask == AV_CH_LAYOUT_5POINT0_BACK;
-    case 6:
-      return mask == AV_CH_LAYOUT_5POINT1 ||
-          mask == AV_CH_LAYOUT_5POINT1_BACK;
-    case 7:
-      return mask == AV_CH_LAYOUT_6POINT1 ||
-          mask == AV_CH_LAYOUT_6POINT1_BACK;
-    case 8:
-      return mask == AV_CH_LAYOUT_7POINT1;
-    default:
-      return sox_false;
+static void warn_decoded_layout(
+    sox_format_t * ft,
+    lsx_ffmpeg_codec_t * state,
+    AVChannelLayout const * layout)
+{
+  AVChannelLayout canonical = {0};
+  char description[128];
+
+  if (state->layout_warning_shown)
+    return;
+  if (layout->order == AV_CHANNEL_ORDER_UNSPEC) {
+    lsx_warn("`%s': the %s decoder did not identify the %d-channel "
+        "speaker layout; channel samples will be preserved in decoder "
+        "order without remixing",
+        ft->filename, state->definition->name, layout->nb_channels);
+    state->layout_warning_shown = sox_true;
+    return;
   }
+  if (canonical_layout(
+        (unsigned)layout->nb_channels, &canonical) < 0 ||
+      av_channel_layout_compare(layout, &canonical) == 0)
+    return;
+  if (av_channel_layout_describe(
+        layout, description, sizeof(description)) < 0)
+    strcpy(description, "unknown");
+  lsx_warn("`%s': decoding %s channel layout `%s' without remixing; "
+      "channel samples remain in FFmpeg decoder order",
+      ft->filename, state->definition->name, description);
+  state->layout_warning_shown = sox_true;
 }
 
 static int validate_decoded_frame(
@@ -306,6 +470,7 @@ static int validate_decoded_frame(
 
   state->decoded_channels = (unsigned)layout->nb_channels;
   state->decoded_rate = rate;
+  warn_decoded_layout(ft, state, layout);
   return SOX_SUCCESS;
 }
 
@@ -582,10 +747,14 @@ int lsx_ffmpeg_codec_startread(
 
   ft->signal.rate = (sox_rate_t)p->decoded_rate;
   ft->signal.channels = p->decoded_channels;
-  ft->signal.precision = definition->precision;
-  ft->signal.length = SOX_UNSPEC;
+  ft->signal.precision = definition->precision ?
+      definition->precision :
+      (unsigned)p->context->bits_per_raw_sample;
+  if (ft->signal.length == SOX_IGNORE_LENGTH)
+    ft->signal.length = SOX_UNSPEC;
   ft->encoding.encoding = definition->encoding;
-  ft->encoding.bits_per_sample = 0;
+  ft->encoding.bits_per_sample = definition->precision ?
+      0 : ft->signal.precision;
   return SOX_SUCCESS;
 }
 
@@ -657,6 +826,8 @@ static int codec_supports_layout(
     AVChannelLayout const * layout)
 {
   void const * configurations;
+  char const * const * layout_names;
+  char description[128];
   int count;
   int i;
   int result = avcodec_get_supported_config(NULL, codec,
@@ -666,20 +837,41 @@ static int codec_supports_layout(
   if (result < 0)
     return fail_av(ft, SOX_EFMT,
         "Unable to query FFmpeg channel layouts", result);
-  if (layouts == NULL)
-    return SOX_SUCCESS;
-  for (i = 0; i < count; ++i)
-    if (av_channel_layout_compare(layout, &layouts[i]) == 0)
+  if (layouts != NULL) {
+    for (i = 0; i < count; ++i)
+      if (av_channel_layout_compare(layout, &layouts[i]) == 0)
+        return SOX_SUCCESS;
+  }
+  else {
+    layout_names = codec_layout_names(codec->id);
+    if (layout_names == NULL)
       return SOX_SUCCESS;
+    while (*layout_names != NULL) {
+      AVChannelLayout supported = {0};
+      sox_bool matches =
+          av_channel_layout_from_string(
+              &supported, *layout_names) >= 0 &&
+          av_channel_layout_compare(layout, &supported) == 0;
+
+      av_channel_layout_uninit(&supported);
+      if (matches)
+        return SOX_SUCCESS;
+      ++layout_names;
+    }
+  }
+  if (av_channel_layout_describe(
+        layout, description, sizeof(description)) < 0)
+    strcpy(description, "unknown");
   lsx_fail_errno(ft, SOX_EFMT,
-      "%s encoder does not support the canonical %d-channel SoX layout",
-      codec->name, layout->nb_channels);
+      "%s encoder does not support channel layout `%s' (%d channels)",
+      codec->name, description, layout->nb_channels);
   return SOX_EOF;
 }
 
 static int choose_sample_format(
     sox_format_t * ft,
     AVCodec const * codec,
+    unsigned precision,
     enum AVSampleFormat * selected)
 {
   static enum AVSampleFormat const preferred[] = {
@@ -706,6 +898,22 @@ static int choose_sample_format(
     *selected = AV_SAMPLE_FMT_FLTP;
     return SOX_SUCCESS;
   }
+  if (precision && precision <= 16) {
+    for (i = 0; i < count; ++i)
+      if (formats[i] == AV_SAMPLE_FMT_S16P ||
+          formats[i] == AV_SAMPLE_FMT_S16) {
+        *selected = formats[i];
+        return SOX_SUCCESS;
+      }
+  }
+  else if (precision > 16) {
+    for (i = 0; i < count; ++i)
+      if (formats[i] == AV_SAMPLE_FMT_S32P ||
+          formats[i] == AV_SAMPLE_FMT_S32) {
+        *selected = formats[i];
+        return SOX_SUCCESS;
+      }
+  }
   for (preference = 0; preference < array_length(preferred); ++preference)
     for (i = 0; i < count; ++i)
       if (formats[i] == preferred[preference]) {
@@ -723,6 +931,28 @@ static int set_encoder_bit_rate(
 {
   int64_t bit_rate = state->definition->default_bit_rate;
 
+  if (state->definition->use_compression_level) {
+    double requested = ft->encoding.compression;
+    int level = state->definition->default_compression_level;
+
+    if (requested != HUGE_VAL) {
+      if (!isfinite(requested) ||
+          requested != (int)requested ||
+          requested < state->definition->minimum_compression_level ||
+          requested > state->definition->maximum_compression_level) {
+        lsx_fail_errno(ft, SOX_EINVAL,
+            "%s compression level must be an integer from %d to %d",
+            state->definition->name,
+            state->definition->minimum_compression_level,
+            state->definition->maximum_compression_level);
+        return SOX_EOF;
+      }
+      level = (int)requested;
+    }
+    state->context->compression_level = level;
+    state->context->bit_rate = 0;
+    return SOX_SUCCESS;
+  }
   if (ft->encoding.compression != HUGE_VAL) {
     double requested = ft->encoding.compression * 1000.;
 
@@ -886,37 +1116,74 @@ int lsx_ffmpeg_codec_startwrite(
   AVChannelLayout layout = {0};
   enum AVSampleFormat sample_format;
   double rate = ft->signal.rate;
+  unsigned precision = ft->encoding.bits_per_sample ?
+      ft->encoding.bits_per_sample : definition->precision;
   int result;
 
   if (ft->signal.channels < 1 ||
-      ft->signal.channels > definition->max_encode_channels ||
-      canonical_layout(ft->signal.channels, &layout) < 0) {
+      ft->signal.channels > definition->max_encode_channels) {
     lsx_fail_errno(ft, SOX_EFMT,
-        "%s encoding supports standard layouts with 1 to %u channels",
+        "%s encoding supports layouts with 1 to %u channels",
         definition->name, definition->max_encode_channels);
+    return SOX_EOF;
+  }
+  if (ft->channel_layout != NULL) {
+    result = av_channel_layout_from_string(
+        &layout, ft->channel_layout);
+    if (result < 0 || !av_channel_layout_check(&layout)) {
+      av_channel_layout_uninit(&layout);
+      lsx_fail_errno(ft, SOX_EINVAL,
+          "Unknown or invalid %s channel layout `%s'; "
+          "use --help-format %s to list supported layouts",
+          definition->name, ft->channel_layout, ft->filetype);
+      return SOX_EOF;
+    }
+    if ((unsigned)layout.nb_channels != ft->signal.channels) {
+      lsx_fail_errno(ft, SOX_EINVAL,
+          "%s channel layout `%s' has %d channels, "
+          "but the output signal has %u",
+          definition->name, ft->channel_layout,
+          layout.nb_channels, ft->signal.channels);
+      av_channel_layout_uninit(&layout);
+      return SOX_EOF;
+    }
+  }
+  else if (select_layout(
+        definition, ft->signal.channels, &layout) < 0) {
+    lsx_fail_errno(ft, SOX_EFMT,
+        "%s encoding has no default layout for %u channels; "
+        "specify --channel-layout explicitly",
+        definition->name, ft->signal.channels);
     return SOX_EOF;
   }
   if (rate < 1 || rate > INT_MAX || rate != (int)rate) {
     lsx_fail_errno(ft, SOX_EFMT,
         "%s encoding requires an integer sample rate", definition->name);
+    av_channel_layout_uninit(&layout);
     return SOX_EOF;
   }
-  if (allocate_state(ft, state, definition, sox_true) != SOX_SUCCESS)
+  if (allocate_state(ft, state, definition, sox_true) != SOX_SUCCESS) {
+    av_channel_layout_uninit(&layout);
     return SOX_EOF;
+  }
   p = *state;
 
   if (codec_supports_rate(ft, p->codec, (int)rate) != SOX_SUCCESS ||
       codec_supports_layout(ft, p->codec, &layout) != SOX_SUCCESS ||
-      choose_sample_format(ft, p->codec, &sample_format) != SOX_SUCCESS ||
+      choose_sample_format(
+          ft, p->codec, precision, &sample_format) != SOX_SUCCESS ||
       set_encoder_bit_rate(ft, p) != SOX_SUCCESS) {
+    av_channel_layout_uninit(&layout);
     destroy_state(state);
     return SOX_EOF;
   }
 
   p->context->sample_rate = (int)rate;
   p->context->sample_fmt = sample_format;
+  p->context->bits_per_raw_sample = (int)precision;
   p->context->time_base = (AVRational){1, (int)rate};
   result = av_channel_layout_copy(&p->context->ch_layout, &layout);
+  av_channel_layout_uninit(&layout);
   if (result < 0) {
     fail_av(ft, SOX_ENOMEM,
         "Unable to configure FFmpeg channel layout", result);
@@ -964,8 +1231,9 @@ int lsx_ffmpeg_codec_startwrite(
   }
 
   ft->encoding.encoding = definition->encoding;
-  ft->encoding.bits_per_sample = 0;
-  ft->signal.precision = definition->precision;
+  ft->encoding.bits_per_sample =
+      definition->precision ? 0 : precision;
+  ft->signal.precision = precision;
   return SOX_SUCCESS;
 }
 
@@ -1042,4 +1310,10 @@ int lsx_ffmpeg_codec_stopwrite(
   }
   destroy_state(state);
   return result;
+}
+
+AVCodecContext const * lsx_ffmpeg_codec_context(
+    lsx_ffmpeg_codec_t const * state)
+{
+  return state != NULL ? state->context : NULL;
 }

@@ -373,6 +373,11 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   prepare_usac_decoder,
   NULL,
   read_usac_packet,
+  NULL,
+  sox_false,
+  0,
+  0,
+  0,
   NULL
 };
 

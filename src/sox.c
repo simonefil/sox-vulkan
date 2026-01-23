@@ -150,6 +150,7 @@ typedef struct {
   sox_signalinfo_t signal;
   sox_encodinginfo_t encoding;
   char * codec_options;
+  char * channel_layout;
   double volume;
   double replay_gain;
   sox_oob_t oob;
@@ -237,6 +238,7 @@ static void cleanup(void)
       sox_close(files[i]->ft);
     }
     free(files[i]->codec_options);
+    free(files[i]->channel_layout);
     free(files[i]->filename);
     free(files[i]);
   }
@@ -252,6 +254,7 @@ static void cleanup(void)
       sox_close(ofile->ft); /* Assume we can unlink a file before closing it. */
     }
     free(ofile->codec_options);
+    free(ofile->channel_layout);
     free(ofile->filename);
     free(ofile);
   }
@@ -1526,7 +1529,7 @@ static void open_output_file(void)
     expand_fn = lsx_strdup(ofile->filename);
   ofile->ft = lsx_open_write_with_codec_options(expand_fn, &ofile->signal,
       &ofile->encoding, ofile->filetype, &oob, overwrite_permitted,
-      ofile->codec_options);
+      ofile->codec_options, ofile->channel_layout);
   sox_delete_comments(&oob.comments);
   free(expand_fn);
 
@@ -1991,6 +1994,8 @@ static void usage(char const * message)
 "-r|--rate RATE           Sample rate of audio",
 "-C|--compression FACTOR  Compression factor for output format",
 "--ffmpeg-opts OPTIONS    FFmpeg AVOptions for the following input/output file",
+"--channel-layout LAYOUT  Speaker layout for the following output file",
+"                         See --help-format FORMAT for accepted layouts",
 "--add-comment TEXT       Append output file comment",
 "--comment TEXT           Specify comment text for the output file",
 "--comment-file FILENAME  File containing comment text for the output file",
@@ -2109,8 +2114,9 @@ static void usage_format1(sox_format_handler_t const * f)
         } while (s);
       }
       else puts("Writes: yes");
-    }
+  }
   else puts("Writes: no");
+  lsx_print_format_channel_layouts(f->names[0]);
 }
 
 static void usage_format(char const * name)
@@ -2201,6 +2207,7 @@ static struct lsx_option_t const long_options[] = {
   {"multi-threaded"  , lsx_option_arg_none    , NULL, 0},
   {"dft-min"         , lsx_option_arg_required, NULL, 0},
   {"ffmpeg-opts"     , lsx_option_arg_required, NULL, 0},
+  {"channel-layout"  , lsx_option_arg_required, NULL, 0},
 
   {"bits"            , lsx_option_arg_required, NULL, 'b'},
   {"channels"        , lsx_option_arg_required, NULL, 'c'},
@@ -2399,6 +2406,12 @@ static char parse_gopts_and_fopts(file_t * f)
         free(f->codec_options);
         f->codec_options = lsx_strdup(optstate.arg);
         break;
+      case 27:
+        if (!*optstate.arg)
+          usage("--channel-layout requires a non-empty layout name");
+        free(f->channel_layout);
+        f->channel_layout = lsx_strdup(optstate.arg);
+        break;
       }
       break;
 
@@ -2595,6 +2608,8 @@ static int add_file(file_t const * const opts, char const * const filename)
   *f = *opts;
   f->codec_options = opts->codec_options ?
       lsx_strdup(opts->codec_options) : NULL;
+  f->channel_layout = opts->channel_layout ?
+      lsx_strdup(opts->channel_layout) : NULL;
   if (!filename)
     usage("missing filename"); /* No return */
   f->filename = lsx_strdup(filename);
@@ -2643,6 +2658,8 @@ static void clear_file_options(file_t * f)
 {
   free(f->codec_options);
   f->codec_options = NULL;
+  free(f->channel_layout);
+  f->channel_layout = NULL;
 }
 
 static void parse_options_and_filenames(int argc, char **argv)
@@ -2935,6 +2952,8 @@ int main(int argc, char **argv)
   for (i = 0; i < input_count; ++i) {
     if (files[i]->encoding.compression != HUGE_VAL)
       usage("A compression factor can be given only for an output file");
+    if (files[i]->channel_layout != NULL)
+      usage("--channel-layout can be given only for an output file");
     if (files[i]->oob.comments != NULL)
       usage("Comments can be given only for an output file");
   }

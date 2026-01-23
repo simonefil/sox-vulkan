@@ -207,6 +207,7 @@ chmod +x build_static_libs.sh
 | AAC/ADTS | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | AAC/LOAS-LATM | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | xHE-AAC/USAC | LOAS/LATM elementary stream (decode only) | FFmpeg libavcodec, libavutil |
+| ALAC/M4A | Apple Lossless in an M4A container (decode and encode) | FFmpeg libavcodec, libavformat, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -347,6 +348,7 @@ This will list all supported audio formats. Look for:
 - `aac`, `adts` - AAC with ADTS framing
 - `latm`, `loas` - AAC with LOAS/LATM framing
 - `usac` - xHE-AAC/USAC with LOAS/LATM framing
+- `m4a` - Apple Lossless in an M4A container
 - `wav` - WAV support
 - `wavpack` - WavPack support
 
@@ -384,6 +386,9 @@ This will list all supported audio formats. Look for:
 # Encode AAC-LC with LOAS/LATM framing at 128 kbit/s
 ./output/sox input.wav -C 128 output.latm
 
+# Encode 24-bit Apple Lossless in an M4A container
+./output/sox input-24bit.wav -C 2 output.m4a
+
 # Generate a test tone (5 seconds, 440Hz sine wave)
 ./output/sox -n test.wav synth 5 sine 440
 ```
@@ -413,6 +418,53 @@ and layer, no additional subframes or `otherData`, `audioMuxVersion` 1, and
 `frameLengthType` 0. Encoding and container formats are not supported.
 xHE-AAC loudness and dynamic-range metadata, if present, are not applied and
 produces a warning.
+
+ALAC support reads and writes Apple Lossless exclusively in M4A files. It
+uses FFmpeg's `libavformat`, `libavcodec`, and `libavutil` libraries directly;
+it does not invoke the `ffmpeg` executable. Encoding accepts 16-bit and 24-bit
+PCM, while decoding accepts the ALAC 16-, 20-, 24-, and 32-bit depths. For
+ALAC, `-C` selects the lossless compression effort from 0 through 2 and
+defaults to 2; it is not a bitrate.
+
+ALAC supports its official layouts from one through eight channels. SoX does
+not remix channels automatically. For the layouts that differ from SoX's
+canonical meaning for the same channel count, encoding and decoding produce a
+warning and expose the channels in the following order:
+
+- 4-channel MPEG 4.0 B: `FL FR FC BC`;
+- 7-channel Apple AAC 6.1: `FL FR FC LFE BL BR BC`;
+- 8-channel MPEG 7.1 B: `FL FR FC LFE BL BR FLC FRC`.
+
+This allows an input to be prepared explicitly with effects such as `remix`
+before ALAC encoding. In particular, MPEG 7.1 B is a front-wide layout, not
+the canonical SoX 7.1 side-and-back layout. M4A input may be read from a pipe;
+M4A output must be a seekable file.
+
+FFmpeg-backed output formats accept `--channel-layout LAYOUT` immediately
+before the output file. The option labels the existing interleaved channels;
+it never remixes them. The layout name must exist, its channel count must
+match the signal produced by the SoX effects chain, and the selected encoder
+must support it. Run `sox --help-format FORMAT` to see every accepted layout
+and its exact channel order for that format. For example:
+
+```bash
+# The eight input channels are already prepared in MPEG 7.1 B order.
+./output/sox prepared-8ch.wav -b 24 \
+  --channel-layout '7.1(wide)' output.m4a
+
+# Preserve an explicitly prepared AAC 6.1(back) channel order in the PCE.
+./output/sox prepared-7ch.wav -C 448 \
+  --channel-layout '6.1(back)' output.aac
+```
+
+Without `--channel-layout`, SoX keeps its canonical layout for codecs that
+offer several layouts with the same channel count. A format with one official
+layout per channel count, such as ALAC, keeps that required layout and warns
+when it differs from the canonical SoX meaning. An explicit selection confirms
+that the caller prepared the channels intentionally, so the corresponding
+encoding warning is omitted. Decoding never remixes: a noncanonical layout
+produces a warning, and an unspecified FFmpeg decoder layout warns that only
+the decoder sample order can be preserved.
 
 AC-3 and E-AC-3 support use only FFmpeg's `libavcodec` and `libavutil`
 libraries; they do not invoke the `ffmpeg` executable or use `libavformat`.
@@ -444,8 +496,8 @@ Unknown options, options unsupported by the selected encoder or decoder, and
 use with a non-FFmpeg format are errors. Options controlling bitrate, sample
 rate, channels/layout, sample format, downmixing, or time base remain owned by
 SoX and cannot be overridden through `--ffmpeg-opts`; use `-C`, `-r`, `-c`,
-and SoX effects such as `remix` instead. Available passthrough options depend
-on the installed FFmpeg version.
+`--channel-layout`, and SoX effects such as `remix` instead. Available
+passthrough options depend on the installed FFmpeg version.
 
 ### 5. Verify Static Linking (Linux/macOS)
 

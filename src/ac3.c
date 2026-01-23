@@ -32,6 +32,11 @@ static lsx_ffmpeg_codec_definition_t const definition = {
   NULL,
   NULL,
   NULL,
+  NULL,
+  sox_false,
+  0,
+  0,
+  0,
   NULL
 };
 
@@ -92,7 +97,7 @@ LSX_FORMAT_HANDLER(ac3)
     SOX_LIB_VERSION_CODE,
     "ATSC A/52 AC-3 lossy audio compression",
     names,
-    SOX_FILE_CODEC_OPTIONS,
+    SOX_FILE_CODEC_OPTIONS | SOX_FILE_CHANNEL_LAYOUT,
     startread,
     read_samples,
     stopread,

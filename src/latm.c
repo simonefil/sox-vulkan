@@ -312,6 +312,11 @@ static lsx_ffmpeg_codec_definition_t const read_definition = {
   NULL,
   NULL,
   read_latm_packet,
+  NULL,
+  sox_false,
+  0,
+  0,
+  0,
   NULL
 };
 
@@ -332,7 +337,12 @@ static lsx_ffmpeg_codec_definition_t const write_definition = {
   NULL,
   prepare_latm_encoder,
   NULL,
-  write_latm_packet
+  write_latm_packet,
+  sox_false,
+  0,
+  0,
+  0,
+  NULL
 };
 
 static int startread(sox_format_t * ft)
@@ -397,7 +407,7 @@ LSX_FORMAT_HANDLER(latm)
     SOX_LIB_VERSION_CODE,
     "AAC-LC, HE-AAC and HE-AACv2 with LOAS/LATM framing",
     names,
-    SOX_FILE_CODEC_OPTIONS,
+    SOX_FILE_CODEC_OPTIONS | SOX_FILE_CHANNEL_LAYOUT,
     startread,
     read_samples,
     stopread,

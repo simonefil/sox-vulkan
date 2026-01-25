@@ -306,6 +306,9 @@ if(HAVE_FFMPEG_CODECS)
         ac3.c
         eac3.c
         latm.c
+        mlp-common.c
+        mlp.c
+        truehd.c
         usac.c
     )
     target_link_libraries(libsox PRIVATE ${FFMPEG_CODECS_LIBRARIES})

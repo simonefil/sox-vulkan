@@ -484,3 +484,159 @@ if ${bindir}/sox${EXEEXT} --help-format eac3 2>/dev/null | grep -q '^Writes:$'; 
 	test "`${bindir}/sox${EXEEXT} --i -e /tmp/ac3-mislabeled.eac3`" = \
 		"ATSC A/52 AC-3"
 fi
+
+if ${bindir}/sox${EXEEXT} --help-format truehd 2>/dev/null | grep -q '^Writes:$'; then
+	echo "Format: truehd Options: lossless 16-bit stereo and pipe"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 2 -b 16 \
+		/tmp/truehd-stereo.wav synth .1 sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} -D /tmp/truehd-stereo.wav \
+		-t s16 /tmp/truehd-stereo-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/truehd-stereo.wav \
+		--ffmpeg-opts max_interval=8 /tmp/truehd-stereo.thd
+	${bindir}/sox${EXEEXT} -D /tmp/truehd-stereo.thd \
+		-t s16 /tmp/truehd-stereo-decoded.s16
+	cmp /tmp/truehd-stereo-reference.s16 \
+		/tmp/truehd-stereo-decoded.s16 ||
+		exit 1
+	cat /tmp/truehd-stereo.thd |
+		${bindir}/sox${EXEEXT} - /tmp/truehd-pipe.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/truehd-pipe.wav`" = 2 ||
+		exit 1
+	cp /tmp/truehd-stereo.thd /tmp/truehd-autodetect.bin
+	${bindir}/sox${EXEEXT} /tmp/truehd-autodetect.bin \
+		/tmp/truehd-autodetect.wav
+
+	echo "Format: truehd Options: lossless 24-bit 5.1(side)"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 6 -b 24 \
+		/tmp/truehd-5.1.wav synth .1 sine 220 sine 330 sine 440 \
+		sine 110 sine 550 sine 660 vol .1
+	${bindir}/sox${EXEEXT} -D /tmp/truehd-5.1.wav \
+		-t s32 /tmp/truehd-5.1-reference.s32
+	${bindir}/sox${EXEEXT} --help-format truehd 2>/dev/null |
+		grep -F '5.1(side)          FL FR FC LFE SL SR' >/dev/null ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/truehd-5.1.wav \
+		--channel-layout '5.1(side)' /tmp/truehd-5.1.thd
+	${bindir}/sox${EXEEXT} -D /tmp/truehd-5.1.thd \
+		-t s32 /tmp/truehd-5.1-decoded.s32
+	cmp /tmp/truehd-5.1-reference.s32 /tmp/truehd-5.1-decoded.s32 ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/truehd-5.1.thd \
+		/tmp/truehd-5.1-decoded.wav
+	check_channel_frequencies /tmp/truehd-5.1-decoded.wav \
+		220 330 440 110 550 660
+
+	echo "Format: truehd Options: incomplete final encoder frame"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 2 -b 16 \
+		/tmp/truehd-final.wav synth 1001s sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} /tmp/truehd-final.wav /tmp/truehd-final.thd
+	${bindir}/sox${EXEEXT} /tmp/truehd-final.thd \
+		/tmp/truehd-final-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -s /tmp/truehd-final-decoded.wav`" = \
+		1001 ||
+		exit 1
+
+	if ${bindir}/sox${EXEEXT} /tmp/truehd-5.1.wav \
+		-C 1 --channel-layout '5.1(side)' /tmp/truehd-invalid-C.thd \
+		2>/dev/null; then
+		echo "TrueHD accepted -C"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/truehd-5.1.wav \
+		--ffmpeg-opts unknown_sox_test_option=1 \
+		--channel-layout '5.1(side)' /tmp/truehd-invalid-option.thd \
+		2>/dev/null; then
+		echo "TrueHD accepted an unknown FFmpeg option"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/truehd-5.1.wav \
+		/tmp/truehd-invalid-layout.thd 2>/dev/null; then
+		echo "TrueHD accepted its unsupported canonical 5.1(back) default"
+		exit 1
+	fi
+
+	truehd_size=`wc -c < /tmp/truehd-5.1.thd | tr -d ' '`
+	dd if=/tmp/truehd-5.1.thd of=/tmp/truehd-truncated.thd \
+		bs=1 count=`expr "$truehd_size" - 1` 2>/dev/null
+	${bindir}/sox${EXEEXT} /tmp/truehd-truncated.thd -n \
+		2>/tmp/truehd-truncated.log
+	grep -F 'Truncated Dolby TrueHD access unit' \
+		/tmp/truehd-truncated.log >/dev/null ||
+		exit 1
+fi
+
+if ${bindir}/sox${EXEEXT} --help-format mlp 2>/dev/null | grep -q '^Writes:$'; then
+	echo "Format: mlp    Options: lossless 24-bit 192 kHz stereo"
+	${bindir}/sox${EXEEXT} -R -n -r 192000 -c 2 -b 24 \
+		/tmp/mlp-high-rate.wav synth .05 sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} -D /tmp/mlp-high-rate.wav \
+		-t s32 /tmp/mlp-high-rate-reference.s32
+	${bindir}/sox${EXEEXT} /tmp/mlp-high-rate.wav \
+		--ffmpeg-opts max_interval=8 /tmp/mlp-high-rate.mlp
+	${bindir}/sox${EXEEXT} -D /tmp/mlp-high-rate.mlp \
+		-t s32 /tmp/mlp-high-rate-decoded.s32
+	cmp /tmp/mlp-high-rate-reference.s32 \
+		/tmp/mlp-high-rate-decoded.s32 ||
+		exit 1
+	cp /tmp/mlp-high-rate.mlp /tmp/mlp-autodetect.bin
+	${bindir}/sox${EXEEXT} /tmp/mlp-autodetect.bin /tmp/mlp-autodetect.wav
+	cat /tmp/mlp-high-rate.mlp |
+		${bindir}/sox${EXEEXT} - /tmp/mlp-pipe.wav
+
+	echo "Format: mlp    Options: lossless 24-bit 5.1"
+	${bindir}/sox${EXEEXT} -R -n -r 96000 -c 6 -b 24 \
+		/tmp/mlp-5.1.wav synth .1 sine 220 sine 330 sine 440 \
+		sine 110 sine 550 sine 660 vol .1
+	${bindir}/sox${EXEEXT} -D /tmp/mlp-5.1.wav \
+		-t s32 /tmp/mlp-5.1-reference.s32
+	${bindir}/sox${EXEEXT} /tmp/mlp-5.1.wav \
+		--channel-layout 5.1 /tmp/mlp-5.1.mlp
+	${bindir}/sox${EXEEXT} -D /tmp/mlp-5.1.mlp \
+		-t s32 /tmp/mlp-5.1-decoded.s32
+	cmp /tmp/mlp-5.1-reference.s32 /tmp/mlp-5.1-decoded.s32 ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/mlp-5.1.mlp /tmp/mlp-5.1-decoded.wav
+	check_channel_frequencies /tmp/mlp-5.1-decoded.wav \
+		220 330 440 110 550 660
+
+	echo "Format: mlp    Options: padded final encoder frame"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 2 -b 16 \
+		/tmp/mlp-final.wav synth 1001s sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} -D /tmp/mlp-final.wav \
+		-t s16 /tmp/mlp-final-reference.s16
+	${bindir}/sox${EXEEXT} /tmp/mlp-final.wav /tmp/mlp-final.mlp
+	${bindir}/sox${EXEEXT} /tmp/mlp-final.mlp \
+		/tmp/mlp-final-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -s /tmp/mlp-final-decoded.wav`" = \
+		1040 ||
+		exit 1
+	${bindir}/sox${EXEEXT} -D /tmp/mlp-final-decoded.wav \
+		-t s16 /tmp/mlp-final-trimmed.s16 trim 0 1001s
+	cmp /tmp/mlp-final-reference.s16 /tmp/mlp-final-trimmed.s16 ||
+		exit 1
+
+	if ${bindir}/sox${EXEEXT} -t truehd /tmp/mlp-high-rate.mlp -n \
+		2>/tmp/mlp-as-truehd.log; then
+		echo "TrueHD accepted an MLP stream"
+		exit 1
+	fi
+	grep -F 'The input is MLP rather than Dolby TrueHD' \
+		/tmp/mlp-as-truehd.log >/dev/null ||
+		exit 1
+	if ${bindir}/sox${EXEEXT} -t mlp /tmp/truehd-stereo.thd -n \
+		2>/tmp/truehd-as-mlp.log; then
+		echo "MLP accepted a TrueHD stream"
+		exit 1
+	fi
+	grep -F 'The input is Dolby TrueHD rather than MLP' \
+		/tmp/truehd-as-mlp.log >/dev/null ||
+		exit 1
+
+	mlp_size=`wc -c < /tmp/mlp-high-rate.mlp | tr -d ' '`
+	dd if=/tmp/mlp-high-rate.mlp of=/tmp/mlp-truncated.mlp \
+		bs=1 count=`expr "$mlp_size" - 1` 2>/dev/null
+	${bindir}/sox${EXEEXT} /tmp/mlp-truncated.mlp -n \
+		2>/tmp/mlp-truncated.log
+	grep -F 'Truncated MLP access unit' /tmp/mlp-truncated.log >/dev/null ||
+		exit 1
+fi

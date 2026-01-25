@@ -208,6 +208,8 @@ chmod +x build_static_libs.sh
 | AAC/LOAS-LATM | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | xHE-AAC/USAC | LOAS/LATM elementary stream (decode only) | FFmpeg libavcodec, libavutil |
 | ALAC/M4A | Apple Lossless in an M4A container (decode and encode) | FFmpeg libavcodec, libavformat, libavutil |
+| Dolby TrueHD | Elementary stream (decode and experimental encode) | FFmpeg libavcodec, libavutil |
+| MLP | Meridian Lossless Packing elementary stream (decode and experimental encode) | FFmpeg libavcodec, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -349,6 +351,8 @@ This will list all supported audio formats. Look for:
 - `latm`, `loas` - AAC with LOAS/LATM framing
 - `usac` - xHE-AAC/USAC with LOAS/LATM framing
 - `m4a` - Apple Lossless in an M4A container
+- `truehd`, `thd` - Dolby TrueHD elementary stream
+- `mlp` - Meridian Lossless Packing elementary stream
 - `wav` - WAV support
 - `wavpack` - WavPack support
 
@@ -388,6 +392,13 @@ This will list all supported audio formats. Look for:
 
 # Encode 24-bit Apple Lossless in an M4A container
 ./output/sox input-24bit.wav -C 2 output.m4a
+
+# Encode 24-bit TrueHD; the channels are already in 5.1(side) order
+./output/sox input-5.1-side.wav -b 24 \
+  --channel-layout '5.1(side)' output.thd
+
+# Encode 24-bit DVD-Audio-style MLP
+./output/sox input-24bit.wav -b 24 output.mlp
 
 # Generate a test tone (5 seconds, 440Hz sine wave)
 ./output/sox -n test.wav synth 5 sine 440
@@ -478,6 +489,46 @@ When an E-AC-3 input contains Dolby Atmos JOC/OAMD spatial metadata, SoX
 warns that the metadata will be ignored and decodes only the channel-based
 audio presentation. Container formats and preservation or rendering of
 advanced Dolby metadata are outside these handlers.
+
+Dolby TrueHD (`truehd`, `thd`) and Meridian Lossless Packing (`mlp`) support
+raw elementary streams without `libavformat`. SoX delimits access units from
+their shared length header and distinguishes the codecs with the major-sync
+stream type. Input may be read from a pipe and output may be written to a
+pipe. Truncated access units and a stream passed to the wrong handler are
+errors.
+
+Both lossless encoders accept 16-bit and 24-bit PCM at 44.1, 48, 88.2, 96,
+176.4, or 192 kHz. Their FFmpeg encoders are experimental, which SoX enables
+automatically. `-C` is not accepted because it would incorrectly imply a
+bitrate or portable compression-level control; encoder-specific tuning such
+as `max_interval` remains available through `--ffmpeg-opts`. MLP decoding
+also preserves valid 20-bit source precision.
+
+MLP supports the channel layouts published by the installed encoder through
+5.1. The FFmpeg TrueHD encoder currently supports layouts through 5.1, while
+the decoder accepts channel-based presentations through 7.1. Some TrueHD
+layouts use side or center-surround speakers instead of SoX's canonical
+back-speaker defaults. Use `sox --help-format truehd` and an explicit
+`--channel-layout` for those outputs. SoX labels and preserves the prepared
+sample order; it never remixes automatically.
+
+When FFmpeg identifies a TrueHD Atmos substream, SoX warns that the spatial
+metadata is ignored and decodes only the 7.1-or-smaller channel-based
+presentation. SoX does not author Atmos metadata.
+
+Blu-ray keeps the TrueHD presentation and its compatibility AC-3 core as
+separate transport streams. Container demuxing is outside the raw TrueHD
+handler: extract the TrueHD elementary stream first. If an AC-3 core is
+encountered inside the raw input, SoX rejects it explicitly instead of
+silently treating it as TrueHD.
+
+The experimental MLP encoder does not advertise support for a short final
+frame, so it pads the last access unit with silence. A raw MLP elementary
+stream has no independent duration field with which to remove that padding
+on decode. TrueHD preserves the exact final sample count. For either encoder,
+an input shorter than one complete encoder header interval may not begin
+with a major sync; SoX reports that such output is not a standalone
+decodable elementary stream.
 
 Additional `libavcodec` AVOptions can be passed to an FFmpeg-backed input or
 output with `--ffmpeg-opts`. Use `key=value:key=value` syntax and place the

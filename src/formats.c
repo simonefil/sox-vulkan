@@ -75,6 +75,27 @@ static sox_bool is_adts_header(
       av_adts_header_parse(data, &samples, &frames) >= 0;
 }
 
+static char const * detect_mlp_major_sync(
+    unsigned char const * data,
+    size_t length)
+{
+  size_t offset;
+
+  for (offset = 0; offset + 8 <= length; ++offset) {
+    unsigned access_unit_size =
+        ((((unsigned)data[offset] << 8) | data[offset + 1]) & 0xfff) * 2;
+
+    if (access_unit_size < 8 ||
+        memcmp(data + offset + 4, "\xf8\x72\x6f", 3))
+      continue;
+    if (data[offset + 7] == 0xba)
+      return "truehd";
+    if (data[offset + 7] == 0xbb)
+      return "mlp";
+  }
+  return NULL;
+}
+
 static size_t leading_id3v2_size(
     unsigned char const * data,
     size_t length)
@@ -147,6 +168,13 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   if (is_m4a_header((unsigned char const *)data, len))
     return "m4a";
 #endif
+  {
+    char const * mlp_format = detect_mlp_major_sync(
+        (unsigned char const *)data, len);
+
+    if (mlp_format != NULL)
+      return mlp_format;
+  }
   {
     uint32_t object_type;
     int config = lsx_latm_config_object_type(
@@ -281,6 +309,8 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_lossy2, "AAC"           , "Advanced Audio Coding"},
   {sox_encodings_lossy2, "xHE-AAC"       , "xHE-AAC/USAC"},
   {sox_encodings_none  , "ALAC"          , "Apple Lossless Audio Codec"},
+  {sox_encodings_none  , "TrueHD"        , "Dolby TrueHD"},
+  {sox_encodings_none  , "MLP"           , "Meridian Lossless Packing"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -304,6 +334,11 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
                                          bits_per_sample == 20 ||
                                          bits_per_sample == 24 ||
                                          bits_per_sample == 32 ?
+                                         bits_per_sample : 0;
+    case SOX_ENCODING_TRUEHD:
+    case SOX_ENCODING_MLP:        return bits_per_sample == 16 ||
+                                         bits_per_sample == 20 ||
+                                         bits_per_sample == 24 ?
                                          bits_per_sample : 0;
     case SOX_ENCODING_SIGN2:      return bits_per_sample <= 32? bits_per_sample : 0;
     case SOX_ENCODING_UNSIGNED:   return !(bits_per_sample & 7) && (bits_per_sample >> 3) - 1 < 4? bits_per_sample: 0;

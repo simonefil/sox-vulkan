@@ -104,6 +104,8 @@
   FORMAT(ac3)
   FORMAT(eac3)
   FORMAT(latm)
+  FORMAT(mlp)
+  FORMAT(truehd)
   FORMAT(usac)
 #endif
 #if defined HAVE_FFMPEG_FORMATS && \

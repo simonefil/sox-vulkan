@@ -36,6 +36,7 @@ struct lsx_ffmpeg_codec_t {
   size_t input_size;
   sox_bool input_eof;
   sox_bool parser_eof;
+  sox_bool parser_zero_progress;
   sox_bool decoder_flushed;
   sox_bool decoder_eof;
 
@@ -287,6 +288,16 @@ static int format_encoder(
   }
   if (!strcmp(format_name, "eac3")) {
     *codec_id = AV_CODEC_ID_EAC3;
+    *max_channels = 6;
+    return 1;
+  }
+  if (!strcmp(format_name, "mlp")) {
+    *codec_id = AV_CODEC_ID_MLP;
+    *max_channels = 6;
+    return 1;
+  }
+  if (!strcmp(format_name, "truehd")) {
+    *codec_id = AV_CODEC_ID_TRUEHD;
     *max_channels = 6;
     return 1;
   }
@@ -647,12 +658,17 @@ static int read_parsed_packet(
             "Unable to parse compressed audio", consumed);
       state->input_offset += (size_t)consumed;
       if (consumed == 0 && packet_size == 0) {
+        if (!state->parser_zero_progress) {
+          state->parser_zero_progress = sox_true;
+          continue;
+        }
         lsx_fail_errno(ft, SOX_EHDR,
             "FFmpeg bitstream parser made no progress");
         return SOX_EOF;
       }
     }
 
+    state->parser_zero_progress = sox_false;
     if (packet_size == 0)
       continue;
     result = av_new_packet(state->packet, packet_size);

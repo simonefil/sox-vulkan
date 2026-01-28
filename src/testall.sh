@@ -1,3 +1,5 @@
+set -e
+
 bindir="."
 srcdir="."
 effect=""
@@ -5,7 +7,7 @@ effect=""
 if [ -f ./sox.exe ] ; then
   EXEEXT=".exe"
 else
-  EXEEXXT=""
+  EXEEXT=""
 fi
 
 # Allow user to override paths.  Useful for testing an installed
@@ -108,6 +110,23 @@ test_alac_layout() {
 	cmp "$reference" "$decoded" ||
 		exit 1
 }
+
+check_layout_alias() {
+	canonical=$1
+	alias=$2
+
+	if ${bindir}/sox${EXEEXT} --help-format "$canonical" 2>/dev/null |
+		grep -q '^Output channel layouts'; then
+		${bindir}/sox${EXEEXT} --help-format "$alias" 2>/dev/null |
+			grep -q '^Output channel layouts' ||
+			exit 1
+	fi
+}
+
+check_layout_alias aac adts
+check_layout_alias latm loas
+check_layout_alias eac3 ec3
+check_layout_alias truehd thd
 
 t 8svx
 t aiff

@@ -277,7 +277,9 @@ static int format_encoder(
     unsigned * max_channels)
 {
   if (!strcmp(format_name, "aac") ||
-      !strcmp(format_name, "latm")) {
+      !strcmp(format_name, "adts") ||
+      !strcmp(format_name, "latm") ||
+      !strcmp(format_name, "loas")) {
     *codec_id = AV_CODEC_ID_AAC;
     *max_channels = 8;
     return 1;
@@ -287,7 +289,8 @@ static int format_encoder(
     *max_channels = 6;
     return 1;
   }
-  if (!strcmp(format_name, "eac3")) {
+  if (!strcmp(format_name, "eac3") ||
+      !strcmp(format_name, "ec3")) {
     *codec_id = AV_CODEC_ID_EAC3;
     *max_channels = 6;
     return 1;
@@ -302,7 +305,8 @@ static int format_encoder(
     *max_channels = 6;
     return 1;
   }
-  if (!strcmp(format_name, "truehd")) {
+  if (!strcmp(format_name, "truehd") ||
+      !strcmp(format_name, "thd")) {
     *codec_id = AV_CODEC_ID_TRUEHD;
     *max_channels = 6;
     return 1;

@@ -102,6 +102,8 @@
     (defined STATIC_FFMPEG_CODECS || !defined HAVE_LIBLTDL)
   FORMAT(aac)
   FORMAT(ac3)
+  FORMAT(dts)
+  FORMAT(dtshd)
   FORMAT(eac3)
   FORMAT(latm)
   FORMAT(mlp)

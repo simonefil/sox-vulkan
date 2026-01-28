@@ -76,7 +76,8 @@ static sox_bool is_reserved_codec_option(char const * key)
   static char const * const reserved[] = {
     "b", "ab", "bit_rate",
     "ar", "sample_rate",
-    "ac", "channels", "channel_layout", "ch_layout", "downmix",
+    "ac", "channels", "channel_layout", "ch_layout", "channel_order",
+    "downmix",
     "sample_fmt", "request_sample_fmt", "time_base",
     "compression_level",
     NULL
@@ -288,6 +289,11 @@ static int format_encoder(
   }
   if (!strcmp(format_name, "eac3")) {
     *codec_id = AV_CODEC_ID_EAC3;
+    *max_channels = 6;
+    return 1;
+  }
+  if (!strcmp(format_name, "dts")) {
+    *codec_id = AV_CODEC_ID_DTS;
     *max_channels = 6;
     return 1;
   }

@@ -96,6 +96,35 @@ static char const * detect_mlp_major_sync(
   return NULL;
 }
 
+static sox_bool is_dts_header(
+    unsigned char const * data,
+    size_t length)
+{
+  if (length >= 8 && !memcmp(data, "DTSHDHDR", 8))
+    return sox_true;
+  if (length >= 4 &&
+      data[0] == 0x64 && data[1] == 0x58 &&
+      data[2] == 0x20 && data[3] == 0x25)
+    return sox_true;
+  if (length < 6)
+    return sox_false;
+  if (data[0] == 0x7f && data[1] == 0xfe &&
+      data[2] == 0x80 && data[3] == 0x01 &&
+      (data[4] & 0xfc) == 0xfc)
+    return sox_true;
+  if (data[0] == 0xfe && data[1] == 0x7f &&
+      data[2] == 0x01 && data[3] == 0x80 &&
+      (data[5] & 0xfc) == 0xfc)
+    return sox_true;
+  if (data[0] == 0x1f && data[1] == 0xff &&
+      data[2] == 0xe8 && data[3] == 0x00 &&
+      data[4] == 0x07 && (data[5] & 0xf0) == 0xf0)
+    return sox_true;
+  return data[0] == 0xff && data[1] == 0x1f &&
+      data[2] == 0x00 && data[3] == 0xe8 &&
+      (data[4] & 0xf0) == 0xf0 && data[5] == 0x07;
+}
+
 static size_t leading_id3v2_size(
     unsigned char const * data,
     size_t length)
@@ -168,6 +197,8 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   if (is_m4a_header((unsigned char const *)data, len))
     return "m4a";
 #endif
+  if (is_dts_header((unsigned char const *)data, len))
+    return "dts";
   {
     char const * mlp_format = detect_mlp_major_sync(
         (unsigned char const *)data, len);
@@ -311,6 +342,7 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_none  , "ALAC"          , "Apple Lossless Audio Codec"},
   {sox_encodings_none  , "TrueHD"        , "Dolby TrueHD"},
   {sox_encodings_none  , "MLP"           , "Meridian Lossless Packing"},
+  {sox_encodings_lossy2, "DTS"           , "DTS Coherent Acoustics"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -359,6 +391,12 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_DPCM:       return bits_per_sample; /* ? */
 
     case SOX_ENCODING_MP3:        return 0; /* Accept the precision returned by the format. */
+
+    case SOX_ENCODING_DTS:        return !bits_per_sample ? 16 :
+                                         bits_per_sample == 16 ||
+                                         bits_per_sample == 20 ||
+                                         bits_per_sample == 24 ?
+                                         bits_per_sample : 0;
 
     case SOX_ENCODING_GSM:
     case SOX_ENCODING_VORBIS:

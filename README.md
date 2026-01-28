@@ -210,6 +210,7 @@ chmod +x build_static_libs.sh
 | ALAC/M4A | Apple Lossless in an M4A container (decode and encode) | FFmpeg libavcodec, libavformat, libavutil |
 | Dolby TrueHD | Elementary stream (decode and experimental encode) | FFmpeg libavcodec, libavutil |
 | MLP | Meridian Lossless Packing elementary stream (decode and experimental encode) | FFmpeg libavcodec, libavutil |
+| DTS | Core elementary stream decode and experimental encode; DTS extensions and DTS-HD decode | FFmpeg libavcodec, libavutil |
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
@@ -353,6 +354,8 @@ This will list all supported audio formats. Look for:
 - `m4a` - Apple Lossless in an M4A container
 - `truehd`, `thd` - Dolby TrueHD elementary stream
 - `mlp` - Meridian Lossless Packing elementary stream
+- `dts` - DTS core and extended elementary streams
+- `dtshd` - DTS-HD elementary streams (decode only)
 - `wav` - WAV support
 - `wavpack` - WavPack support
 
@@ -399,6 +402,10 @@ This will list all supported audio formats. Look for:
 
 # Encode 24-bit DVD-Audio-style MLP
 ./output/sox input-24bit.wav -b 24 output.mlp
+
+# Encode DTS core 5.1(side) at 1536 kbit/s
+./output/sox input-5.1-side.wav -C 1536 \
+  --channel-layout '5.1(side)' output.dts
 
 # Generate a test tone (5 seconds, 440Hz sine wave)
 ./output/sox -n test.wav synth 5 sine 440
@@ -530,6 +537,55 @@ an input shorter than one complete encoder header interval may not begin
 with a major sync; SoX reports that such output is not a standalone
 decodable elementary stream.
 
+DTS support uses FFmpeg's public `dca` parser and decoder without
+`libavformat`. The `dts` handler decodes DTS core, DTS-ES, DTS 96/24,
+DTS-HD High Resolution, DTS-HD Master Audio, DTS Express/LBR, and the
+channel-based presentations in DTS:X streams. It also enables FFmpeg's
+experimental DTS core encoder. The `dtshd` handler is read-only and requires
+an extended DTS-HD profile rather than silently accepting a core-only stream.
+Use the general `dts` input type for DTS 96/24 and for `core_only=1` decoder
+operation.
+
+Autodetection recognizes 16-bit big- and little-endian, 14-bit big- and
+little-endian, extension-substream syncwords, and files beginning with a
+`DTSHDHDR` header. Both raw input variants and `DTSHDHDR` input can be read
+from a pipe. DTS-HD Master Audio reports the 16-, 20-, or 24-bit source
+precision exposed by the decoder; core streams without explicit precision
+use a nominal 16-bit value.
+
+The DTS core encoder accepts mono, stereo, `quad(side)`, `5.0(side)`, and
+`5.1(side)` at the sample rates listed by `sox --help-format dts`. `-C`
+selects a bitrate from 32 through 3840 kbit/s and defaults to 768 kbit/s.
+Four-, five-, and six-channel outputs use the corresponding side-surround
+layout when no explicit layout is supplied and produce a warning identifying
+the assumed order. DTS is frame based, so the encoder pads a short final
+frame; for example, 1001 input samples decode as 1024 samples.
+
+SoX preserves the channel order produced by FFmpeg and never remixes it.
+FFmpeg publicly identifies DTS-ES Discrete as the DTS-ES profile, but does
+not expose Matrix and Discrete as separate public profiles. In particular,
+a DTS-ES Matrix source may be exposed as a 5.1 core presentation rather than
+an expanded 6.1 layout. SoX decodes that available channel-based
+presentation without claiming to preserve a distinction the decoder does
+not report.
+
+When FFmpeg identifies DTS:X or DTS:X IMAX, SoX warns that object/spatial
+metadata is ignored and decodes only the available channel-based
+presentation. FFmpeg does not expose DTS:X Pro as a distinct public profile,
+so SoX cannot label Pro separately; it applies the same non-rendering policy
+whenever FFmpeg reports a DTS:X profile. DTS-HD encoding and DTS:X
+rendering or authoring are not supported.
+
+This handler does not support the newer DTS-UHD Profile 2 codec carried in
+MP4 with the `dtsx` sample entry. FFmpeg does not expose that stream as
+`AV_CODEC_ID_DTS`, and generic MP4 container handling is outside the scope of
+the elementary-stream handler.
+
+`testall.sh` includes short bundled fixtures for DTS-HD HRA, DTS-HD MA,
+DTS:X, DTS:X IMAX, and an unsupported DTS-UHD Profile 2 negative case. The
+fixtures are audio-only extracts, so the test suite does not depend on the
+original containers or invoke the `ffmpeg` executable.
+
 Additional `libavcodec` AVOptions can be passed to an FFmpeg-backed input or
 output with `--ffmpeg-opts`. Use `key=value:key=value` syntax and place the
 option immediately before the file it applies to:
@@ -545,10 +601,10 @@ option immediately before the file it applies to:
 
 Unknown options, options unsupported by the selected encoder or decoder, and
 use with a non-FFmpeg format are errors. Options controlling bitrate, sample
-rate, channels/layout, sample format, downmixing, or time base remain owned by
-SoX and cannot be overridden through `--ffmpeg-opts`; use `-C`, `-r`, `-c`,
-`--channel-layout`, and SoX effects such as `remix` instead. Available
-passthrough options depend on the installed FFmpeg version.
+rate, channels/layout/order, sample format, downmixing, or time base remain
+owned by SoX and cannot be overridden through `--ffmpeg-opts`; use `-C`,
+`-r`, `-c`, `--channel-layout`, and SoX effects such as `remix` instead.
+Available passthrough options depend on the installed FFmpeg version.
 
 ### 5. Verify Static Linking (Linux/macOS)
 

@@ -419,14 +419,17 @@ the channel count but not an explicit channel layout, non-standard discrete
 layouts, ambisonics, and streams with more than 8 channels are not supported.
 
 AAC encoding supports AAC-LC with either ADTS (`aac`, `adts`) or LOAS/LATM
-(`latm`, `loas`) framing in the canonical SoX layouts from mono through 7.1.
-Both handlers decode AAC-LC, HE-AAC and HE-AACv2. Quad, 6.1 and 7.1 streams
-use an MPEG-4 Program Config Element (PCE), avoiding the ambiguous ADTS 7.1
-channel configuration and preserving SoX's canonical channel order:
+(`latm`, `loas`) framing. Both handlers decode AAC-LC, HE-AAC and HE-AACv2.
+By default, encoding uses the canonical SoX layout for each channel count
+from mono through 7.1. Additional explicit layouts accepted by the installed
+FFmpeg encoder are listed by `sox --help-format aac` and
+`sox --help-format latm`. Quad, 6.1 and 7.1 defaults use an MPEG-4 Program
+Config Element (PCE), avoiding the ambiguous ADTS 7.1 channel configuration
+and preserving SoX's canonical channel order:
 `FL FR BL BR` for quad, `FL FR FC LFE BC SL SR` for 6.1, and
-`FL FR FC LFE BL BR SL SR` for 7.1. Non-standard discrete layouts are not
-supported. SoX writes a `StreamMuxConfig` every 20 frames in LOAS/LATM
-output so decoding can recover after joining a stream mid-file.
+`FL FR FC LFE BL BR SL SR` for 7.1. Unspecified discrete layouts are not
+supported. SoX writes a `StreamMuxConfig` every 20 frames in LOAS/LATM output
+so decoding can recover after joining a stream mid-file.
 
 xHE-AAC/USAC decoding accepts LOAS/LATM elementary streams through the
 `usac`, `xheaac`, and `xhe-aac` format names. SoX parses the LOAS/LATM
@@ -435,7 +438,7 @@ to FFmpeg 8 or later. The supported LATM subset has one synchronous program
 and layer, no additional subframes or `otherData`, `audioMuxVersion` 1, and
 `frameLengthType` 0. Encoding and container formats are not supported.
 xHE-AAC loudness and dynamic-range metadata, if present, are not applied and
-produces a warning.
+produce a warning.
 
 ALAC support reads and writes Apple Lossless exclusively in M4A files. It
 uses FFmpeg's `libavformat`, `libavcodec`, and `libavutil` libraries directly;

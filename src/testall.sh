@@ -485,6 +485,166 @@ if ${bindir}/sox${EXEEXT} --help-format eac3 2>/dev/null | grep -q '^Writes:$'; 
 		"ATSC A/52 AC-3"
 fi
 
+if ${bindir}/sox${EXEEXT} --help-format dts 2>/dev/null | grep -q '^Writes:$'; then
+	echo "Format: dts    Options: -C 384, mono 44.1 kHz"
+	${bindir}/sox${EXEEXT} -R -n -r 44100 -c 1 -b 16 \
+		/tmp/dts-mono.wav synth .1 sine 997 vol .1
+	${bindir}/sox${EXEEXT} /tmp/dts-mono.wav -C 384 /tmp/dts-mono.dts
+	${bindir}/sox${EXEEXT} /tmp/dts-mono.dts /tmp/dts-mono-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/dts-mono-decoded.wav`" = 1 ||
+		exit 1
+	test "`${bindir}/sox${EXEEXT} --i -r /tmp/dts-mono-decoded.wav`" = \
+		44100 ||
+		exit 1
+
+	echo "Format: dts    Options: -C 768, stereo, pipe and autodetect"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 2 -b 24 \
+		/tmp/dts-stereo.wav synth .1 sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} /tmp/dts-stereo.wav \
+		--ffmpeg-opts dca_adpcm=1 -C 768 /tmp/dts-stereo.dts
+	cat /tmp/dts-stereo.dts |
+		${bindir}/sox${EXEEXT} - /tmp/dts-pipe.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/dts-pipe.wav`" = 2 ||
+		exit 1
+	cp /tmp/dts-stereo.dts /tmp/dts-autodetect.bin
+	${bindir}/sox${EXEEXT} /tmp/dts-autodetect.bin \
+		/tmp/dts-autodetect.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/dts-autodetect.wav`" = 2 ||
+		exit 1
+
+	echo "Format: dts    Options: -C 1536, 5.1(side)"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 6 -b 24 \
+		/tmp/dts-5.1.wav synth .1 sine 220 sine 330 sine 440 \
+		sine 60 sine 550 sine 660 vol .1
+	${bindir}/sox${EXEEXT} --help-format dts 2>/dev/null |
+		grep -F '5.1(side)          FL FR FC LFE SL SR' >/dev/null ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/dts-5.1.wav -C 1536 \
+		/tmp/dts-5.1-implicit.dts 2>/tmp/dts-5.1-implicit.log
+	grep -F 'Encoding 6-channel DTS as 5.1(side)' \
+		/tmp/dts-5.1-implicit.log >/dev/null ||
+		exit 1
+	${bindir}/sox${EXEEXT} /tmp/dts-5.1.wav -C 1536 \
+		--channel-layout '5.1(side)' /tmp/dts-5.1.dts
+	${bindir}/sox${EXEEXT} /tmp/dts-5.1.dts \
+		/tmp/dts-5.1-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -c /tmp/dts-5.1-decoded.wav`" = 6 ||
+		exit 1
+	check_channel_frequencies /tmp/dts-5.1-decoded.wav \
+		220 330 440 60 550 660
+
+	echo "Format: dts    Options: incomplete final encoder frame"
+	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 2 -b 24 \
+		/tmp/dts-final.wav synth 1001s sine 997 sine 1499 vol .1
+	${bindir}/sox${EXEEXT} /tmp/dts-final.wav -C 768 /tmp/dts-final.dts
+	${bindir}/sox${EXEEXT} /tmp/dts-final.dts \
+		/tmp/dts-final-decoded.wav
+	test "`${bindir}/sox${EXEEXT} --i -s /tmp/dts-final-decoded.wav`" = \
+		1024 ||
+		exit 1
+
+	if ${bindir}/sox${EXEEXT} /tmp/dts-stereo.wav \
+		--ffmpeg-opts unknown_sox_test_option=1 \
+		/tmp/dts-invalid-option.dts 2>/dev/null; then
+		echo "DTS accepted an unknown FFmpeg option"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} --ffmpeg-opts channel_order=coded \
+		/tmp/dts-stereo.dts -n 2>/dev/null; then
+		echo "DTS accepted a SoX-controlled channel-order option"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/dts-stereo.wav -C 31 \
+		/tmp/dts-invalid-low.dts 2>/dev/null; then
+		echo "DTS accepted a bitrate below its supported range"
+		exit 1
+	fi
+	if ${bindir}/sox${EXEEXT} /tmp/dts-stereo.wav -C 3841 \
+		/tmp/dts-invalid-high.dts 2>/dev/null; then
+		echo "DTS accepted a bitrate above its supported range"
+		exit 1
+	fi
+
+	dd if=/tmp/dts-stereo.dts of=/tmp/dts-truncated.dts \
+		bs=1 count=10 2>/dev/null
+	if ${bindir}/sox${EXEEXT} -t dts /tmp/dts-truncated.dts -n \
+		2>/tmp/dts-truncated.log; then
+		echo "DTS accepted a truncated first access unit"
+		exit 1
+	fi
+	grep -F 'Unable to submit compressed audio packet' \
+		/tmp/dts-truncated.log >/dev/null ||
+		exit 1
+	dd if=/dev/zero of=/tmp/dts-corrupt.dts bs=2048 count=1 2>/dev/null
+	if ${bindir}/sox${EXEEXT} -t dts /tmp/dts-corrupt.dts -n \
+		2>/dev/null; then
+		echo "DTS accepted corrupt input"
+		exit 1
+	fi
+
+	${bindir}/sox${EXEEXT} --help-format dtshd 2>/dev/null |
+		grep -F 'Writes: no' >/dev/null ||
+		exit 1
+	if ${bindir}/sox${EXEEXT} -t dtshd /tmp/dts-stereo.dts -n \
+		2>/tmp/dts-core-as-hd.log; then
+		echo "DTS-HD accepted a core-only stream"
+		exit 1
+	fi
+	grep -F 'DTS core rather than DTS-HD' \
+		/tmp/dts-core-as-hd.log >/dev/null ||
+		exit 1
+
+	echo "Format: dtshd  Options: real HRA, MA, DTS:X and DTS:X IMAX samples"
+	dts_samples=${srcdir}/test-samples/dts
+	${bindir}/sox${EXEEXT} \
+		"$dts_samples/dtshd-hra-7.1-96.dtshd" -n
+	test "`${bindir}/sox${EXEEXT} --i -c \
+		"$dts_samples/dtshd-hra-7.1-96.dtshd"`" = 8 ||
+		exit 1
+	test "`${bindir}/sox${EXEEXT} --i -r \
+		"$dts_samples/dtshd-hra-7.1-96.dtshd"`" = 96000 ||
+		exit 1
+
+	${bindir}/sox${EXEEXT} \
+		"$dts_samples/dtshd-ma-7.1-24.dtshd" -n
+	test "`${bindir}/sox${EXEEXT} --i -c \
+		"$dts_samples/dtshd-ma-7.1-24.dtshd"`" = 8 ||
+		exit 1
+	test "`${bindir}/sox${EXEEXT} --i -p \
+		"$dts_samples/dtshd-ma-7.1-24.dtshd"`" = 24 ||
+		exit 1
+
+	${bindir}/sox${EXEEXT} "$dts_samples/dtsx-7.1-24.dtshd" -n \
+		2>/tmp/dtsx-real.log
+	test "`${bindir}/sox${EXEEXT} --i -c \
+		"$dts_samples/dtsx-7.1-24.dtshd"`" = 8 ||
+		exit 1
+	test "`${bindir}/sox${EXEEXT} --i -p \
+		"$dts_samples/dtsx-7.1-24.dtshd"`" = 24 ||
+		exit 1
+	test "`grep -c 'DTS:X detected; spatial metadata will be ignored' \
+		/tmp/dtsx-real.log`" = 1 ||
+		exit 1
+
+	${bindir}/sox${EXEEXT} "$dts_samples/dtsx-imax-7.1-24.dtshd" -n \
+		2>/tmp/dtsx-imax-real.log
+	test "`${bindir}/sox${EXEEXT} --i -c \
+		"$dts_samples/dtsx-imax-7.1-24.dtshd"`" = 8 ||
+		exit 1
+	test "`${bindir}/sox${EXEEXT} --i -p \
+		"$dts_samples/dtsx-imax-7.1-24.dtshd"`" = 24 ||
+		exit 1
+	test "`grep -c 'DTS:X IMAX detected; spatial metadata will be ignored' \
+		/tmp/dtsx-imax-real.log`" = 1 ||
+		exit 1
+
+	if ${bindir}/sox${EXEEXT} -t dts \
+		"$dts_samples/dts-uhd-p2-imax.mka" -n 2>/dev/null; then
+		echo "DTS misidentified a DTS-UHD Profile 2 stream"
+		exit 1
+	fi
+fi
+
 if ${bindir}/sox${EXEEXT} --help-format truehd 2>/dev/null | grep -q '^Writes:$'; then
 	echo "Format: truehd Options: lossless 16-bit stereo and pipe"
 	${bindir}/sox${EXEEXT} -R -n -r 48000 -c 2 -b 16 \

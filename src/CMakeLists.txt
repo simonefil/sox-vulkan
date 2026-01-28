@@ -304,6 +304,9 @@ if(HAVE_FFMPEG_CODECS)
         latm-common.c
         aac.c
         ac3.c
+        dts-common.c
+        dts.c
+        dtshd.c
         eac3.c
         latm.c
         mlp-common.c

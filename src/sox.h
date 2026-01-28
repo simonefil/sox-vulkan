@@ -557,6 +557,7 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_ALAC      , /**< Apple Lossless Audio Codec */
   SOX_ENCODING_TRUEHD    , /**< Dolby TrueHD lossless compression */
   SOX_ENCODING_MLP       , /**< Meridian Lossless Packing */
+  SOX_ENCODING_DTS       , /**< DTS Coherent Acoustics compression */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;

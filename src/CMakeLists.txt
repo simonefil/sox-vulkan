@@ -212,8 +212,7 @@ target_include_directories(libsox PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-# Add static_libs to library search path if it exists
-set(STATIC_LIBS_DIR "${CMAKE_SOURCE_DIR}/static_libs")
+# Add the configured static dependency prefix to the library search path.
 if(EXISTS "${STATIC_LIBS_DIR}/lib")
     target_link_directories(libsox PRIVATE "${STATIC_LIBS_DIR}/lib")
 endif()
@@ -507,57 +506,9 @@ endif()
 
 target_link_libraries(sox_exe PRIVATE libsox)
 
-# For static builds, we need to link transitive dependencies
-# These are needed because libsndfile and other static libs have dependencies
-if(NOT BUILD_SHARED_LIBS AND EXISTS "${STATIC_LIBS_DIR}/lib")
-    # Link order matters for static libraries
-    # Dependencies should come after the libraries that use them
-    if(HAVE_SNDFILE)
-        target_link_libraries(sox_exe PRIVATE ${SNDFILE_LIBRARIES})
-    endif()
-    if(HAVE_FLAC)
-        target_link_libraries(sox_exe PRIVATE ${FLAC_LIBRARIES})
-    endif()
-    if(HAVE_OGG_VORBIS)
-        target_link_libraries(sox_exe PRIVATE ${OGG_VORBIS_LIBRARIES})
-    endif()
-    if(HAVE_OPUS)
-        target_link_libraries(sox_exe PRIVATE ${OPUS_LIBRARIES})
-        if(OPUS_LIBRARY)
-            target_link_libraries(sox_exe PRIVATE ${OPUS_LIBRARY})
-        endif()
-    endif()
-    if(HAVE_FFMPEG_CODECS)
-        target_link_libraries(sox_exe PRIVATE ${FFMPEG_CODECS_LIBRARIES})
-    endif()
-    if(HAVE_FFMPEG_FORMATS)
-        target_link_libraries(sox_exe PRIVATE ${FFMPEG_FORMATS_LIBRARIES})
-    endif()
-    if(HAVE_WAVPACK)
-        target_link_libraries(sox_exe PRIVATE ${WAVPACK_LIBRARIES})
-    endif()
-    if(HAVE_MP3)
-        target_link_libraries(sox_exe PRIVATE ${MP3_LIBRARIES})
-    endif()
-    if(HAVE_AMRNB)
-        target_link_libraries(sox_exe PRIVATE ${AMRNB_LIBRARIES})
-    endif()
-    if(HAVE_AMRWB)
-        target_link_libraries(sox_exe PRIVATE ${AMRWB_LIBRARIES})
-    endif()
-    # Audio drivers (from system)
-    if(HAVE_ALSA)
-        target_link_libraries(sox_exe PRIVATE ${ALSA_LIBRARIES})
-    endif()
-    # Common dependencies
-    target_link_libraries(sox_exe PRIVATE ogg)
-    if(MATH_LIBRARY)
-        target_link_libraries(sox_exe PRIVATE ${MATH_LIBRARY})
-    endif()
-    # pthread needed on FreeBSD and other BSDs for wavpack
-    if(CMAKE_SYSTEM_NAME MATCHES "FreeBSD|OpenBSD|NetBSD|DragonFly")
-        target_link_libraries(sox_exe PRIVATE pthread)
-    endif()
+# pthread is needed by WavPack on the BSD platforms.
+if(HAVE_WAVPACK AND CMAKE_SYSTEM_NAME MATCHES "FreeBSD|OpenBSD|NetBSD|DragonFly")
+    target_link_libraries(libsox PRIVATE pthread)
 endif()
 
 # =====================================================================

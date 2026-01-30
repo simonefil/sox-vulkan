@@ -64,6 +64,7 @@ ENABLE_AMR=ON
 ENABLE_ID3TAG=ON
 ENABLE_PNG=ON
 ENABLE_MAGIC=ON
+ENABLE_FFMPEG=ON
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS (platform-specific defaults)
@@ -108,6 +109,7 @@ OPENCORE_AMR_VERSION="0.1.6"
 FILE_VERSION="5.45"
 LIBTOOL_VERSION="2.4.7"
 LIBAO_VERSION="1.2.2"
+FFMPEG_VERSION="8.1.2"
 
 # Colors for output
 RED='\033[0;31m'
@@ -146,6 +148,7 @@ check_command() {
 download_file() {
     local url="$1"
     local output="$2"
+    local temporary="${output}.tmp.$$"
 
     if [ -f "$output" ]; then
         log_info "Already downloaded: $(basename "$output")"
@@ -154,14 +157,22 @@ download_file() {
 
     log_info "Downloading: $(basename "$output")"
 
+    rm -f "$temporary"
     if command -v curl &> /dev/null; then
-        curl -L -o "$output" "$url"
+        if ! curl --fail --location --output "$temporary" "$url"; then
+            rm -f "$temporary"
+            return 1
+        fi
     elif command -v wget &> /dev/null; then
-        wget -O "$output" "$url"
+        if ! wget -O "$temporary" "$url"; then
+            rm -f "$temporary"
+            return 1
+        fi
     else
         log_error "Neither curl nor wget found"
-        exit 1
+        return 1
     fi
+    mv "$temporary" "$output"
 }
 
 extract_archive() {
@@ -195,103 +206,50 @@ get_common_flags() {
     echo "--prefix=${STATIC_LIBS_DIR} --disable-shared --enable-static"
 }
 
-# ------------------------------------------------------------------------------
-# macOS: Hide/Restore shared libraries for static linking
-# On macOS, the linker prefers .dylib over .a even with -static flags.
-# We hide .dylib files temporarily so the linker is forced to use .a files.
-# ------------------------------------------------------------------------------
+verify_static_dependencies() {
+    local binary="$1"
+    local forbidden='(avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao)'
 
-# Check if we need sudo for a directory
-needs_sudo() {
-    local dir="$1"
-    if [ -w "$dir" ]; then
-        return 1  # false, no sudo needed
-    else
-        return 0  # true, needs sudo
-    fi
-}
+    log_info "Verifying that codec dependencies are statically linked..."
 
-# Execute command with sudo if needed
-maybe_sudo() {
-    local dir="$1"
-    shift
-    if needs_sudo "$dir"; then
-        sudo "$@"
-    else
-        "$@"
-    fi
-}
+    case "${PLATFORM}" in
+        Darwin)
+            check_command "otool"
+            local dependency
+            while read -r dependency; do
+                [ -n "$dependency" ] || continue
+                case "$dependency" in
+                    /usr/lib/*|/System/Library/*)
+                        ;;
+                    *)
+                        log_error "Unexpected dynamic dependency: ${dependency}"
+                        return 1
+                        ;;
+                esac
+            done < <(otool -L "$binary" | tail -n +2 | awk '{print $1}')
+            ;;
+        Linux|FreeBSD|NetBSD|OpenBSD|DragonFly)
+            check_command "readelf"
+            local dependencies
+            if ! dependencies="$(readelf -d "$binary" 2>&1)"; then
+                log_error "Unable to inspect executable dependencies with readelf"
+                echo "$dependencies"
+                return 1
+            fi
+            if echo "$dependencies" | grep -Eiq "NEEDED.*${forbidden}"; then
+                log_error "A codec library is directly linked dynamically:"
+                echo "$dependencies" | grep -Ei "NEEDED.*${forbidden}"
+                return 1
+            fi
+            ;;
+    esac
 
-hide_shared_libs() {
-    local dir="$1"
-
-    if [ ! -d "$dir" ]; then
-        return 0
-    fi
-
-    local count=$(find "$dir" -name "*.dylib" 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$count" -eq 0 ]; then
-        log_info "No shared libraries to hide in ${dir}"
-        return 0
-    fi
-
-    log_info "Hiding ${count} shared libraries in ${dir}..."
-
-    if needs_sudo "$dir"; then
-        log_info "  (requires sudo)"
-    fi
-
-    # Hide regular dylib files
-    find "$dir" -name "*.dylib" -type f 2>/dev/null | while read -r lib; do
-        local hidden="${lib%.dylib}.hidden"
-        maybe_sudo "$dir" mv "$lib" "$hidden"
-    done
-
-    # Also hide symlinks to dylibs
-    find "$dir" -name "*.dylib" -type l 2>/dev/null | while read -r link; do
-        local hidden="${link%.dylib}.hidden_link"
-        maybe_sudo "$dir" mv "$link" "$hidden"
-    done
-
-    log_success "Shared libraries hidden in ${dir}"
-}
-
-restore_shared_libs() {
-    local dir="$1"
-
-    if [ ! -d "$dir" ]; then
-        return 0
-    fi
-
-    local count=$(find "$dir" \( -name "*.hidden" -o -name "*.hidden_link" \) 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$count" -eq 0 ]; then
-        return 0
-    fi
-
-    log_info "Restoring ${count} shared libraries in ${dir}..."
-
-    if needs_sudo "$dir"; then
-        log_info "  (requires sudo)"
-    fi
-
-    # Restore regular dylib files
-    find "$dir" -name "*.hidden" -type f 2>/dev/null | while read -r hidden; do
-        local lib="${hidden%.hidden}.dylib"
-        maybe_sudo "$dir" mv "$hidden" "$lib"
-    done
-
-    # Restore symlinks
-    find "$dir" -name "*.hidden_link" 2>/dev/null | while read -r hidden; do
-        local link="${hidden%.hidden_link}.dylib"
-        maybe_sudo "$dir" mv "$hidden" "$link"
-    done
-
-    log_success "Shared libraries restored in ${dir}"
+    log_success "Codec dependencies are statically linked"
 }
 
 # Common CMake flags for static libraries
 get_cmake_flags() {
-    echo "-DCMAKE_INSTALL_PREFIX=${STATIC_LIBS_DIR} -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON"
+    echo "-DCMAKE_INSTALL_PREFIX=${STATIC_LIBS_DIR} -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 }
 
 # ------------------------------------------------------------------------------
@@ -388,11 +346,15 @@ build_libvorbis() {
     cd "$src"
 
     ./configure $(get_common_flags) \
+        --disable-docs \
+        --disable-examples \
         --with-ogg="${STATIC_LIBS_DIR}" \
         PKG_CONFIG_PATH="${STATIC_LIBS_DIR}/lib/pkgconfig"
 
-    make -j${JOBS}
-    make install
+    make -C lib -j${JOBS} libvorbis.la libvorbisenc.la libvorbisfile.la
+    make -C lib install-libLTLIBRARIES
+    make -C include/vorbis install-vorbisincludeHEADERS
+    make install-pkgconfigDATA
 
     log_success "libvorbis installed"
 }
@@ -504,20 +466,102 @@ build_libopusenc() {
     log_success "libopusenc installed"
 }
 
+build_ffmpeg() {
+    log_info "========== Building FFmpeg ${FFMPEG_VERSION} =========="
+
+    local url="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+    local archive="${DOWNLOAD_DIR}/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+    local src="${SRC_DIR}/ffmpeg-${FFMPEG_VERSION}"
+    local ffmpeg_build="${src}/build-static"
+    local make_command="make"
+
+    download_file "$url" "$archive"
+
+    if [ ! -d "$src" ]; then
+        extract_archive "$archive" "$SRC_DIR"
+    fi
+
+    case "${PLATFORM}" in
+        FreeBSD|NetBSD|OpenBSD|DragonFly)
+            check_command "gmake"
+            make_command="gmake"
+            ;;
+    esac
+
+    mkdir -p "$ffmpeg_build"
+    cd "$ffmpeg_build"
+
+    "${src}/configure" \
+        --prefix="${STATIC_LIBS_DIR}" \
+        --pkg-config-flags="--static" \
+        --extra-cflags="-I${STATIC_LIBS_DIR}/include" \
+        --extra-ldflags="-L${STATIC_LIBS_DIR}/lib" \
+        --disable-shared \
+        --enable-static \
+        --enable-pic \
+        --disable-programs \
+        --disable-doc \
+        --disable-debug \
+        --disable-network \
+        --disable-autodetect \
+        --disable-everything \
+        --enable-avcodec \
+        --enable-avformat \
+        --enable-avutil \
+        --disable-swresample \
+        --disable-avdevice \
+        --disable-avfilter \
+        --disable-swscale \
+        --enable-decoder=aac,aac_latm,alac,ac3,eac3,dca,mlp,truehd \
+        --enable-encoder=aac,alac,ac3,eac3,dca,mlp,truehd \
+        --enable-parser=aac,aac_latm,ac3,dca,mlp \
+        --enable-demuxer=mov \
+        --enable-muxer=ipod \
+        --enable-protocol=file
+
+    "${make_command}" -j"${JOBS}"
+    "${make_command}" install
+
+    log_success "FFmpeg installed"
+}
+
 # Update outdated config.guess/config.sub for ARM64 support
 update_config_scripts() {
     local dir="$1"
     log_info "Updating config.guess/config.sub for ARM64 compatibility..."
 
-    # Download fresh copies from GNU
-    if [ -f "${dir}/config.guess" ]; then
-        curl -sL "https://git.savannah.gnu.org/cgit/config.git/plain/config.guess" -o "${dir}/config.guess" 2>/dev/null || \
-        wget -q "https://git.savannah.gnu.org/cgit/config.git/plain/config.guess" -O "${dir}/config.guess" 2>/dev/null || true
-    fi
-    if [ -f "${dir}/config.sub" ]; then
-        curl -sL "https://git.savannah.gnu.org/cgit/config.git/plain/config.sub" -o "${dir}/config.sub" 2>/dev/null || \
-        wget -q "https://git.savannah.gnu.org/cgit/config.git/plain/config.sub" -O "${dir}/config.sub" 2>/dev/null || true
-    fi
+    local script
+    for script in config.guess config.sub; do
+        local destination="${dir}/${script}"
+        local temporary="${destination}.tmp.$$"
+        local local_copy="${SRC_DIR}/libtool-${LIBTOOL_VERSION}/build-aux/${script}"
+
+        [ -f "$destination" ] || continue
+        rm -f "$temporary"
+
+        if [ -s "$local_copy" ]; then
+            cp "$local_copy" "$temporary"
+        elif command -v curl &> /dev/null; then
+            curl --fail --silent --show-error --location \
+                "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" \
+                --output "$temporary" || true
+        elif command -v wget &> /dev/null; then
+            wget -q \
+                "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" \
+                -O "$temporary" || true
+        fi
+
+        if [ -s "$temporary" ] &&
+                head -n 1 "$temporary" | grep -q '^#!' &&
+                grep -q 'GNU config' "$temporary"; then
+            chmod +x "$temporary"
+            mv "$temporary" "$destination"
+        else
+            rm -f "$temporary"
+            log_error "Could not download a valid ${script}"
+            return 1
+        fi
+    done
 }
 
 build_libmad() {
@@ -787,19 +831,15 @@ build_libao() {
         autoreconf -fi
     fi
 
-    # Build with only null, wav and raw plugins (no audio drivers - sox handles those)
+    # Disable optional external audio backends. File/null backends and native
+    # platform plugins are selected by libao's configure checks.
     ./configure $(get_common_flags) \
         --disable-pulse \
         --disable-alsa \
-        --disable-oss \
         --disable-arts \
         --disable-esd \
         --disable-nas \
-        --disable-sndio \
-        --enable-wav \
-        --enable-au \
-        --enable-raw \
-        --enable-null
+        --disable-roar-default-slp
 
     make -j${JOBS}
     make install
@@ -834,6 +874,7 @@ show_help() {
     echo "  --no-id3tag           Exclude ID3 tag support"
     echo "  --no-png              Exclude PNG spectrogram support"
     echo "  --no-magic            Exclude file type detection (libmagic)"
+    echo "  --no-ffmpeg           Exclude FFmpeg codec and container support"
     echo ""
     echo "Audio Driver Options:"
     echo "  Platform defaults:"
@@ -928,6 +969,10 @@ main() {
                 ENABLE_MAGIC=OFF
                 shift
                 ;;
+            --no-ffmpeg)
+                ENABLE_FFMPEG=OFF
+                shift
+                ;;
             # Audio driver options
             --no-alsa)
                 ENABLE_ALSA=OFF
@@ -977,6 +1022,9 @@ main() {
     check_command "make"
     check_command "cmake"
     check_command "tar"
+    if [ "${ENABLE_AO}" = "ON" ]; then
+        check_command "autoreconf"
+    fi
 
     if ! command -v curl &> /dev/null && ! command -v wget &> /dev/null; then
         log_error "Neither curl nor wget found. Please install one of them."
@@ -986,7 +1034,8 @@ main() {
     # Create directories
     mkdir -p "${DOWNLOAD_DIR}"
     mkdir -p "${SRC_DIR}"
-    mkdir -p "${STATIC_LIBS_DIR}"
+    mkdir -p "${STATIC_LIBS_DIR}/lib"
+    mkdir -p "${STATIC_LIBS_DIR}/include"
 
     log_info "Platform: ${PLATFORM_NAME}"
     log_info "Build directory: ${BUILD_DIR}"
@@ -1008,6 +1057,7 @@ main() {
     echo "    ID3 Tag:    ${ENABLE_ID3TAG}"
     echo "    PNG:        ${ENABLE_PNG}"
     echo "    Magic:      ${ENABLE_MAGIC}"
+    echo "    FFmpeg:     ${ENABLE_FFMPEG}"
     echo "  Audio Drivers:"
     echo "    ALSA:       ${ENABLE_ALSA}"
     echo "    CoreAudio:  ${ENABLE_COREAUDIO}"
@@ -1044,6 +1094,10 @@ main() {
         build_opus
         build_opusfile
         build_libopusenc
+    fi
+
+    if [ "${ENABLE_FFMPEG}" = "ON" ]; then
+        build_ffmpeg
     fi
 
     if [ "${ENABLE_MP3}" = "ON" ]; then
@@ -1091,25 +1145,17 @@ main() {
     # Build SoX
     log_info "========== Building SoX =========="
 
-    # On macOS, hide shared libraries to force static linking
-    if [ "${PLATFORM}" = "Darwin" ]; then
-        # Set up trap to restore libs on error or interruption
-        trap 'log_warn "Build interrupted, restoring shared libraries..."; restore_shared_libs "${STATIC_LIBS_DIR}"; [ -d "/usr/local/lib" ] && restore_shared_libs "/usr/local/lib"; exit 1' INT TERM ERR
-
-        hide_shared_libs "${STATIC_LIBS_DIR}"
-        # Also hide system libs that might interfere
-        if [ -d "/usr/local/lib" ]; then
-            hide_shared_libs "/usr/local/lib"
-        fi
-    fi
-
     mkdir -p "${SOX_BUILD_DIR}"
     cd "${SOX_BUILD_DIR}"
 
     cmake "${SCRIPT_DIR}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
+        -DSOX_REQUIRE_STATIC_DEPENDENCIES=ON \
         -DCMAKE_PREFIX_PATH="${STATIC_LIBS_DIR}" \
+        -DSTATIC_LIBS_DIR="${STATIC_LIBS_DIR}" \
+        -DWITH_FFMPEG_CODECS=${ENABLE_FFMPEG} \
+        -DWITH_FFMPEG_FORMATS=${ENABLE_FFMPEG} \
         -DWITH_ALSA=${ENABLE_ALSA} \
         -DWITH_COREAUDIO=${ENABLE_COREAUDIO} \
         -DWITH_OSS=${ENABLE_OSS} \
@@ -1118,18 +1164,9 @@ main() {
 
     cmake --build . --config Release -j${JOBS}
 
-    # On macOS, restore shared libraries
-    if [ "${PLATFORM}" = "Darwin" ]; then
-        # Clear the trap first
-        trap - INT TERM ERR
-
-        restore_shared_libs "${STATIC_LIBS_DIR}"
-        if [ -d "/usr/local/lib" ]; then
-            restore_shared_libs "/usr/local/lib"
-        fi
-    fi
-
     log_success "SoX built successfully!"
+
+    verify_static_dependencies "${SOX_BUILD_DIR}/src/sox"
 
     # Copy binary to output directory
     log_info "Copying sox binary to output directory..."

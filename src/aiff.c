@@ -1007,7 +1007,8 @@ static void write_ieee_extended(sox_format_t * ft, double x)
  * NaN's, and denormalized numbers.
  */
 
-#define FloatToUnsigned(f) ((uint32_t)(((int32_t)(f - 2147483648.0)) + 2147483647) + 1)
+#define FloatToUnsigned(f) \
+    ((uint32_t)(int32_t)((f) - 2147483648.0) + UINT32_C(2147483648))
 
 static void ConvertToIeeeExtended(double num, char *bytes)
 {

@@ -216,12 +216,8 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
         sk->rest -= 3; /* adjust remaining for bytes we just read */
         s1 = (unsigned short) (uc1 << 4) | (((uc2 >> 4) & 017));
         s2 = (unsigned short) (uc3 << 4) | (( uc2 & 017 ));
-        *buf = (sox_sample_t) s1;
-        *buf = (*buf << 20);
-        buf++; /* sample one is done */
-        *buf = (sox_sample_t) s2;
-        *buf = (*buf << 20);
-        buf++; /* sample two is done */
+        *buf++ = (sox_sample_t)((sox_uint32_t)s1 << 20);
+        *buf++ = (sox_sample_t)((sox_uint32_t)s2 << 20);
         done += 2; /* adjust converted & stored sample count */
     }
     return done;

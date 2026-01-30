@@ -23,6 +23,8 @@ This repository includes build scripts for compiling SoX with statically linked 
 **Required:**
 - Visual Studio 2019 or 2022 (with C++ workload)
 - CMake 3.14 or later
+- MSYS2 with GNU Make (required for the static FFmpeg build)
+- NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
 
 CMake is usually included with Visual Studio. If not, install it from https://cmake.org/download/
@@ -38,7 +40,9 @@ CMake is usually included with Visual Studio. If not, install it from https://cm
 **Required:**
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential cmake git curl
+sudo apt-get install -y \
+  build-essential cmake git curl pkg-config \
+  autoconf automake libtool xz-utils bzip2 unzip
 ```
 
 **Optional (for audio drivers):**
@@ -57,7 +61,9 @@ sudo apt-get install -y libopencore-amrnb-dev libopencore-amrwb-dev
 
 **Required:**
 ```bash
-sudo dnf install -y gcc gcc-c++ make cmake git curl
+sudo dnf install -y \
+  gcc gcc-c++ make cmake git curl pkgconf-pkg-config \
+  autoconf automake libtool xz bzip2 unzip
 ```
 
 **Optional:**
@@ -73,7 +79,7 @@ sudo dnf install -y pulseaudio-libs-devel
 
 **Required:**
 ```bash
-sudo pacman -S base-devel cmake git curl
+sudo pacman -S base-devel cmake git curl xz bzip2 unzip
 ```
 
 **Optional:**
@@ -95,9 +101,8 @@ xcode-select --install
 brew install cmake
 ```
 
-**Optional:**
+**Required by the full static build:**
 ```bash
-# For autoreconf (needed by some libraries)
 brew install autoconf automake libtool
 ```
 
@@ -154,7 +159,9 @@ chmod +x build_static_libs.sh
    The script will automatically:
    - Download all required codec libraries
    - Compile each library as a static library
+   - Compile the required FFmpeg libraries from source as static archives
    - Configure and build SoX with all codecs
+   - Reject a final executable that dynamically imports codec libraries
    - Copy the final binary to the `output/` directory
    - Clean up temporary build files
 
@@ -169,6 +176,9 @@ chmod +x build_static_libs.sh
 # Build without MP2 and ID3 tag support
 .\build_static_libs.ps1 -NoMp2 -NoId3tag
 
+# Build without FFmpeg-backed formats
+.\build_static_libs.ps1 -NoFfmpeg
+
 # Build with 4 parallel jobs
 .\build_static_libs.ps1 -Jobs 4
 
@@ -181,10 +191,13 @@ chmod +x build_static_libs.sh
 # Build without AMR and MP2 support
 ./build_static_libs.sh --no-amr --no-mp2
 
+# Build without FFmpeg-backed formats
+./build_static_libs.sh --no-ffmpeg
+
 # Build with 4 parallel jobs
 ./build_static_libs.sh --jobs 4
 
-# Add PulseAudio support (Linux)
+# Add the shared-only PulseAudio client driver (Linux)
 ./build_static_libs.sh --with-pulseaudio
 
 # Clean build directories
@@ -259,6 +272,7 @@ chmod +x build_static_libs.sh
 | `-NoMp2` | Exclude MP2 support (TwoLAME) |
 | `-NoWavpack` | Exclude WavPack support |
 | `-NoSndfile` | Exclude libsndfile support |
+| `-NoFfmpeg` | Exclude FFmpeg-backed format support |
 | `-NoId3tag` | Exclude ID3 tag support |
 | `-NoPng` | Exclude PNG spectrogram support |
 
@@ -287,6 +301,7 @@ chmod +x build_static_libs.sh
 | `--no-mp2` | Exclude MP2 support (TwoLAME) |
 | `--no-wavpack` | Exclude WavPack support |
 | `--no-sndfile` | Exclude libsndfile support |
+| `--no-ffmpeg` | Exclude FFmpeg-backed format support |
 | `--no-amr` | Exclude AMR support |
 | `--no-id3tag` | Exclude ID3 tag support |
 | `--no-png` | Exclude PNG spectrogram support |
@@ -307,7 +322,7 @@ chmod +x build_static_libs.sh
 |----------|-------------|
 | `--with-alsa` | Include ALSA driver |
 | `--with-coreaudio` | Include CoreAudio driver |
-| `--with-pulseaudio` | Include PulseAudio driver |
+| `--with-pulseaudio` | Include the dynamically linked PulseAudio driver |
 | `--with-oss` | Include OSS driver |
 
 ---
@@ -315,6 +330,21 @@ chmod +x build_static_libs.sh
 ## Verification
 
 After the build completes, verify the installation:
+
+The build scripts already verify the final executable and fail if it imports a
+codec or other bundled third-party library dynamically. On macOS, `otool -L`
+may still list Apple system libraries and frameworks; FFmpeg and the other
+codec dependencies must not appear as `.dylib` dependencies. On Windows, the
+equivalent check uses `dumpbin /DEPENDENTS`.
+
+PulseAudio is an explicit opt-in exception on Linux and FreeBSD: its official
+client libraries are shared-only, so `--with-pulseaudio` adds dynamic
+`libpulse-simple` and `libpulse` dependencies. It does not relax the static
+link requirement for FFmpeg or any codec library. `ldd` also displays
+PulseAudio's transitive dependencies, which can include libsndfile, FLAC,
+Vorbis and Opus; those are loaded by PulseAudio rather than linked as SoX
+codec backends. The build verifier uses the executable's direct ELF
+`DT_NEEDED` entries to keep that distinction explicit.
 
 ### 1. Check Version
 
@@ -328,7 +358,7 @@ After the build completes, verify the installation:
 
 Expected output:
 ```
-sox:      SoX v14.4.3
+sox:      SoX v15.0.0
 ```
 
 ### 2. Check Supported Formats
@@ -627,9 +657,15 @@ On Linux, a statically compiled binary should show only system libraries like:
 - `libdl.so`
 - `libasound.so` (if ALSA enabled)
 
-On macOS, you should see only system frameworks:
-- `CoreAudio.framework`
+On macOS, every listed dependency must come from `/usr/lib` or
+`/System/Library`, for example:
+
 - `libSystem.B.dylib`
+- `CoreAudio.framework`
+- `CoreFoundation.framework`
+
+FFmpeg and the bundled codec libraries must not appear as `.dylib`
+dependencies.
 
 ### 6. Test Audio Playback
 
@@ -703,6 +739,7 @@ The build scripts download and compile the following library versions:
 | file/libmagic | 5.45 |
 | libtool/libltdl | 2.4.7 |
 | libao | 1.2.2 |
+| FFmpeg | 8.1.2 |
 
 ---
 

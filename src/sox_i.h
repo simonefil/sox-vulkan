@@ -180,7 +180,7 @@ UNUSED static int lsx_readsw(sox_format_t * ft, int16_t * sw)
 {return lsx_readw(ft, (uint16_t *)sw);}
 #else
 #define lsx_readsb(ft, sb) lsx_readb(ft, (uint8_t *)sb)
-#define lsx_readsw(ft, sw) lsx_readb(ft, (uint16_t *)sw)
+#define lsx_readsw(ft, sw) lsx_readw(ft, (uint16_t *)sw)
 #endif
 
 int lsx_read_fields(sox_format_t *ft, uint32_t *len,  const char *spec, ...);

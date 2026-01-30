@@ -627,7 +627,7 @@ The API version of the sox.h file. It is not meant to follow the version
 number of SoX but it has historically. Please do not count on
 SOX_LIB_VERSION_CODE staying in sync with the libSoX version.
 */
-#define SOX_LIB_VERSION_CODE   SOX_LIB_VERSION(14, 4, 3)
+#define SOX_LIB_VERSION_CODE   SOX_LIB_VERSION(15, 0, 0)
 
 /**
 Client API:
@@ -638,7 +638,7 @@ for example, SOX_INT_MIN(8) = 0x80, SOX_INT_MIN(16) = 0x8000, etc.
 @returns the smallest (negative) value storable in a twos-complement signed
 integer with the specified number of bits, cast to an unsigned integer.
 */
-#define SOX_INT_MIN(bits) (1 <<((bits)-1))
+#define SOX_INT_MIN(bits) ((sox_uint32_t)1 << ((bits)-1))
 
 /**
 Client API:
@@ -776,7 +776,8 @@ Converts signed integer of width (bits) to sox_sample_t.
 @param d    Input sample to be converted.
 @returns SoX native sample value.
 */
-#define SOX_SIGNED_TO_SAMPLE(bits,d) ((sox_sample_t)(d) << (32-bits))
+#define SOX_SIGNED_TO_SAMPLE(bits,d) \
+  ((sox_sample_t)((sox_uint32_t)(sox_int32_t)(d) << (32-bits)))
 
 /**
 Client API:
@@ -1010,7 +1011,7 @@ and increment a counter if clipping occurs.
 */
 #define SOX_INTEGER_CLIP_COUNT(bits,i,clips) ( \
   (i) >(1 << ((bits)-1))- 1? ++(clips),(1 << ((bits)-1))- 1 : \
-  (i) <-1 << ((bits)-1)    ? ++(clips),-1 << ((bits)-1) : (i))
+  (i) < -(1 << ((bits)-1)) ? ++(clips),-(1 << ((bits)-1)) : (i))
 
 /**
 Client API:

@@ -28,7 +28,7 @@
 
 /* FIXME: eliminate these 2 functions */
 
-static void put32_be(unsigned char **p, int32_t val)
+static void put32_be(unsigned char **p, uint32_t val)
 {
   *(*p)++ = (val >> 24) & 0xff;
   *(*p)++ = (val >> 16) & 0xff;
@@ -52,20 +52,20 @@ typedef struct {
 typedef struct {
   /* Static data from the header */
   dictent *dictionary;
-  int32_t checksum;
+  uint32_t checksum;
   int deltacompression;
   /* Engine state */
   long huffcount;
-  long cksum;
+  uint32_t cksum;
   int dictentry;
   int nrbits;
   uint32_t current;
   short sample;
   /* Dictionary */
   dictent *de;
-  int32_t new_checksum;
+  uint32_t new_checksum;
   int nbits;
-  int32_t curword;
+  uint32_t curword;
 
   /* Private data used by writer */
   unsigned char *data;          /* Buffer allocated with lsx_malloc */
@@ -307,7 +307,8 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t l
   return len;
 }
 
-static void makecodes(int e, int c, int s, int b, dictent newdict[511], long codes[256], long codesize[256])
+static void makecodes(int e, uint32_t c, uint32_t s, uint32_t b,
+    dictent newdict[511], uint32_t codes[256], uint32_t codesize[256])
 {
   assert(b);                    /* Prevent stack overflow */
   if (newdict[e].dict_leftson < 0) {
@@ -319,11 +320,11 @@ static void makecodes(int e, int c, int s, int b, dictent newdict[511], long cod
   }
 }
 
-static void putcode(sox_format_t * ft, long codes[256], long codesize[256], unsigned c, unsigned char **df)
+static void putcode(sox_format_t * ft, uint32_t codes[256],
+    uint32_t codesize[256], unsigned c, unsigned char **df)
 {
   priv_t *p = (priv_t *) ft->priv;
-  long code, size;
-  int i;
+  uint32_t code, size, i;
 
   code = codes[c];
   size = codesize[c];
@@ -350,7 +351,7 @@ static void compress(sox_format_t * ft, unsigned char **df, int32_t *dl)
   unsigned char *ddf, *dfp;
   short dictsize;
   int frequtable[256];
-  long codes[256], codesize[256];
+  uint32_t codes[256], codesize[256];
   dictent newdict[511];
   int i, sample, j, k, d, l, frequcount;
   int64_t csize;

@@ -325,11 +325,13 @@ static int flow_no_shape(sox_effect_t * effp, const sox_sample_t * ibuf,
       double d = ((double)*ibuf++ + r + (p->alt_tpdf? -p->r : (RANQD1 >> p->prec))) / (1 << (32 - p->prec));
       int i = d < 0? d - .5 : d + .5;
       p->r = r;
-      if (i <= (-1 << (p->prec-1)))
+      if (i <= -(1 << (p->prec-1)))
         ++effp->clips, *obuf = SOX_SAMPLE_MIN;
       else if (i > (int)SOX_INT_MAX(p->prec))
-        ++effp->clips, *obuf = SOX_INT_MAX(p->prec) << (32 - p->prec);
-      else *obuf = i << (32 - p->prec);
+        ++effp->clips, *obuf = (sox_sample_t)
+            ((sox_uint32_t)SOX_INT_MAX(p->prec) << (32 - p->prec));
+      else *obuf = (sox_sample_t)
+          ((sox_uint32_t)i << (32 - p->prec));
       ++obuf;
     }
     else

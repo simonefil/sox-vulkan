@@ -4,7 +4,7 @@
 #
 # Usage: .\build_static_libs.ps1 [OPTIONS]
 #
-# Requirements: Visual Studio 2019/2022, CMake, Git
+# Requirements: Visual Studio 2019/2022, CMake, Git, MSYS2, NASM
 #
 
 param(
@@ -22,6 +22,7 @@ param(
     [switch]$NoSndfile,
     [switch]$NoId3tag,
     [switch]$NoPng,
+    [switch]$NoFfmpeg,
 
     # Audio driver options
     # Default: waveaudio (libao not supported on Windows)
@@ -51,6 +52,7 @@ $EnableWavpack = -not $NoWavpack
 $EnableSndfile = -not $NoSndfile
 $EnableId3tag = -not $NoId3tag
 $EnablePng = -not $NoPng
+$EnableFfmpeg = -not $NoFfmpeg
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS
@@ -74,6 +76,7 @@ $Versions = @{
     libsndfile = "1.2.2"
     libmad = "0.15.1b"
     libid3tag = "0.15.1b"
+    ffmpeg = "8.1.2"
 }
 
 # ------------------------------------------------------------------------------
@@ -231,6 +234,7 @@ function Get-CMakeFlags {
         "-DCMAKE_BUILD_TYPE=Release"
         "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
         "-DCMAKE_PREFIX_PATH=$StaticLibsDir"
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
     )
 }
 
@@ -954,6 +958,126 @@ function Build-Libsndfile {
     Write-Success "libsndfile installed"
 }
 
+function Find-MsysBash {
+    $candidates = @(
+        "C:\msys64\usr\bin\bash.exe",
+        "C:\msys32\usr\bin\bash.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Build-Ffmpeg {
+    Write-Info "========== Building FFmpeg $($Versions.ffmpeg) =========="
+
+    $msysBash = Find-MsysBash
+    if (-not $msysBash) {
+        throw "MSYS2 bash not found. Install MSYS2 in C:\msys64 to build FFmpeg statically."
+    }
+
+    $url = "https://ffmpeg.org/releases/ffmpeg-$($Versions.ffmpeg).tar.xz"
+    $archive = Join-Path $DownloadDir "ffmpeg-$($Versions.ffmpeg).tar.xz"
+    $src = Join-Path $SrcDir "ffmpeg-$($Versions.ffmpeg)"
+    $ffmpegBuild = Join-Path $src "build-static"
+
+    Download-File $url $archive
+
+    if (-not (Test-Path $src)) {
+        Extract-Archive $archive $SrcDir
+    }
+
+    New-Item -ItemType Directory -Path $ffmpegBuild -Force | Out-Null
+
+    $env:SOX_FFMPEG_SRC = $src
+    $env:SOX_FFMPEG_BUILD = $ffmpegBuild
+    $env:SOX_STATIC_PREFIX = $StaticLibsDir
+    $env:SOX_BUILD_JOBS = $Jobs
+
+    $buildScript = @'
+set -e
+command -v cl >/dev/null ||
+  { echo "MSVC cl.exe is not available; run from a Visual Studio Developer PowerShell." >&2; exit 1; }
+command -v make >/dev/null ||
+  { echo "GNU make is required in MSYS2." >&2; exit 1; }
+command -v nasm >/dev/null ||
+  { echo "NASM is required in MSYS2." >&2; exit 1; }
+
+src="$(cygpath -u "$SOX_FFMPEG_SRC")"
+build="$(cygpath -u "$SOX_FFMPEG_BUILD")"
+prefix="$(cygpath -u "$SOX_STATIC_PREFIX")"
+
+cd "$build"
+"$src/configure" \
+  --toolchain=msvc \
+  --prefix="$prefix" \
+  --disable-shared \
+  --enable-static \
+  --disable-programs \
+  --disable-doc \
+  --disable-debug \
+  --disable-network \
+  --disable-autodetect \
+  --disable-everything \
+  --enable-avcodec \
+  --enable-avformat \
+  --enable-avutil \
+  --disable-swresample \
+  --disable-avdevice \
+  --disable-avfilter \
+  --disable-swscale \
+  --enable-decoder=aac,aac_latm,alac,ac3,eac3,dca,mlp,truehd \
+  --enable-encoder=aac,alac,ac3,eac3,dca,mlp,truehd \
+  --enable-parser=aac,aac_latm,ac3,dca,mlp \
+  --enable-demuxer=mov \
+  --enable-muxer=ipod \
+  --enable-protocol=file
+make -j"$SOX_BUILD_JOBS"
+make install
+'@
+
+    try {
+        & $msysBash -lc $buildScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "FFmpeg static build failed"
+        }
+    }
+    finally {
+        Remove-Item Env:SOX_FFMPEG_SRC -ErrorAction SilentlyContinue
+        Remove-Item Env:SOX_FFMPEG_BUILD -ErrorAction SilentlyContinue
+        Remove-Item Env:SOX_STATIC_PREFIX -ErrorAction SilentlyContinue
+        Remove-Item Env:SOX_BUILD_JOBS -ErrorAction SilentlyContinue
+    }
+
+    Write-Success "FFmpeg installed"
+}
+
+function Test-StaticDependencies($binary) {
+    $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+    if (-not $dumpbin) {
+        throw "dumpbin.exe not found; run from a Visual Studio Developer PowerShell."
+    }
+
+    Write-Info "Verifying that codec dependencies are statically linked..."
+    $dependencies = & $dumpbin.Source /dependents $binary 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect executable dependencies with dumpbin"
+    }
+
+    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao"
+    $unexpected = $dependencies | Select-String -Pattern $forbidden
+    if ($unexpected) {
+        throw "Codec DLL dependency detected:`n$($unexpected -join [Environment]::NewLine)"
+    }
+
+    Write-Success "Codec dependencies are statically linked"
+}
+
 # ------------------------------------------------------------------------------
 # Help function
 # ------------------------------------------------------------------------------
@@ -978,6 +1102,7 @@ function Show-Help {
     Write-Host "  -NoSndfile          Exclude libsndfile support"
     Write-Host "  -NoId3tag           Exclude ID3 tag support"
     Write-Host "  -NoPng              Exclude PNG spectrogram support"
+    Write-Host "  -NoFfmpeg           Exclude FFmpeg codec and container support"
     Write-Host ""
     Write-Host "Audio Driver Options:"
     Write-Host "  Default drivers: waveaudio (Windows native)"
@@ -1052,6 +1177,7 @@ function Main {
     Write-Host "    Sndfile:    $EnableSndfile"
     Write-Host "    ID3 Tag:    $EnableId3tag"
     Write-Host "    PNG:        $EnablePng"
+    Write-Host "    FFmpeg:     $EnableFfmpeg"
     Write-Host "  Audio Drivers:"
     Write-Host "    Waveaudio:  $EnableWaveaudio"
     Write-Host ""
@@ -1081,6 +1207,10 @@ function Main {
         Build-Opus
         Build-Opusfile
         Build-Libopusenc
+    }
+
+    if ($EnableFfmpeg) {
+        Build-Ffmpeg
     }
 
     if ($EnableMp3) {
@@ -1122,7 +1252,11 @@ function Main {
             $ScriptDir
             "-DCMAKE_BUILD_TYPE=Release"
             "-DBUILD_SHARED_LIBS=OFF"
+            "-DSOX_REQUIRE_STATIC_DEPENDENCIES=ON"
             "-DCMAKE_PREFIX_PATH=$StaticLibsDir"
+            "-DSTATIC_LIBS_DIR=$StaticLibsDir"
+            "-DWITH_FFMPEG_CODECS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
+            "-DWITH_FFMPEG_FORMATS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
         )
 
         # Add audio driver options
@@ -1148,22 +1282,24 @@ function Main {
 
     Write-Success "SoX built successfully!"
 
+    $soxExe = Join-Path $SoxBuildDir "src\Release\sox.exe"
+    if (-not (Test-Path $soxExe)) {
+        $soxExe = Join-Path $SoxBuildDir "src\sox.exe"
+    }
+    if (-not (Test-Path $soxExe)) {
+        throw "sox.exe not found after build"
+    }
+    Test-StaticDependencies $soxExe
+
     # Copy binary to output directory
     Write-Info "Copying sox binary to output directory..."
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
-    $soxExe = Join-Path $SoxBuildDir "src\Release\sox.exe"
     if (Test-Path $soxExe) {
         Copy-Item $soxExe $OutputDir
     } else {
-        # Try alternative path
-        $soxExe = Join-Path $SoxBuildDir "src\sox.exe"
-        if (Test-Path $soxExe) {
-            Copy-Item $soxExe $OutputDir
-        } else {
-            Write-Err "sox.exe not found!"
-            exit 1
-        }
+        Write-Err "sox.exe not found!"
+        exit 1
     }
 
     Write-Success "Binary copied to: $OutputDir\sox.exe"

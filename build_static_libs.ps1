@@ -4,7 +4,7 @@
 #
 # Usage: .\build_static_libs.ps1 [OPTIONS]
 #
-# Requirements: Visual Studio 2019/2022, CMake, Git, MSYS2, NASM
+# Requirements: Visual Studio 2019 or later, PowerShell 7, CMake, Git, MSYS2, NASM
 #
 
 param(
@@ -115,6 +115,9 @@ function Find-CMake {
     $searchPaths = @(
         "C:\Program Files\CMake\bin\cmake.exe",
         "C:\Program Files (x86)\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
@@ -136,6 +139,8 @@ function Find-CMake {
 $script:CMakePath = $null
 
 function Download-File($url, $output) {
+    $partialOutput = "$output.part"
+
     if (Test-Path $output) {
         # Check if file is valid (not HTML error page)
         $content = Get-Content $output -First 1 -ErrorAction SilentlyContinue
@@ -148,24 +153,33 @@ function Download-File($url, $output) {
     }
 
     Write-Info "Downloading: $(Split-Path -Leaf $output)"
+    Remove-Item $partialOutput -Force -ErrorAction SilentlyContinue
 
     # Use TLS 1.2/1.3
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 
-    # Prefer curl for better redirect handling
-    $curlPath = "C:\Windows\System32\curl.exe"
-    if (Test-Path $curlPath) {
-        & $curlPath -L -o $output $url --retry 3 --retry-delay 2
-        if ($LASTEXITCODE -eq 0) { return }
-    }
-
-    # Fallback to Invoke-WebRequest
     try {
+        # Prefer curl for better redirect handling
+        $curlPath = "C:\Windows\System32\curl.exe"
+        if (Test-Path $curlPath) {
+            & $curlPath -fL -o $partialOutput $url --retry 3 --retry-delay 2
+            if ($LASTEXITCODE -eq 0) {
+                Move-Item $partialOutput $output -Force
+                return
+            }
+            Remove-Item $partialOutput -Force -ErrorAction SilentlyContinue
+        }
+
+        # Fallback to Invoke-WebRequest
         $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -MaximumRedirection 10
+        Invoke-WebRequest -Uri $url -OutFile $partialOutput -UseBasicParsing -MaximumRedirection 10
+        Move-Item $partialOutput $output -Force
     }
     catch {
         throw "Failed to download: $url - $_"
+    }
+    finally {
+        Remove-Item $partialOutput -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -235,6 +249,8 @@ function Get-CMakeFlags {
         "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
         "-DCMAKE_PREFIX_PATH=$StaticLibsDir"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+        "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW"
+        "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
     )
 }
 
@@ -392,6 +408,7 @@ function Build-Opus {
         "-DOPUS_BUILD_PROGRAMS=OFF"
         "-DOPUS_BUILD_TESTING=OFF"
         "-DOPUS_INSTALL_PKG_CONFIG_MODULE=ON"
+        "-DOPUS_STATIC_RUNTIME=ON"
     )
 
     Write-Success "opus installed"
@@ -953,6 +970,7 @@ function Build-Libsndfile {
         "-DBUILD_TESTING=OFF"
         "-DENABLE_EXTERNAL_LIBS=ON"
         "-DENABLE_MPEG=OFF"
+        "-DCMAKE_C_FLAGS=/DFLAC__NO_DLL"
     )
 
     Write-Success "libsndfile installed"
@@ -971,6 +989,50 @@ function Find-MsysBash {
     }
 
     return $null
+}
+
+function Patch-FfmpegMsvcEmptyCbsTable($src) {
+    $cbsPath = Join-Path $src "libavcodec\cbs.c"
+    $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cbsPath)
+    $tableDeclaration = "static const CodedBitstreamType *const cbs_type_table[] = {"
+    $oldLoop = "    for (i = 0; i < FF_ARRAY_ELEMS(cbs_type_table); i++) {"
+    $newLoop = "    for (i = 0; cbs_type_table[i]; i++) {"
+    $tableStart = $lines.IndexOf($tableDeclaration)
+
+    if ($tableStart -lt 0) {
+        throw "FFmpeg CBS compatibility patch failed: table declaration not found"
+    }
+
+    $tableEnd = -1
+    for ($i = $tableStart + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -eq "};") {
+            $tableEnd = $i
+            break
+        }
+    }
+
+    if ($tableEnd -lt 0) {
+        throw "FFmpeg CBS compatibility patch failed: table end not found"
+    }
+
+    if ($lines[$tableEnd - 1] -ne "    NULL,") {
+        $lines.Insert($tableEnd, "    NULL,")
+    }
+
+    $oldLoopIndex = $lines.IndexOf($oldLoop)
+    if ($oldLoopIndex -ge 0) {
+        $lines[$oldLoopIndex] = $newLoop
+    }
+    elseif ($lines.IndexOf($newLoop) -lt 0) {
+        throw "FFmpeg CBS compatibility patch failed: table loop not found"
+    }
+
+    [IO.File]::WriteAllLines(
+        $cbsPath,
+        $lines,
+        [Text.UTF8Encoding]::new($false)
+    )
+    Write-Info "Applied FFmpeg MSVC empty CBS table compatibility patch"
 }
 
 function Build-Ffmpeg {
@@ -992,12 +1054,16 @@ function Build-Ffmpeg {
         Extract-Archive $archive $SrcDir
     }
 
+    Patch-FfmpegMsvcEmptyCbsTable $src
+
     New-Item -ItemType Directory -Path $ffmpegBuild -Force | Out-Null
 
     $env:SOX_FFMPEG_SRC = $src
     $env:SOX_FFMPEG_BUILD = $ffmpegBuild
     $env:SOX_STATIC_PREFIX = $StaticLibsDir
     $env:SOX_BUILD_JOBS = $Jobs
+    $previousMsys2PathType = $env:MSYS2_PATH_TYPE
+    $env:MSYS2_PATH_TYPE = "inherit"
 
     $buildScript = @'
 set -e
@@ -1007,6 +1073,10 @@ command -v make >/dev/null ||
   { echo "GNU make is required in MSYS2." >&2; exit 1; }
 command -v nasm >/dev/null ||
   { echo "NASM is required in MSYS2." >&2; exit 1; }
+command -v cmp >/dev/null ||
+  { echo "cmp (diffutils) is required in MSYS2." >&2; exit 1; }
+command -v pkg-config >/dev/null ||
+  { echo "pkg-config (pkgconf) is required in MSYS2." >&2; exit 1; }
 
 src="$(cygpath -u "$SOX_FFMPEG_SRC")"
 build="$(cygpath -u "$SOX_FFMPEG_BUILD")"
@@ -1052,6 +1122,12 @@ make install
         Remove-Item Env:SOX_FFMPEG_BUILD -ErrorAction SilentlyContinue
         Remove-Item Env:SOX_STATIC_PREFIX -ErrorAction SilentlyContinue
         Remove-Item Env:SOX_BUILD_JOBS -ErrorAction SilentlyContinue
+        if ($null -eq $previousMsys2PathType) {
+            Remove-Item Env:MSYS2_PATH_TYPE -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:MSYS2_PATH_TYPE = $previousMsys2PathType
+        }
     }
 
     Write-Success "FFmpeg installed"
@@ -1063,19 +1139,39 @@ function Test-StaticDependencies($binary) {
         throw "dumpbin.exe not found; run from a Visual Studio Developer PowerShell."
     }
 
-    Write-Info "Verifying that codec dependencies are statically linked..."
+    Write-Info "Verifying that third-party dependencies and the MSVC runtime are statically linked..."
     $dependencies = & $dumpbin.Source /dependents $binary 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect executable dependencies with dumpbin"
     }
 
-    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao"
+    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-|VCRUNTIME|MSVCP|api-ms-win-crt|ucrtbase|VCOMP"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {
-        throw "Codec DLL dependency detected:`n$($unexpected -join [Environment]::NewLine)"
+        throw "Unexpected dynamic dependency detected:`n$($unexpected -join [Environment]::NewLine)"
     }
 
-    Write-Success "Codec dependencies are statically linked"
+    Write-Success "Third-party dependencies and the MSVC runtime are statically linked"
+}
+
+function Test-SoxExecutable($binary) {
+    Write-Info "Running sox.exe --version smoke test..."
+    $process = Start-Process -FilePath $binary -ArgumentList "--version" -NoNewWindow -PassThru
+
+    try {
+        if (-not $process.WaitForExit(15000)) {
+            $process.Kill($true)
+            throw "sox.exe --version timed out"
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "sox.exe --version failed with exit code $($process.ExitCode)"
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+
+    Write-Success "sox.exe smoke test passed"
 }
 
 # ------------------------------------------------------------------------------
@@ -1143,6 +1239,11 @@ function Main {
 
     # Check required tools
     Write-Info "Checking required tools..."
+
+    if ($EnableFfmpeg -and $PSVersionTable.PSVersion.Major -lt 7) {
+        Write-Err "PowerShell 7 or later is required for the FFmpeg build. Run this script with pwsh."
+        exit 1
+    }
 
     $script:CMakePath = Find-CMake
     if (-not $script:CMakePath) {
@@ -1252,9 +1353,12 @@ function Main {
             $ScriptDir
             "-DCMAKE_BUILD_TYPE=Release"
             "-DBUILD_SHARED_LIBS=OFF"
+            "-DBUILD_STATIC_EXECUTABLE=ON"
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
             "-DSOX_REQUIRE_STATIC_DEPENDENCIES=ON"
             "-DCMAKE_PREFIX_PATH=$StaticLibsDir"
             "-DSTATIC_LIBS_DIR=$StaticLibsDir"
+            "-DWITH_OPENMP=OFF"
             "-DWITH_FFMPEG_CODECS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
             "-DWITH_FFMPEG_FORMATS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
         )
@@ -1290,6 +1394,7 @@ function Main {
         throw "sox.exe not found after build"
     }
     Test-StaticDependencies $soxExe
+    Test-SoxExecutable $soxExe
 
     # Copy binary to output directory
     Write-Info "Copying sox binary to output directory..."
@@ -1318,11 +1423,6 @@ function Main {
     Write-Host "=============================================="
     Write-Host ""
     Write-Host "Output binary: $OutputDir\sox.exe"
-    Write-Host ""
-
-    # Show sox info
-    $soxOutput = Join-Path $OutputDir "sox.exe"
-    & $soxOutput --version
     Write-Host ""
 }
 

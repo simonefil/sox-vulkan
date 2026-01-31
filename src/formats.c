@@ -55,6 +55,10 @@
 #define PIPE_AUTO_DETECT_SIZE 256 /* Only as much as we can rewind a pipe */
 #define AUTO_DETECT_SIZE 4096     /* For seekable file, so no restriction */
 
+#if defined(_MSC_VER) && _MSC_VER >= 1900
+  #define NO_REWIND_PIPE
+#endif
+
 #ifdef HAVE_FFMPEG_CODECS
 static sox_bool is_adts_header(
     unsigned char const * data,
@@ -178,6 +182,14 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
 {
   char data[AUTO_DETECT_SIZE];
   size_t len = lsx_readbuf(ft, data, ft->seekable? sizeof(data) : PIPE_AUTO_DETECT_SIZE);
+#ifdef NO_REWIND_PIPE
+  if (!ft->seekable && len) {
+    assert(!ft->read_replay_buffer);
+    ft->read_replay_buffer = lsx_memdup(data, len);
+    ft->read_replay_size = len;
+    ft->read_replay_pos = 0;
+  }
+#endif
   #define CHECK(type, p2, l2, d2, p1, l1, d1) if (len >= p1 + l1 && \
       !memcmp(data + p1, d1, (size_t)l1) && !memcmp(data + p2, d2, (size_t)l2)) return #type;
   CHECK(voc   , 0, 0, ""     , 0, 20, "Creative Voice File\x1a")
@@ -555,6 +567,14 @@ static sox_bool is_seekable(sox_format_t const * ft)
   if (!ft->fp)
     return sox_false;
 
+#ifdef _WIN32
+  {
+    struct stat st;
+
+    if (fstat(fileno(ft->fp), &st) || (st.st_mode & S_IFMT) != S_IFREG)
+      return sox_false;
+  }
+#endif
   return !fseek(ft->fp, 0, SEEK_CUR);
 }
 
@@ -683,7 +703,7 @@ static void UNUSED rewind_pipe(FILE * fp)
 #elif defined __GLIBC__
   fp->_IO_read_ptr = fp->_IO_read_base;
 #elif defined _MSC_VER && _MSC_VER >= 1900
-  #define NO_REWIND_PIPE
+  (void)fp;
 #elif defined _MSC_VER || defined _WIN32 || defined _WIN64 || \
       defined _ISO_STDIO_ISO_H || defined __sgi
   fp->_ptr = fp->_base;
@@ -755,14 +775,14 @@ static sox_format_t * open_read(
       filetype = auto_detect_format(ft, lsx_find_file_extension(path));
       lsx_rewind(ft);
     }
-#ifndef NO_REWIND_PIPE
     else if (!(ft->handler.flags & SOX_FILE_NOSTDIO) &&
         input_bufsiz >= PIPE_AUTO_DETECT_SIZE) {
       filetype = auto_detect_format(ft, lsx_find_file_extension(path));
+#ifndef NO_REWIND_PIPE
       rewind_pipe(ft->fp);
+#endif
       ft->tell_off = 0;
     }
-#endif
 
     if (filetype) {
       lsx_report("detected file format type `%s'", filetype);
@@ -847,6 +867,7 @@ error:
   free(ft->priv);
   free(ft->filename);
   free(ft->filetype);
+  free(ft->read_replay_buffer);
   free(ft);
   return NULL;
 }
@@ -1343,6 +1364,7 @@ int sox_close(sox_format_t * ft)
   free(ft->priv);
   free(ft->filename);
   free(ft->filetype);
+  free(ft->read_replay_buffer);
   sox_delete_comments(&ft->oob.comments);
 
   free(ft);

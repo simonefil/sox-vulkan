@@ -1550,6 +1550,9 @@ struct sox_format_t {
   void             * priv;          /**< Format handler's private data area */
   char const       * codec_options; /**< Internal codec options, if supported by the handler */
   char const       * channel_layout; /**< Explicit output channel layout, if supported by the handler */
+  unsigned char    * read_replay_buffer; /**< Internal bytes consumed while probing a non-seekable input. */
+  size_t             read_replay_size; /**< Internal size of the input probe replay buffer. */
+  size_t             read_replay_pos; /**< Internal current position in the input probe replay buffer. */
 };
 
 /**

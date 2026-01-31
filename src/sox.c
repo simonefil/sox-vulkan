@@ -73,7 +73,15 @@
 #endif
 
 #ifdef HAVE_SYS_TIMEB_H
+  #ifdef _MSC_VER
+    #undef ftime
+    #undef timeb
+  #endif
   #include <sys/timeb.h>
+  #ifdef _MSC_VER
+    #define ftime _ftime
+    #define timeb _timeb
+  #endif
 #endif
 
 #ifdef HAVE_SYS_UTSNAME_H

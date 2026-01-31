@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # SoX Static Libraries Build Script
 # Downloads and compiles all optional libraries as static libraries

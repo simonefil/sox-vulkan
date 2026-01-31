@@ -643,7 +643,8 @@ Available passthrough options depend on the installed FFmpeg version.
 ### 5. Verify Static Linking
 
 ```bash
-# Linux: Check for dynamic dependencies
+# Linux/FreeBSD: inspect direct dynamic dependencies
+readelf -d ./output/sox | grep NEEDED
 ldd ./output/sox
 
 # macOS: Check for dynamic dependencies
@@ -653,13 +654,16 @@ otool -L ./output/sox
 dumpbin /DEPENDENTS .\output\sox.exe
 ```
 
-On Linux, a statically compiled binary should show only system libraries like:
-- `linux-vdso.so`
-- `libc.so`
-- `libm.so`
-- `libpthread.so`
-- `libdl.so`
-- `libasound.so` (if ALSA enabled)
+On Linux, dynamic dependencies are expected for operating-system integration,
+such as glibc, the ALSA client library, and the explicitly enabled PulseAudio
+client libraries. FFmpeg, FLAC, Ogg/Vorbis, Opus, libsndfile, MP3/MP2,
+WavPack, AMR, PNG, libmagic, and libao must not appear as direct `DT_NEEDED`
+entries because those bundled third-party dependencies are linked statically.
+
+On FreeBSD, base-system and compiler runtime libraries such as `libc`, `libm`,
+`libthr`, and `libomp` may appear as dynamic dependencies. Codec libraries and
+libao must not appear, and the executable must not contain an `RPATH` or
+`RUNPATH` pointing to `/usr/local/lib`.
 
 On macOS, every listed dependency must come from `/usr/lib` or
 `/System/Library`, for example:

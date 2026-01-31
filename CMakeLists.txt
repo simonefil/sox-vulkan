@@ -101,11 +101,6 @@ if(SOX_REQUIRE_STATIC_DEPENDENCIES AND BUILD_SHARED_LIBS)
         "SOX_REQUIRE_STATIC_DEPENDENCIES requires BUILD_SHARED_LIBS=OFF")
 endif()
 
-if(NOT BUILD_SHARED_LIBS)
-    # Never fall back to a third-party shared library in static builds.
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .a .lib)
-endif()
-
 if(SOX_REQUIRE_STATIC_DEPENDENCIES)
     if(NOT EXISTS "${STATIC_LIBS_DIR}/lib")
         message(FATAL_ERROR
@@ -164,17 +159,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         add_link_options(-Wl,-z,defs)
     endif()
 
-    # BSD-specific: ensure proper library paths
-    if(IS_BSD)
-        add_compile_options(-I/usr/local/include)
-        add_link_options(-L/usr/local/lib)
-
-        # FreeBSD uses /usr/local for ports
-        if(IS_FREEBSD)
-            include_directories(SYSTEM /usr/local/include)
-            link_directories(/usr/local/lib)
-        endif()
-    endif()
 endif()
 
 # Platform detection

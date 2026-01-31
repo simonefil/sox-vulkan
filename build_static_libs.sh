@@ -493,6 +493,7 @@ build_ffmpeg() {
 
     "${src}/configure" \
         --prefix="${STATIC_LIBS_DIR}" \
+        --cc="${CC:-cc}" \
         --pkg-config-flags="--static" \
         --extra-cflags="-I${STATIC_LIBS_DIR}/include" \
         --extra-ldflags="-L${STATIC_LIBS_DIR}/lib" \

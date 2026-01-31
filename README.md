@@ -110,7 +110,7 @@ brew install autoconf automake libtool
 
 **Required:**
 ```bash
-sudo pkg install cmake git curl gmake
+sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nasm
 ```
 
 ### NetBSD

@@ -95,7 +95,18 @@ int lsx_check_read_params(sox_format_t * ft, unsigned channels,
  */
 size_t lsx_readbuf(sox_format_t * ft, void *buf, size_t len)
 {
-  size_t ret = fread(buf, (size_t) 1, len, (FILE*)ft->fp);
+  size_t replay_available = ft->read_replay_size - ft->read_replay_pos;
+  size_t replay_count = min(len, replay_available);
+  size_t ret;
+
+  if (replay_count) {
+    memcpy(buf, ft->read_replay_buffer + ft->read_replay_pos, replay_count);
+    ft->read_replay_pos += replay_count;
+  }
+  ret = replay_count;
+  if (ret < len)
+    ret += fread((unsigned char *)buf + ret,
+        (size_t)1, len - ret, (FILE*)ft->fp);
   if (ret != len && ferror((FILE*)ft->fp))
     lsx_fail_errno(ft, errno, "lsx_readbuf");
   ft->tell_off += ret;
@@ -158,7 +169,8 @@ off_t lsx_tell(sox_format_t * ft)
 
 int lsx_eof(sox_format_t * ft)
 {
-  return feof((FILE*)ft->fp);
+  return ft->read_replay_pos == ft->read_replay_size &&
+      feof((FILE*)ft->fp);
 }
 
 int lsx_error(sox_format_t * ft)
@@ -180,6 +192,13 @@ void lsx_clearerr(sox_format_t * ft)
 
 int lsx_unreadb(sox_format_t * ft, unsigned b)
 {
+  if (ft->read_replay_pos < ft->read_replay_size &&
+      ft->read_replay_pos > 0) {
+    ft->read_replay_buffer[--ft->read_replay_pos] = (unsigned char)b;
+    if (ft->tell_off)
+      --ft->tell_off;
+    return (int)(unsigned char)b;
+  }
   return ungetc((int)b, ft->fp);
 }
 
@@ -194,10 +213,12 @@ int lsx_seeki(sox_format_t * ft, off_t offset, int whence)
     if (ft->seekable == 0) {
         /* If a stream peel off chars else EPERM */
         if (whence == SEEK_CUR) {
-            while (offset > 0 && !feof((FILE*)ft->fp)) {
-                getc((FILE*)ft->fp);
+            while (offset > 0 && !lsx_eof(ft)) {
+                unsigned char byte;
+
+                if (lsx_readb(ft, &byte) == SOX_EOF)
+                    break;
                 offset--;
-                ++ft->tell_off;
             }
             if (offset)
                 lsx_fail_errno(ft,SOX_EOF, "offset past EOF");

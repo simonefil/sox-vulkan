@@ -21,9 +21,10 @@ This repository includes build scripts for compiling SoX with statically linked 
 ### Windows
 
 **Required:**
-- Visual Studio 2019 or 2022 (with C++ workload)
-- CMake 3.14 or later
-- MSYS2 with GNU Make (required for the static FFmpeg build)
+- Visual Studio 2019 or later (with C++ workload)
+- PowerShell 7 (`pwsh`)
+- CMake 3.15 or later
+- MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
 
@@ -639,7 +640,7 @@ owned by SoX and cannot be overridden through `--ffmpeg-opts`; use `-C`,
 `-r`, `-c`, `--channel-layout`, and SoX effects such as `remix` instead.
 Available passthrough options depend on the installed FFmpeg version.
 
-### 5. Verify Static Linking (Linux/macOS)
+### 5. Verify Static Linking
 
 ```bash
 # Linux: Check for dynamic dependencies
@@ -647,6 +648,9 @@ ldd ./output/sox
 
 # macOS: Check for dynamic dependencies
 otool -L ./output/sox
+
+# Windows (Visual Studio Developer PowerShell)
+dumpbin /DEPENDENTS .\output\sox.exe
 ```
 
 On Linux, a statically compiled binary should show only system libraries like:
@@ -666,6 +670,10 @@ On macOS, every listed dependency must come from `/usr/lib` or
 
 FFmpeg and the bundled codec libraries must not appear as `.dylib`
 dependencies.
+
+On Windows, only operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`,
+and `bcrypt.dll` should appear. Codec DLLs, MSYS runtime DLLs, `VCRUNTIME`,
+`MSVCP`, `ucrtbase`, and `VCOMP` must not appear.
 
 ### 6. Test Audio Playback
 

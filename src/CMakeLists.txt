@@ -316,6 +316,9 @@ if(HAVE_FFMPEG_CODECS)
     target_link_libraries(libsox PRIVATE ${FFMPEG_CODECS_LIBRARIES})
     target_include_directories(libsox PRIVATE ${FFMPEG_CODECS_INCLUDE_DIRS})
     target_compile_definitions(libsox PRIVATE STATIC_FFMPEG_CODECS)
+    if(IS_WINDOWS)
+        target_link_libraries(libsox PRIVATE bcrypt)
+    endif()
 endif()
 
 # FFmpeg libavformat containers
@@ -342,6 +345,7 @@ if(HAVE_MP3)
     endif()
     if(HAVE_TWOLAME)
         target_include_directories(libsox PRIVATE ${TWOLAME_INCLUDE_DIR})
+        target_compile_definitions(libsox PRIVATE LIBTWOLAME_STATIC)
     endif()
 endif()
 

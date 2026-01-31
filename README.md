@@ -98,12 +98,12 @@ xcode-select --install
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # Install dependencies
-brew install cmake
+brew install cmake pkgconf
 ```
 
 **Required by the full static build:**
 ```bash
-brew install autoconf automake libtool
+brew install autoconf automake libtool nasm
 ```
 
 ### FreeBSD

@@ -1022,6 +1022,7 @@ main() {
     log_info "Checking required tools..."
     check_command "make"
     check_command "cmake"
+    check_command "pkg-config"
     check_command "tar"
     if [ "${ENABLE_AO}" = "ON" ]; then
         check_command "autoreconf"

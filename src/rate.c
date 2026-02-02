@@ -266,6 +266,7 @@ typedef struct {
 
 #define TO_3dB(a)       ((1.6e-6*a-7.5e-4)*a+.646)
 #define LOW_Q_BW0_PC    (67 + 5 / 8.)
+#define RATE_MIN_INPUT_CHUNK 4096
 
 typedef enum {
   rolloff_none, rolloff_small /* <= 0.01 dB */, rolloff_medium /* <= 0.35 dB */
@@ -469,14 +470,14 @@ static void rate_process(rate_t * p)
 static sample_t * rate_input(rate_t * p, sample_t const * samples, size_t n)
 {
   p->samples_in += n;
-  return fifo_write(&p->stages[0].fifo, (int)n, samples);
+  return fifo_write(&p->stages[0].fifo, n, samples);
 }
 
 static sample_t const * rate_output(rate_t * p, sample_t * samples, size_t * n)
 {
   fifo_t * fifo = &p->stages[p->num_stages].fifo;
   p->samples_out += *n = min(*n, (size_t)fifo_occupancy(fifo));
-  return fifo_read(fifo, (int)*n, samples);
+  return fifo_read(fifo, *n, samples);
 }
 
 static void rate_flush(rate_t * p)
@@ -492,7 +493,7 @@ static void rate_flush(rate_t * p)
       rate_input(p, buff, (size_t) 1024);
       rate_process(p);
     }
-    fifo_trim_to(fifo, (int)remaining);
+    fifo_trim_to(fifo, remaining);
     p->samples_in = 0;
   }
   free(buff);
@@ -660,9 +661,22 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   lsx_save_samples(obuf, s, odone, &effp->clips);
 
   if (*isamp && odone < *osamp) {
-    sample_t * t = rate_input(&p->rate, NULL, *isamp);
-    lsx_load_samples(t, ibuf, *isamp);
+    size_t output_room = *osamp - odone;
+    double input_limit = ceil(output_room * p->rate.factor);
+    size_t idone = input_limit >= (double)*isamp ?
+        *isamp : min(*isamp, max((size_t)RATE_MIN_INPUT_CHUNK,
+            (size_t)input_limit));
+    sample_t * t = rate_input(&p->rate, NULL, idone);
+    lsx_load_samples(t, ibuf, idone);
     rate_process(&p->rate);
+    *isamp = idone;
+
+    {
+      size_t more = *osamp - odone;
+      s = rate_output(&p->rate, NULL, &more);
+      lsx_save_samples(obuf + odone, s, more, &effp->clips);
+      odone += more;
+    }
   }
   else *isamp = 0;
   *osamp = odone;

@@ -40,10 +40,10 @@ static int start(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *) effp->priv;
 
-  fifo_create(&p->input_fifo, (int)sizeof(double));
+  fifo_create(&p->input_fifo, sizeof(double));
   memset(fifo_reserve(&p->input_fifo,
         p->filter_ptr->post_peak), 0, sizeof(double) * p->filter_ptr->post_peak);
-  fifo_create(&p->output_fifo, (int)sizeof(double));
+  fifo_create(&p->output_fifo, sizeof(double));
   return SOX_SUCCESS;
 }
 
@@ -81,12 +81,12 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   priv_t * p = (priv_t *)effp->priv;
   size_t odone = min(*osamp, (size_t)fifo_occupancy(&p->output_fifo));
 
-  double const * s = fifo_read(&p->output_fifo, (int)odone, NULL);
+  double const * s = fifo_read(&p->output_fifo, odone, NULL);
   lsx_save_samples(obuf, s, odone, &effp->clips);
   p->samples_out += odone;
 
   if (*isamp && odone < *osamp) {
-    double * t = fifo_write(&p->input_fifo, (int)*isamp, NULL);
+    double * t = fifo_write(&p->input_fifo, *isamp, NULL);
     p->samples_in += *isamp;
     lsx_load_samples(t, ibuf, *isamp);
     filter(p);
@@ -110,7 +110,7 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
       p->samples_in += 1024;
       filter(p);
     }
-    fifo_trim_to(&p->output_fifo, (int)remaining);
+    fifo_trim_to(&p->output_fifo, remaining);
     p->samples_in = 0;
   }
   free(buff);

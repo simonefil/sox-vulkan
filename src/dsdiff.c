@@ -40,8 +40,8 @@ static int dff_startread(sox_format_t *ft)
 	uint64_t f8size;
 	uint32_t fver;
 	uint64_t spos, epos;
-	uint32_t sample_rate;
-	uint16_t num_channels;
+	uint32_t sample_rate = 0;
+	uint16_t num_channels = 0;
 
 	if (lsx_readdw(ft, &ckid) || ckid != ID('F', 'R', 'M', '8')) {
 		lsx_fail_errno(ft, SOX_EHDR, "FRM8 tag not found");

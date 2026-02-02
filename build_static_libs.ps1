@@ -1139,19 +1139,19 @@ function Test-StaticDependencies($binary) {
         throw "dumpbin.exe not found; run from a Visual Studio Developer PowerShell."
     }
 
-    Write-Info "Verifying that third-party dependencies and the MSVC runtime are statically linked..."
+    Write-Info "Verifying static third-party dependencies (the MSVC OpenMP runtime may be dynamic)..."
     $dependencies = & $dumpbin.Source /dependents $binary 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect executable dependencies with dumpbin"
     }
 
-    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-|VCRUNTIME|MSVCP|api-ms-win-crt|ucrtbase|VCOMP"
+    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-|VCRUNTIME|MSVCP|api-ms-win-crt|ucrtbase"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {
         throw "Unexpected dynamic dependency detected:`n$($unexpected -join [Environment]::NewLine)"
     }
 
-    Write-Success "Third-party dependencies and the MSVC runtime are statically linked"
+    Write-Success "Third-party dependencies and the C/C++ runtime are statically linked"
 }
 
 function Test-SoxExecutable($binary) {
@@ -1358,7 +1358,8 @@ function Main {
             "-DSOX_REQUIRE_STATIC_DEPENDENCIES=ON"
             "-DCMAKE_PREFIX_PATH=$StaticLibsDir"
             "-DSTATIC_LIBS_DIR=$StaticLibsDir"
-            "-DWITH_OPENMP=OFF"
+            "-DWITH_OPENMP=ON"
+            "-DSOX_REQUIRE_OPENMP=ON"
             "-DWITH_FFMPEG_CODECS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
             "-DWITH_FFMPEG_FORMATS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
         )

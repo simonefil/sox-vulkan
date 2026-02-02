@@ -1147,6 +1147,33 @@ main() {
     # Build SoX
     log_info "========== Building SoX =========="
 
+    OPENMP_CMAKE_ARGS=(
+        -DWITH_OPENMP=ON
+        -DSOX_REQUIRE_OPENMP=ON
+    )
+
+    if [ "${PLATFORM}" = "Darwin" ]; then
+        check_command "brew"
+        OPENMP_PREFIX="$(brew --prefix libomp 2>/dev/null)" || {
+            log_error "Homebrew libomp is required. Install it with: brew install libomp"
+            exit 1
+        }
+        OPENMP_LIBRARY="${OPENMP_PREFIX}/lib/libomp.a"
+        OPENMP_INCLUDE_DIR="${OPENMP_PREFIX}/include"
+
+        if [ ! -f "${OPENMP_LIBRARY}" ] || [ ! -f "${OPENMP_INCLUDE_DIR}/omp.h" ]; then
+            log_error "Static OpenMP runtime not found under ${OPENMP_PREFIX}"
+            exit 1
+        fi
+
+        OPENMP_CMAKE_ARGS+=(
+            "-DOpenMP_C_FLAGS=-Xpreprocessor -fopenmp"
+            "-DOpenMP_C_INCLUDE_DIR=${OPENMP_INCLUDE_DIR}"
+            "-DOpenMP_C_LIB_NAMES=omp"
+            "-DOpenMP_omp_LIBRARY=${OPENMP_LIBRARY}"
+        )
+    fi
+
     mkdir -p "${SOX_BUILD_DIR}"
     cd "${SOX_BUILD_DIR}"
 
@@ -1162,7 +1189,8 @@ main() {
         -DWITH_COREAUDIO=${ENABLE_COREAUDIO} \
         -DWITH_OSS=${ENABLE_OSS} \
         -DWITH_AO=${ENABLE_AO} \
-        -DWITH_PULSEAUDIO=${ENABLE_PULSEAUDIO}
+        -DWITH_PULSEAUDIO=${ENABLE_PULSEAUDIO} \
+        "${OPENMP_CMAKE_ARGS[@]}"
 
     cmake --build . --config Release -j${JOBS}
 

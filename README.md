@@ -114,20 +114,6 @@ brew install autoconf automake libtool nasm
 sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nasm
 ```
 
-### NetBSD
-
-**Required:**
-```bash
-sudo pkgin install cmake git curl
-```
-
-### OpenBSD
-
-**Required:**
-```bash
-doas pkg_add cmake git curl
-```
-
 ---
 
 ## Build Instructions
@@ -247,8 +233,6 @@ chmod +x build_static_libs.sh
 | Linux | ALSA + libao |
 | macOS | CoreAudio + libao |
 | FreeBSD | OSS + libao |
-| NetBSD | OSS + libao |
-| OpenBSD | OSS + libao |
 
 ---
 
@@ -330,22 +314,7 @@ chmod +x build_static_libs.sh
 
 ## Verification
 
-After the build completes, verify the installation:
-
-The build scripts already verify the final executable and fail if it imports a
-codec or other bundled third-party library dynamically. On macOS, `otool -L`
-may still list Apple system libraries and frameworks; FFmpeg and the other
-codec dependencies must not appear as `.dylib` dependencies. On Windows, the
-equivalent check uses `dumpbin /DEPENDENTS`.
-
-PulseAudio is an explicit opt-in exception on Linux and FreeBSD: its official
-client libraries are shared-only, so `--with-pulseaudio` adds dynamic
-`libpulse-simple` and `libpulse` dependencies. It does not relax the static
-link requirement for FFmpeg or any codec library. `ldd` also displays
-PulseAudio's transitive dependencies, which can include libsndfile, FLAC,
-Vorbis and Opus; those are loaded by PulseAudio rather than linked as SoX
-codec backends. The build verifier uses the executable's direct ELF
-`DT_NEEDED` entries to keep that distinction explicit.
+After the build completes, verify the installation. The build scripts already reject executables that dynamically import bundled codecs or other bundled third-party libraries.
 
 ### 1. Check Version
 
@@ -372,7 +341,8 @@ sox:      SoX v15.0.0
 ./output/sox --help-format all
 ```
 
-This will list all supported audio formats. Look for:
+This lists all formats enabled in the current build. Look for:
+
 - `flac` - FLAC support
 - `mp3` - MP3 support
 - `ogg` - OGG/Vorbis support
@@ -412,233 +382,82 @@ This will list all supported audio formats. Look for:
 # Convert a WAV file to Opus at 128 kbit/s
 ./output/sox input.wav -C 128 output.opus
 
-# Encode standard 5.1 surround at 384 kbit/s
-./output/sox input-5.1.wav -C 384 output-5.1.opus
-
-# Encode standard 5.1 AC-3 at 448 kbit/s
+# Encode AC-3 and E-AC-3
 ./output/sox input-5.1.wav -C 448 output-5.1.ac3
-
-# Encode standard 5.1 E-AC-3 at 768 kbit/s
 ./output/sox input-5.1.wav -C 768 output-5.1.eac3
 
-# Encode AAC-LC with LOAS/LATM framing at 128 kbit/s
+# Encode AAC-LC with LOAS/LATM framing
 ./output/sox input.wav -C 128 output.latm
 
-# Encode 24-bit Apple Lossless in an M4A container
+# Encode Apple Lossless
 ./output/sox input-24bit.wav -C 2 output.m4a
 
-# Encode 24-bit TrueHD; the channels are already in 5.1(side) order
+# Encode TrueHD, MLP, and DTS
 ./output/sox input-5.1-side.wav -b 24 \
   --channel-layout '5.1(side)' output.thd
-
-# Encode 24-bit DVD-Audio-style MLP
 ./output/sox input-24bit.wav -b 24 output.mlp
-
-# Encode DTS core 5.1(side) at 1536 kbit/s
 ./output/sox input-5.1-side.wav -C 1536 \
   --channel-layout '5.1(side)' output.dts
 
-# Generate a test tone (5 seconds, 440Hz sine wave)
+# Generate a five-second test tone
 ./output/sox -n test.wav synth 5 sine 440
 ```
 
-Opus encoding and decoding support the standard layouts from 1 to 8 channels.
-Mono and stereo use mapping family 0; layouts with 3 to 8 channels use mapping
-family 1. SoX automatically converts between its canonical WAVE channel order
-and the Vorbis channel order required by multichannel Opus. Since SoX tracks
-the channel count but not an explicit channel layout, non-standard discrete
-layouts, ambisonics, and streams with more than 8 channels are not supported.
+#### Codec Summary
 
-AAC encoding supports AAC-LC with either ADTS (`aac`, `adts`) or LOAS/LATM
-(`latm`, `loas`) framing. Both handlers decode AAC-LC, HE-AAC and HE-AACv2.
-By default, encoding uses the canonical SoX layout for each channel count
-from mono through 7.1. Additional explicit layouts accepted by the installed
-FFmpeg encoder are listed by `sox --help-format aac` and
-`sox --help-format latm`. Quad, 6.1 and 7.1 defaults use an MPEG-4 Program
-Config Element (PCE), avoiding the ambiguous ADTS 7.1 channel configuration
-and preserving SoX's canonical channel order:
-`FL FR BL BR` for quad, `FL FR FC LFE BC SL SR` for 6.1, and
-`FL FR FC LFE BL BR SL SR` for 7.1. Unspecified discrete layouts are not
-supported. SoX writes a `StreamMuxConfig` every 20 frames in LOAS/LATM output
-so decoding can recover after joining a stream mid-file.
+| Format | Encoding | Decoding and limits |
+|--------|----------|---------------------|
+| Opus | 1-8 channels; mapping family 0 for mono/stereo and family 1 for multichannel audio | 1-8 standard channels; SoX converts between canonical WAVE order and Vorbis order |
+| AAC/ADTS | AAC-LC through `aac` or `adts` | AAC-LC, HE-AAC, and HE-AACv2 |
+| AAC/LOAS-LATM | AAC-LC through `latm` or `loas` | AAC-LC, HE-AAC, HE-AACv2, and xHE-AAC/USAC through `usac`, `xheaac`, or `xhe-aac` |
+| ALAC/M4A | 1-8 channels, 16- or 24-bit lossless audio | 1-8 channels; output must be seekable |
+| AC-3 | Mono through 5.1 at 32, 44.1, or 48 kHz | Mono through 5.1 |
+| E-AC-3 | Up to 5.1 at 32, 44.1, or 48 kHz | Up to 7.1 |
+| TrueHD | 16- or 24-bit PCM up to 5.1 at 44.1-192 kHz | Channel-based presentations up to 7.1 |
+| MLP | 16- or 24-bit PCM up to 5.1 at 44.1-192 kHz | Preserves valid 20-bit source precision; the encoder pads an incomplete final frame |
+| DTS | DTS core up to 5.1(side), 32-3840 kbit/s | DTS core, DTS-ES, DTS 96/24, DTS-HD HRA/MA, DTS Express/LBR, and channel-based DTS:X presentations |
+| DTS-HD | Not supported | Use `dtshd` for extended DTS-HD streams and `dts` for core or mixed inputs |
 
-xHE-AAC/USAC decoding accepts LOAS/LATM elementary streams through the
-`usac`, `xheaac`, and `xhe-aac` format names. SoX parses the LOAS/LATM
-transport and passes raw USAC access units plus their `AudioSpecificConfig`
-to FFmpeg 8 or later. The supported LATM subset has one synchronous program
-and layer, no additional subframes or `otherData`, `audioMuxVersion` 1, and
-`frameLengthType` 0. Encoding and container formats are not supported.
-xHE-AAC loudness and dynamic-range metadata, if present, are not applied and
-produce a warning.
+Run `sox --help-format FORMAT` for the sample rates, channel layouts, compression values, and read/write capabilities available for a specific format.
 
-ALAC support reads and writes Apple Lossless exclusively in M4A files. It
-uses FFmpeg's `libavformat`, `libavcodec`, and `libavutil` libraries directly;
-it does not invoke the `ffmpeg` executable. Encoding accepts 16-bit and 24-bit
-PCM, while decoding accepts the ALAC 16-, 20-, 24-, and 32-bit depths. For
-ALAC, `-C` selects the lossless compression effort from 0 through 2 and
-defaults to 2; it is not a bitrate.
+#### Channel Layouts
 
-ALAC supports its official layouts from one through eight channels. SoX does
-not remix channels automatically. For the layouts that differ from SoX's
-canonical meaning for the same channel count, encoding and decoding produce a
-warning and expose the channels in the following order:
+Place `--channel-layout LAYOUT` immediately before an FFmpeg-backed output file when the input channels have already been prepared in that order. The option labels the existing channels; it does not remix them. The selected layout must match the channel count and be supported by the encoder.
+
+Without `--channel-layout`, SoX uses its canonical layout when the codec offers multiple layouts for the same channel count. ALAC uses its required Apple layout. Noncanonical layouts are preserved and reported without automatic remixing.
+
+ALAC uses these noncanonical orders:
 
 - 4-channel MPEG 4.0 B: `FL FR FC BC`;
 - 7-channel Apple AAC 6.1: `FL FR FC LFE BL BR BC`;
 - 8-channel MPEG 7.1 B: `FL FR FC LFE BL BR FLC FRC`.
 
-This allows an input to be prepared explicitly with effects such as `remix`
-before ALAC encoding. In particular, MPEG 7.1 B is a front-wide layout, not
-the canonical SoX 7.1 side-and-back layout. M4A input may be read from a pipe;
-M4A output must be a seekable file.
-
-FFmpeg-backed output formats accept `--channel-layout LAYOUT` immediately
-before the output file. The option labels the existing interleaved channels;
-it never remixes them. The layout name must exist, its channel count must
-match the signal produced by the SoX effects chain, and the selected encoder
-must support it. Run `sox --help-format FORMAT` to see every accepted layout
-and its exact channel order for that format. For example:
-
 ```bash
-# The eight input channels are already prepared in MPEG 7.1 B order.
+# Label eight channels already prepared in MPEG 7.1 B order
 ./output/sox prepared-8ch.wav -b 24 \
   --channel-layout '7.1(wide)' output.m4a
 
-# Preserve an explicitly prepared AAC 6.1(back) channel order in the PCE.
+# Label seven channels already prepared in AAC 6.1(back) order
 ./output/sox prepared-7ch.wav -C 448 \
   --channel-layout '6.1(back)' output.aac
 ```
 
-Without `--channel-layout`, SoX keeps its canonical layout for codecs that
-offer several layouts with the same channel count. A format with one official
-layout per channel count, such as ALAC, keeps that required layout and warns
-when it differs from the canonical SoX meaning. An explicit selection confirms
-that the caller prepared the channels intentionally, so the corresponding
-encoding warning is omitted. Decoding never remixes: a noncanonical layout
-produces a warning, and an unspecified FFmpeg decoder layout warns that only
-the decoder sample order can be preserved.
+#### FFmpeg Options
 
-AC-3 and E-AC-3 support use only FFmpeg's `libavcodec` and `libavutil`
-libraries; they do not invoke the `ffmpeg` executable or use `libavformat`.
-Both handlers read and write elementary streams at 32, 44.1, or 48 kHz.
-AC-3 supports canonical SoX layouts from mono through 5.1. E-AC-3 decoding
-supports canonical layouts through 7.1, while the FFmpeg encoder currently
-supports encoding through 5.1. SoX distinguishes AC-3 from E-AC-3 by parsing
-the shared syncframe header and its `bsid` field.
-
-When an E-AC-3 input contains Dolby Atmos JOC/OAMD spatial metadata, SoX
-warns that the metadata will be ignored and decodes only the channel-based
-audio presentation. Container formats and preservation or rendering of
-advanced Dolby metadata are outside these handlers.
-
-Dolby TrueHD (`truehd`, `thd`) and Meridian Lossless Packing (`mlp`) support
-raw elementary streams without `libavformat`. SoX delimits access units from
-their shared length header and distinguishes the codecs with the major-sync
-stream type. Input may be read from a pipe and output may be written to a
-pipe. Truncated access units and a stream passed to the wrong handler are
-errors.
-
-Both lossless encoders accept 16-bit and 24-bit PCM at 44.1, 48, 88.2, 96,
-176.4, or 192 kHz. Their FFmpeg encoders are experimental, which SoX enables
-automatically. `-C` is not accepted because it would incorrectly imply a
-bitrate or portable compression-level control; encoder-specific tuning such
-as `max_interval` remains available through `--ffmpeg-opts`. MLP decoding
-also preserves valid 20-bit source precision.
-
-MLP supports the channel layouts published by the installed encoder through
-5.1. The FFmpeg TrueHD encoder currently supports layouts through 5.1, while
-the decoder accepts channel-based presentations through 7.1. Some TrueHD
-layouts use side or center-surround speakers instead of SoX's canonical
-back-speaker defaults. Use `sox --help-format truehd` and an explicit
-`--channel-layout` for those outputs. SoX labels and preserves the prepared
-sample order; it never remixes automatically.
-
-When FFmpeg identifies a TrueHD Atmos substream, SoX warns that the spatial
-metadata is ignored and decodes only the 7.1-or-smaller channel-based
-presentation. SoX does not author Atmos metadata.
-
-Blu-ray keeps the TrueHD presentation and its compatibility AC-3 core as
-separate transport streams. Container demuxing is outside the raw TrueHD
-handler: extract the TrueHD elementary stream first. If an AC-3 core is
-encountered inside the raw input, SoX rejects it explicitly instead of
-silently treating it as TrueHD.
-
-The experimental MLP encoder does not advertise support for a short final
-frame, so it pads the last access unit with silence. A raw MLP elementary
-stream has no independent duration field with which to remove that padding
-on decode. TrueHD preserves the exact final sample count. For either encoder,
-an input shorter than one complete encoder header interval may not begin
-with a major sync; SoX reports that such output is not a standalone
-decodable elementary stream.
-
-DTS support uses FFmpeg's public `dca` parser and decoder without
-`libavformat`. The `dts` handler decodes DTS core, DTS-ES, DTS 96/24,
-DTS-HD High Resolution, DTS-HD Master Audio, DTS Express/LBR, and the
-channel-based presentations in DTS:X streams. It also enables FFmpeg's
-experimental DTS core encoder. The `dtshd` handler is read-only and requires
-an extended DTS-HD profile rather than silently accepting a core-only stream.
-Use the general `dts` input type for DTS 96/24 and for `core_only=1` decoder
-operation.
-
-Autodetection recognizes 16-bit big- and little-endian, 14-bit big- and
-little-endian, extension-substream syncwords, and files beginning with a
-`DTSHDHDR` header. Both raw input variants and `DTSHDHDR` input can be read
-from a pipe. DTS-HD Master Audio reports the 16-, 20-, or 24-bit source
-precision exposed by the decoder; core streams without explicit precision
-use a nominal 16-bit value.
-
-The DTS core encoder accepts mono, stereo, `quad(side)`, `5.0(side)`, and
-`5.1(side)` at the sample rates listed by `sox --help-format dts`. `-C`
-selects a bitrate from 32 through 3840 kbit/s and defaults to 768 kbit/s.
-Four-, five-, and six-channel outputs use the corresponding side-surround
-layout when no explicit layout is supplied and produce a warning identifying
-the assumed order. DTS is frame based, so the encoder pads a short final
-frame; for example, 1001 input samples decode as 1024 samples.
-
-SoX preserves the channel order produced by FFmpeg and never remixes it.
-FFmpeg publicly identifies DTS-ES Discrete as the DTS-ES profile, but does
-not expose Matrix and Discrete as separate public profiles. In particular,
-a DTS-ES Matrix source may be exposed as a 5.1 core presentation rather than
-an expanded 6.1 layout. SoX decodes that available channel-based
-presentation without claiming to preserve a distinction the decoder does
-not report.
-
-When FFmpeg identifies DTS:X or DTS:X IMAX, SoX warns that object/spatial
-metadata is ignored and decodes only the available channel-based
-presentation. FFmpeg does not expose DTS:X Pro as a distinct public profile,
-so SoX cannot label Pro separately; it applies the same non-rendering policy
-whenever FFmpeg reports a DTS:X profile. DTS-HD encoding and DTS:X
-rendering or authoring are not supported.
-
-This handler does not support the newer DTS-UHD Profile 2 codec carried in
-MP4 with the `dtsx` sample entry. FFmpeg does not expose that stream as
-`AV_CODEC_ID_DTS`, and generic MP4 container handling is outside the scope of
-the elementary-stream handler.
-
-`testall.sh` includes short bundled fixtures for DTS-HD HRA, DTS-HD MA,
-DTS:X, DTS:X IMAX, and an unsupported DTS-UHD Profile 2 negative case. The
-fixtures are audio-only extracts, so the test suite does not depend on the
-original containers or invoke the `ffmpeg` executable.
-
-Additional `libavcodec` AVOptions can be passed to an FFmpeg-backed input or
-output with `--ffmpeg-opts`. Use `key=value:key=value` syntax and place the
-option immediately before the file it applies to:
+Use `--ffmpeg-opts key=value:key=value` immediately before an FFmpeg-backed input or output file. Bitrate, sample rate, channels, layout, sample format, and time base remain controlled by SoX options.
 
 ```bash
-# Encode E-AC-3 with additional encoder metadata/options
+# E-AC-3 encoder options
 ./output/sox input.wav -C 640 \
   --ffmpeg-opts 'dialnorm=-27:dmix_mode=loro:stereo_rematrixing=0' output.eac3
 
-# Configure the E-AC-3 decoder
+# E-AC-3 decoder options
 ./output/sox --ffmpeg-opts 'drc_scale=0.5' input.eac3 output.wav
 ```
 
-Unknown options, options unsupported by the selected encoder or decoder, and
-use with a non-FFmpeg format are errors. Options controlling bitrate, sample
-rate, channels/layout/order, sample format, downmixing, or time base remain
-owned by SoX and cannot be overridden through `--ffmpeg-opts`; use `-C`,
-`-r`, `-c`, `--channel-layout`, and SoX effects such as `remix` instead.
-Available passthrough options depend on the installed FFmpeg version.
+Unsupported options are rejected. Available passthrough options depend on the selected FFmpeg codec.
+
+Dolby Atmos and DTS:X object metadata is reported but not rendered; decoding returns the channel-based presentation. DTS-UHD Profile 2 is not supported.
 
 ### 5. Verify Static Linking
 
@@ -654,30 +473,19 @@ otool -L ./output/sox
 dumpbin /DEPENDENTS .\output\sox.exe
 ```
 
-On Linux, dynamic dependencies are expected for operating-system integration,
-such as glibc, the ALSA client library, and the explicitly enabled PulseAudio
-client libraries. FFmpeg, FLAC, Ogg/Vorbis, Opus, libsndfile, MP3/MP2,
-WavPack, AMR, PNG, libmagic, and libao must not appear as direct `DT_NEEDED`
-entries because those bundled third-party dependencies are linked statically.
+On Linux, operating-system libraries such as glibc, ALSA, and explicitly enabled PulseAudio libraries may be dynamic. FFmpeg, FLAC, Ogg/Vorbis, Opus, libsndfile, MP3/MP2, WavPack, AMR, PNG, libmagic, and libao must not appear as direct `DT_NEEDED` entries.
 
-On FreeBSD, base-system and compiler runtime libraries such as `libc`, `libm`,
-`libthr`, and `libomp` may appear as dynamic dependencies. Codec libraries and
-libao must not appear, and the executable must not contain an `RPATH` or
-`RUNPATH` pointing to `/usr/local/lib`.
+On FreeBSD, base-system and compiler runtime libraries such as `libc`, `libm`, `libthr`, and `libomp` may be dynamic. Codec libraries and libao must not appear, and the executable must not contain an `RPATH` or `RUNPATH` pointing to `/usr/local/lib`.
 
-On macOS, every listed dependency must come from `/usr/lib` or
-`/System/Library`, for example:
+On macOS, every dependency must come from `/usr/lib` or `/System/Library`, for example:
 
 - `libSystem.B.dylib`
 - `CoreAudio.framework`
 - `CoreFoundation.framework`
 
-FFmpeg and the bundled codec libraries must not appear as `.dylib`
-dependencies.
+FFmpeg and the bundled codec libraries must not appear as `.dylib` dependencies.
 
-On Windows, only operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`,
-and `bcrypt.dll` should appear. Codec DLLs, MSYS runtime DLLs, `VCRUNTIME`,
-`MSVCP`, `ucrtbase`, and `VCOMP` must not appear.
+On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and `bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual C++ Redistributable for OpenMP support. Codec DLLs, MSYS runtime DLLs, `VCRUNTIME`, `MSVCP`, and `ucrtbase` must not appear.
 
 ### 6. Test Audio Playback
 

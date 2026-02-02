@@ -68,6 +68,9 @@ option(SOX_REQUIRE_STATIC_DEPENDENCIES
     "Reject shared third-party libraries and require static codec dependencies"
     OFF)
 option(WITH_OPENMP "Enable OpenMP support" ON)
+option(SOX_REQUIRE_OPENMP
+    "Fail configuration when OpenMP support is unavailable"
+    OFF)
 
 if(BUILD_STATIC_EXECUTABLE)
     set(BUILD_SHARED_LIBS OFF)
@@ -99,6 +102,11 @@ endif()
 if(SOX_REQUIRE_STATIC_DEPENDENCIES AND BUILD_SHARED_LIBS)
     message(FATAL_ERROR
         "SOX_REQUIRE_STATIC_DEPENDENCIES requires BUILD_SHARED_LIBS=OFF")
+endif()
+
+if(SOX_REQUIRE_OPENMP AND NOT WITH_OPENMP)
+    message(FATAL_ERROR
+        "SOX_REQUIRE_OPENMP requires WITH_OPENMP=ON")
 endif()
 
 if(SOX_REQUIRE_STATIC_DEPENDENCIES)
@@ -212,9 +220,12 @@ endif()
 
 # OpenMP support
 if(WITH_OPENMP)
-    find_package(OpenMP)
+    find_package(OpenMP COMPONENTS C)
     if(OpenMP_C_FOUND)
         set(HAVE_OPENMP TRUE)
+    elseif(SOX_REQUIRE_OPENMP)
+        message(FATAL_ERROR
+            "OpenMP support is required but was not found for the C compiler")
     endif()
 endif()
 

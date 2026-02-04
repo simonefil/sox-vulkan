@@ -123,7 +123,6 @@ set(LIBSOX_EFFECTS_HEADERS
     rate_poly_fir0.h
     rate_poly_fir.h
     sdm.h
-    sdm_x86.h
 )
 
 # Built-in format handlers

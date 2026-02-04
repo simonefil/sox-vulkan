@@ -42,6 +42,7 @@
 
 #include "sox_i.h"
 #include "sdm.h"
+#include <assert.h>
 
 #define MAX_FILTER_ORDER 8
 #define PATH_HASH_SIZE 128
@@ -88,7 +89,10 @@ struct sdm {
   unsigned      draining;
   unsigned      idx;
   const sdm_filter_t *filter;
+  double        simple_state[MAX_FILTER_ORDER];
   double        prev_y;
+  uint8_t       packet;
+  uint8_t       packet_bits;
   uint64_t      conv_fail;
   uint8_t       hist[2 * SDM_TRELLIS_MAX_NUM][SDM_TRELLIS_MAX_LAT / 8];
 };
@@ -842,9 +846,6 @@ static const sdm_filter_t *sdm_find_filter(const char *name, unsigned freq)
   return NULL;
 }
 
-#include "sdm_x86.h"
-
-#ifndef sdm_filter_calc
 static double sdm_filter_calc(const double *s, double *d,
                               const sdm_filter_t *f,
                               double x, double y)
@@ -867,11 +868,9 @@ static double sdm_filter_calc(const double *s, double *d,
   
   return v;
 }
-#endif
 
 //MARK:- Trellis paths method
 
-#ifndef sdm_filter_calc2
 static void sdm_filter_calc2(sdm_state_t *src, sdm_state_t *dst,
                              const sdm_filter_t *f, double x)
 {
@@ -890,7 +889,6 @@ static void sdm_filter_calc2(sdm_state_t *src, sdm_state_t *dst,
   dst[0].cost = src->cost + sqr(v + a[0]);
   dst[1].cost = src->cost + sqr(v - a[0]);
 }
-#endif
 
 static inline unsigned sdm_histbuf_get(sdm_t *p)
 {
@@ -1106,20 +1104,205 @@ static sox_sample_t sdm_sample_trellis(sdm_t *p, double x)
 static sox_sample_t sdm_sample_1bit(sdm_t *p, double x)
 {
   const sdm_filter_t *f = p->filter;
-  double *s0 = p->trellis[0].sdm[p->idx].state;
-  double *s1 = p->trellis[0].sdm[p->idx ^ 1].state;
+  double next[MAX_FILTER_ORDER];
   double y, v;
   
-  v = sdm_filter_calc(s0, s1, f, x, p->prev_y);
+  v = sdm_filter_calc(p->simple_state, next, f, x, p->prev_y);
   y = signbit(v) ? -1.0 : 1.0;
   
-  p->idx ^= 1;
+  memcpy(p->simple_state, next, (size_t)f->order * sizeof(*next));
   p->prev_y = y;
   
   return y;
 }
 
 //MARK:- Processing
+
+#define SDM_KERNEL_BEGIN()                                                   \
+  const double *a = p->filter->a;                                           \
+  const double *g = p->filter->g;                                           \
+  double s0 = p->simple_state[0];                                           \
+  double s1 = p->simple_state[1];                                           \
+  double s2 = p->simple_state[2];                                           \
+  double s3 = p->simple_state[3];                                           \
+  double y = p->prev_y;                                                     \
+  const double scale = 0.5 / SOX_SAMPLE_MAX
+
+#define SDM_KERNEL_LOAD_HIGH_STATE()                                        \
+  double s4 = p->simple_state[4];                                           \
+  double s5 = p->simple_state[5];                                           \
+  double s6 = p->simple_state[6];                                           \
+  double s7 = p->simple_state[7]
+
+#define SDM_KERNEL_STEP_LOW()                                                \
+  double x = *ibuf++ * scale;                                               \
+  double d0 = s0 - g[0] * s1 + x - y;                                      \
+  double d1 = s1 + s0 - g[1] * s2;                                         \
+  double d2 = s2 + s1 - g[2] * s3;                                         \
+  double v = x + a[0] * d0;                                                 \
+  v += a[1] * d1;                                                          \
+  v += a[2] * d2
+
+#define SDM_KERNEL_OUTPUT()                                                  \
+  y = signbit(v) ? -1.0 : 1.0;                                             \
+  *obuf++ = (sox_sample_t)(y * SOX_SAMPLE_MAX)
+
+static void sdm_process_simple_order4(sdm_t *p, const sox_sample_t *ibuf,
+                                      sox_sample_t *obuf, size_t len)
+{
+  SDM_KERNEL_BEGIN();
+
+  while (len--) {
+    SDM_KERNEL_STEP_LOW();
+    double d3 = s3 + s2;
+    v += a[3] * d3;
+    SDM_KERNEL_OUTPUT();
+    s0 = d0, s1 = d1, s2 = d2, s3 = d3;
+  }
+
+  p->simple_state[0] = s0;
+  p->simple_state[1] = s1;
+  p->simple_state[2] = s2;
+  p->simple_state[3] = s3;
+  p->prev_y = y;
+}
+
+static void sdm_process_simple_order5(sdm_t *p, const sox_sample_t *ibuf,
+                                      sox_sample_t *obuf, size_t len)
+{
+  SDM_KERNEL_BEGIN();
+  double s4 = p->simple_state[4];
+
+  while (len--) {
+    SDM_KERNEL_STEP_LOW();
+    double d3 = s3 + s2 - g[3] * s4;
+    double d4 = s4 + s3;
+    v += a[3] * d3;
+    v += a[4] * d4;
+    SDM_KERNEL_OUTPUT();
+    s0 = d0, s1 = d1, s2 = d2, s3 = d3, s4 = d4;
+  }
+
+  p->simple_state[0] = s0;
+  p->simple_state[1] = s1;
+  p->simple_state[2] = s2;
+  p->simple_state[3] = s3;
+  p->simple_state[4] = s4;
+  p->prev_y = y;
+}
+
+static void sdm_process_simple_order6(sdm_t *p, const sox_sample_t *ibuf,
+                                      sox_sample_t *obuf, size_t len)
+{
+  SDM_KERNEL_BEGIN();
+  double s4 = p->simple_state[4];
+  double s5 = p->simple_state[5];
+
+  while (len--) {
+    SDM_KERNEL_STEP_LOW();
+    double d3 = s3 + s2 - g[3] * s4;
+    double d4 = s4 + s3 - g[4] * s5;
+    double d5 = s5 + s4;
+    v += a[3] * d3;
+    v += a[4] * d4;
+    v += a[5] * d5;
+    SDM_KERNEL_OUTPUT();
+    s0 = d0, s1 = d1, s2 = d2, s3 = d3, s4 = d4, s5 = d5;
+  }
+
+  p->simple_state[0] = s0;
+  p->simple_state[1] = s1;
+  p->simple_state[2] = s2;
+  p->simple_state[3] = s3;
+  p->simple_state[4] = s4;
+  p->simple_state[5] = s5;
+  p->prev_y = y;
+}
+
+static void sdm_process_simple_order7(sdm_t *p, const sox_sample_t *ibuf,
+                                      sox_sample_t *obuf, size_t len)
+{
+  SDM_KERNEL_BEGIN();
+  double s4 = p->simple_state[4];
+  double s5 = p->simple_state[5];
+  double s6 = p->simple_state[6];
+
+  while (len--) {
+    SDM_KERNEL_STEP_LOW();
+    double d3 = s3 + s2 - g[3] * s4;
+    double d4 = s4 + s3 - g[4] * s5;
+    double d5 = s5 + s4 - g[5] * s6;
+    double d6 = s6 + s5;
+    v += a[3] * d3;
+    v += a[4] * d4;
+    v += a[5] * d5;
+    v += a[6] * d6;
+    SDM_KERNEL_OUTPUT();
+    s0 = d0, s1 = d1, s2 = d2, s3 = d3;
+    s4 = d4, s5 = d5, s6 = d6;
+  }
+
+  p->simple_state[0] = s0;
+  p->simple_state[1] = s1;
+  p->simple_state[2] = s2;
+  p->simple_state[3] = s3;
+  p->simple_state[4] = s4;
+  p->simple_state[5] = s5;
+  p->simple_state[6] = s6;
+  p->prev_y = y;
+}
+
+static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf,
+                                      sox_sample_t *obuf, size_t len)
+{
+  SDM_KERNEL_BEGIN();
+  SDM_KERNEL_LOAD_HIGH_STATE();
+
+  while (len--) {
+    SDM_KERNEL_STEP_LOW();
+    double d3 = s3 + s2 - g[3] * s4;
+    double d4 = s4 + s3 - g[4] * s5;
+    double d5 = s5 + s4 - g[5] * s6;
+    double d6 = s6 + s5 - g[6] * s7;
+    double d7 = s7 + s6;
+    v += a[3] * d3;
+    v += a[4] * d4;
+    v += a[5] * d5;
+    v += a[6] * d6;
+    v += a[7] * d7;
+    SDM_KERNEL_OUTPUT();
+    s0 = d0, s1 = d1, s2 = d2, s3 = d3;
+    s4 = d4, s5 = d5, s6 = d6, s7 = d7;
+  }
+
+  p->simple_state[0] = s0;
+  p->simple_state[1] = s1;
+  p->simple_state[2] = s2;
+  p->simple_state[3] = s3;
+  p->simple_state[4] = s4;
+  p->simple_state[5] = s5;
+  p->simple_state[6] = s6;
+  p->simple_state[7] = s7;
+  p->prev_y = y;
+}
+
+#undef SDM_KERNEL_OUTPUT
+#undef SDM_KERNEL_STEP_LOW
+#undef SDM_KERNEL_LOAD_HIGH_STATE
+#undef SDM_KERNEL_BEGIN
+
+static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf,
+                               sox_sample_t *obuf, size_t len)
+{
+  switch (p->filter->order) {
+    case 4: sdm_process_simple_order4(p, ibuf, obuf, len); break;
+    case 5: sdm_process_simple_order5(p, ibuf, obuf, len); break;
+    case 6: sdm_process_simple_order6(p, ibuf, obuf, len); break;
+    case 7: sdm_process_simple_order7(p, ibuf, obuf, len); break;
+    case 8: sdm_process_simple_order8(p, ibuf, obuf, len); break;
+    default: assert(0);
+  }
+}
 
 int sdm_process(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf,
                 size_t *ilen, size_t *olen)
@@ -1143,10 +1326,8 @@ int sdm_process(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf,
       *out++ = sdm_sample_trellis(p, x);
     }
   } else {
-    while (len--) {
-      x = *ibuf++ * (0.5 / SOX_SAMPLE_MAX);
-      *out++ = sdm_sample_1bit(p, x) * SOX_SAMPLE_MAX;
-    }
+    sdm_process_simple(p, ibuf, out, len);
+    out += len;
   }
   
   *olen = out - obuf;
@@ -1177,46 +1358,38 @@ int sdm_drain(sdm_t *p, sox_sample_t *obuf, size_t *olen)
   return SOX_SUCCESS;
 }
 
-///Process input in 64bit format into a 8bit packet of 1bit samples
+static inline void sdm_packet_push(sdm_t *p, uint8_t **out, int bit)
+{
+  p->packet = (uint8_t)((p->packet << 1) | !!bit);
+  if (++p->packet_bits == 8) {
+    *(*out)++ = p->packet;
+    p->packet = 0;
+    p->packet_bits = 0;
+  }
+}
+
+///Process input in 64bit format into 8bit packets of 1bit samples
+/// - important: inLength must be a multiple of 8
 /// - important: outPackets size must be at least inLength / 8
 /// - returns: number of packets in outPackets
-size_t sdm_packet_process(sdm_t *p, const double *inSamples, uint8_t *outPackets, size_t inLength) {
+size_t sdm_packet_process(sdm_t *p, const double *inSamples,
+                          uint8_t *outPackets, size_t inLength)
+{
   uint8_t *oPacket = outPackets;
-  size_t len = inLength / 8;
+  size_t len = inLength - inLength % 8;
   
   if (p->trellis_mask) {
-    if (p->pending < p->trellis_lat) {
-      size_t pre = min(p->trellis_lat - p->pending, len * 8);
-      p->pending += pre;
-      len -= pre / 8;
-      while (pre--) {
-        sdm_sample_trellis(p, *inSamples / 2); // -6dB before SDM
-        inSamples++;
-      }
-    }
     while (len--) {
-      uint8_t packet = 0;
-      for (int b = 7; b >= 0; b--) { //Packet bits order: MSB to LSB
-        if (sdm_sample_trellis(p, *inSamples / 2.0) > 0) { // -6dB before SDM
-          packet |= 1 << b;
-        }
-        inSamples++;
-      }
-      *oPacket = packet;
-      oPacket++;
+      sox_sample_t sample = sdm_sample_trellis(p, *inSamples++ / 2.0);
+      if (p->pending < p->trellis_lat)
+        ++p->pending;
+      else
+        sdm_packet_push(p, &oPacket, sample > 0);
     }
   } else {
-    //Simple noise filtering
     while (len--) {
-      uint8_t packet = 0;
-      for (int b = 7; b >= 0; b--) { //Packet bits order: MSB to LSB
-        if (sdm_sample_1bit(p, *inSamples / 2.0) > 0) { // -6dB before SDM
-          packet |= 1 << b;
-        }
-        inSamples++;
-      }
-      *oPacket = packet;
-      oPacket++;
+      sox_sample_t sample = sdm_sample_1bit(p, *inSamples++ / 2.0);
+      sdm_packet_push(p, &oPacket, sample > 0);
     }
   }
   return oPacket - outPackets;
@@ -1224,36 +1397,33 @@ size_t sdm_packet_process(sdm_t *p, const double *inSamples, uint8_t *outPackets
 
 ///Drain filter in 8bit packets
 /// - returns: number of packets in outPackets
-size_t sdm_packet_drain(sdm_t *p, uint8_t *outPackets, size_t outBufSize) {
+size_t sdm_packet_drain(sdm_t *p, uint8_t *outPackets, size_t outBufSize)
+{
   uint8_t *oPacket = outPackets;
   
-  if (p->trellis_mask) {
-    size_t len = min(p->pending, outBufSize * 8);
-    
-    if (!p->draining && p->pending < p->trellis_lat) {
-      unsigned flush = p->trellis_lat - p->pending;
-      while (flush--)
-        sdm_sample_trellis(p, 0.0);
-    }
-    
-    p->draining = 1;
-    p->pending -= len;
-    
-    while (len >= 8) {
-      uint8_t packet = 0;
-      for (int b = 7; b >= 0; b--) { //Packet bits order: MSB to LSB
-        if (sdm_sample_trellis(p, 0.0) > 0) { // -6dB before SDM
-          packet |= 1 << b;
-        }
-      }
-      len -= 8;
-      *oPacket = packet;
-      oPacket++;
-    }
-    return oPacket - outPackets;
-  } else {
+  if (!p->trellis_mask || !outBufSize)
     return 0;
+
+  if (!p->draining && p->pending < p->trellis_lat) {
+    unsigned flush = p->trellis_lat - p->pending;
+    while (flush--)
+      sdm_sample_trellis(p, 0.0);
   }
+
+  p->draining = 1;
+
+  {
+    size_t capacity = outBufSize * 8 - p->packet_bits;
+    size_t len = min(p->pending, capacity);
+    p->pending -= len;
+
+    while (len--) {
+      sox_sample_t sample = sdm_sample_trellis(p, 0.0);
+      sdm_packet_push(p, &oPacket, sample > 0);
+    }
+  }
+
+  return oPacket - outPackets;
 }
 
 sdm_t *sdm_init(const char *filter_name,
@@ -1291,6 +1461,7 @@ sdm_t *sdm_init(const char *filter_name,
   p->filter = sdm_find_filter(filter_name, freq);
   if (!p->filter) {
     lsx_fail("invalid filter name `%s'", filter_name);
+    aligned_free(p);
     return NULL;
   }
   

@@ -43,6 +43,8 @@ struct dsf {
 	uint64_t read_samp;
 };
 
+static size_t dsf_write_packed(sox_format_t *, const sox_sample_t *, size_t);
+
 #define TAG(a, b, c, d) ((a) | (b) << 8 | (c) << 16 | (d) << 24)
 
 #define DSF_TAG  TAG('D', 'S', 'D', ' ')
@@ -279,6 +281,7 @@ static int dsf_startwrite(sox_format_t *ft)
 {
 	struct dsf *dsf = ft->priv;
 
+	ft->write_packed_dsd = dsf_write_packed;
 	dsf->version = 1;
 	dsf->format_id = 0;
 	dsf->chan_type = ft->signal.channels + (ft->signal.channels > 4);
@@ -372,6 +375,68 @@ static size_t dsf_write(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 	dsf->scount += wsamp;
 
 	return wsamp * nchan;
+}
+
+static uint8_t dsf_reverse_byte(uint8_t value)
+{
+	value = (uint8_t)((value >> 4) | (value << 4));
+	value = (uint8_t)(((value & 0xcc) >> 2) | ((value & 0x33) << 2));
+	return (uint8_t)(((value & 0xaa) >> 1) | ((value & 0x55) << 1));
+}
+
+static size_t dsf_write_packed(sox_format_t *ft,
+			       const sox_sample_t *buf, size_t len)
+{
+	struct dsf *dsf = ft->priv;
+	unsigned channels = dsf->chan_num;
+	size_t consumed = 0;
+
+	while (len >= channels) {
+		unsigned valid = SOX_DSD_PACKED_VALID_BITS(buf[0]);
+		unsigned i, j;
+
+		if (!valid || valid > 8 - dsf->bit_pos)
+			break;
+
+		if (valid == 8 && !dsf->bit_pos) {
+			for (i = 0; i < channels; ++i) {
+				if (SOX_DSD_PACKED_VALID_BITS(buf[i]) != valid)
+					return consumed;
+				dsf->block[i * dsf->block_size + dsf->block_pos] =
+					dsf_reverse_byte(
+						SOX_DSD_PACKED_DATA(buf[i]));
+			}
+			dsf->block_pos++;
+			if (dsf_write_buf(ft))
+				break;
+		} else {
+			for (i = 0; i < channels; ++i) {
+				uint8_t data = SOX_DSD_PACKED_DATA(buf[i]);
+				uint8_t *target = dsf->block +
+					i * dsf->block_size + dsf->block_pos;
+
+				if (SOX_DSD_PACKED_VALID_BITS(buf[i]) != valid)
+					return consumed;
+				for (j = 0; j < valid; ++j)
+					*target |= ((data >> (7 - j)) & 1) <<
+						(dsf->bit_pos + j);
+			}
+			dsf->bit_pos += valid;
+			if (dsf->bit_pos == 8) {
+				dsf->bit_pos = 0;
+				dsf->block_pos++;
+				if (dsf_write_buf(ft))
+					break;
+			}
+		}
+
+		dsf->scount += valid;
+		buf += channels;
+		len -= channels;
+		consumed += channels;
+	}
+
+	return consumed;
 }
 
 static int dsf_stopwrite(sox_format_t *ft)

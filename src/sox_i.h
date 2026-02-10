@@ -121,6 +121,8 @@ void lsx_save_samples(sox_sample_t * const dest, double const * const src,
     size_t const n, sox_uint64_t * const clips);
 void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     size_t const n);
+void lsx_normalize_samples(double * const dest, double const * const src,
+    size_t const n);
 
 #ifdef HAVE_BYTESWAP_H
 #include <byteswap.h>
@@ -255,6 +257,10 @@ char * lsx_usage_lines(char * * usage, char const * const * lines, size_t n);
 #define EFFECT(f) extern sox_effect_handler_t const * lsx_##f##_effect_fn(void);
 #include "effects.h"
 #undef EFFECT
+
+int lsx_rate_flow_double(sox_effect_t *, const sox_sample_t *,
+                         size_t *, double *, size_t *);
+int lsx_rate_drain_double(sox_effect_t *, double *, size_t *);
 
 #define NUMERIC_PARAMETER(name, min, max) { \
   char * end_ptr; \

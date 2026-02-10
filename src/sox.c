@@ -665,6 +665,25 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
   size_t len;
 
   (void)effp, (void)obuf;
+  if (effp->in_signal.packing) {
+    size_t channels = effp->in_signal.channels;
+    size_t i;
+
+    *osamp = 0;
+    if (effp->in_signal.packing != SOX_DSD_PACKING_BYTE ||
+        !ofile->ft->write_packed_dsd) {
+      lsx_fail("packed DSD output requires a DSF or DSDIFF writer");
+      return SOX_EOF;
+    }
+
+    len = *isamp ?
+        sox_write_packed_dsd(ofile->ft, ibuf, *isamp) : 0;
+    for (i = 0; i < len; i += channels)
+      output_samples += SOX_DSD_PACKED_VALID_BITS(ibuf[i]);
+    output_eof = len != *isamp ? sox_true : sox_false;
+    return len == *isamp ? SOX_SUCCESS : SOX_EOF;
+  }
+
   if (show_progress) for (len = 0; len < *isamp; len += effp->in_signal.channels) {
     omax[0] = max(omax[0], ibuf[len]);
     omin[0] = min(omin[0], ibuf[len]);
@@ -1823,8 +1842,9 @@ static int process(void)
    *    effect chains.
    * For case #2, something else must decide when to stop processing.
    */
-  if ((input_eof && current_input < input_count) ||
-      (!output_eof && current_eff_chain < eff_chain_count))
+  if (flow_status == SOX_EOF &&
+      ((input_eof && current_input < input_count) ||
+       (!output_eof && current_eff_chain < eff_chain_count)))
     flow_status = SOX_SUCCESS;
 
   return flow_status;

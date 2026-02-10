@@ -276,14 +276,14 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
 
 #ifdef HAVE_OPENMP_3_1
     #pragma omp parallel for \
-        if(sox_globals.use_threads) \
+        if(sox_globals.use_threads && thread_count > 1) \
         num_threads(thread_count) \
         schedule(static) default(none) \
         shared(effp,effp1,idone,obeg,obuf,flow_offs,chain,n,effstatus) \
         reduction(min:idone_min,odone_min) reduction(max:idone_max,odone_max)
 #elif defined HAVE_OPENMP
     #pragma omp parallel for \
-        if(sox_globals.use_threads) \
+        if(sox_globals.use_threads && thread_count > 1) \
         num_threads(thread_count) \
         schedule(static) default(none) \
         shared(effp,effp1,idone,obeg,obuf,flow_offs,chain,n,effstatus) \
@@ -300,8 +300,9 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
       idone_min = min(idonec, idone_min); idone_max = max(idonec, idone_max);
       odone_min = min(odonec, odone_min); odone_max = max(odonec, odone_max);
 
-      if (eff_status_c != SOX_SUCCESS)
-        effstatus = SOX_EOF;
+      if (eff_status_c != SOX_SUCCESS &&
+          (effstatus == SOX_SUCCESS || eff_status_c != SOX_EOF))
+        effstatus = eff_status_c;
     }
 
     if (idone_min != idone_max || odone_min != odone_max) {
@@ -338,7 +339,7 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
       effp1->oend - effp1->obeg, effp1->obeg, effp1->oend);
 #endif
 
-  return effstatus == SOX_SUCCESS? SOX_SUCCESS : SOX_EOF;
+  return effstatus;
 }
 
 /* The same as flow_effect but with no input */
@@ -381,8 +382,9 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
       }
       odone_last = odonec;
 
-      if (eff_status_c != SOX_SUCCESS)
-        effstatus = SOX_EOF;
+      if (eff_status_c != SOX_SUCCESS &&
+          (effstatus == SOX_SUCCESS || eff_status_c != SOX_EOF))
+        effstatus = eff_status_c;
     }
 
     obeg = effp->flows * odone_last;
@@ -402,7 +404,7 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
       n, effp->flows, (size_t)0, pre_odone, (size_t)0, obeg);
 #endif
 
-  return effstatus == SOX_SUCCESS? SOX_SUCCESS : SOX_EOF;
+  return effstatus;
 }
 
 /* Flow data through the effects chain until an effect or callback gives EOF */
@@ -448,16 +450,24 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
 #define have_imin (e > 0 && e < chain->length && chain->effects[e - 1]->oend - chain->effects[e - 1]->obeg >= chain->effects[e]->imin)
     size_t osize = chain->effects[e]->oend - chain->effects[e]->obeg;
     if (e == source_e && (draining || !have_imin)) {
-      if (drain_effect(chain, e) == SOX_EOF) {
+      int status = drain_effect(chain, e);
+      if (status != SOX_SUCCESS && status != SOX_EOF) {
+        flow_status = status;
+        break;
+      }
+      if (status == SOX_EOF) {
         ++source_e;
         draining = sox_false;
       }
-    } else if (have_imin && flow_effect(chain, e) == SOX_EOF) {
-      flow_status = SOX_EOF;
-      if (e == chain->length - 1)
-        break;
-      source_e = e;
-      draining = sox_true;
+    } else if (have_imin) {
+      int status = flow_effect(chain, e);
+      if (status != SOX_SUCCESS) {
+        flow_status = status;
+        if (status != SOX_EOF || e == chain->length - 1)
+          break;
+        source_e = e;
+        draining = sox_true;
+      }
     }
     if (e < chain->length && chain->effects[e]->oend - chain->effects[e]->obeg > osize) /* False for output */
       ++e;

@@ -39,6 +39,7 @@
 #define SDM_TRELLIS_MAX_ORDER 32
 #define SDM_TRELLIS_MAX_NUM   32
 #define SDM_TRELLIS_MAX_LAT   2048
+#define SDM_MAX_THREADS       INT_MAX
 
 typedef struct sdm sdm_t;
 
@@ -47,7 +48,8 @@ sdm_t *sdm_init(const char *filter_name,
                 unsigned freq,
                 unsigned trellis_order,
                 unsigned trellis_num,
-                unsigned trellis_latency);
+                unsigned trellis_latency,
+                unsigned threads);
 
 SOX_EXPORT
 int sdm_process(sdm_t *s, const sox_sample_t *ibuf, sox_sample_t *obuf,

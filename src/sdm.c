@@ -45,6 +45,7 @@
 #include <assert.h>
 
 #define MAX_FILTER_ORDER 8
+#define SDM_STATE_LIMIT 1e100
 #define PATH_HASH_SIZE 128
 #define PATH_HASH_MASK (PATH_HASH_SIZE - 1)
 
@@ -88,6 +89,8 @@ struct sdm {
   unsigned      pending;
   unsigned      draining;
   unsigned      idx;
+  unsigned      threads;
+  unsigned      failed;
   const sdm_filter_t *filter;
   double        simple_state[MAX_FILTER_ORDER];
   double        prev_y;
@@ -207,6 +210,7 @@ struct sdm {
 
 
 static const sdm_filter_t sdm_filters[] = {
+#include "sdm_high_rate_coefficients.inc"
   {
     {
       7.85192429016760e-01,
@@ -1259,17 +1263,20 @@ static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf,
   SDM_KERNEL_LOAD_HIGH_STATE();
 
   while (len--) {
-    SDM_KERNEL_STEP_LOW();
+    double x = *ibuf++ * scale;
+    double d0 = s0 - g[0] * s1 + x - y;
+    double d1 = s1 + s0 - g[1] * s2;
+    double d2 = s2 + s1 - g[2] * s3;
     double d3 = s3 + s2 - g[3] * s4;
     double d4 = s4 + s3 - g[4] * s5;
     double d5 = s5 + s4 - g[5] * s6;
     double d6 = s6 + s5 - g[6] * s7;
     double d7 = s7 + s6;
-    v += a[3] * d3;
-    v += a[4] * d4;
-    v += a[5] * d5;
-    v += a[6] * d6;
-    v += a[7] * d7;
+    double v01 = a[0] * d0 + a[1] * d1;
+    double v23 = a[2] * d2 + a[3] * d3;
+    double v45 = a[4] * d4 + a[5] * d5;
+    double v67 = a[6] * d6 + a[7] * d7;
+    double v = x + (v01 + v23) + (v45 + v67);
     SDM_KERNEL_OUTPUT();
     s0 = d0, s1 = d1, s2 = d2, s3 = d3;
     s4 = d4, s5 = d5, s6 = d6, s7 = d7;
@@ -1304,6 +1311,240 @@ static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf,
   }
 }
 
+static sox_bool sdm_simple_state_valid(const sdm_t *p)
+{
+  int i;
+
+  if (!isfinite(p->prev_y))
+    return sox_false;
+  for (i = 0; i < p->filter->order; ++i)
+    if (!isfinite(p->simple_state[i]) ||
+        fabs(p->simple_state[i]) > SDM_STATE_LIMIT)
+      return sox_false;
+  return sox_true;
+}
+
+static size_t sdm_process_simple_packed(const sdm_filter_t *f,
+                                        double *state, double *prev_y,
+                                        uint8_t *packet,
+                                        unsigned packet_bits,
+                                        const sox_sample_t *ibuf,
+                                        sox_sample_t *obuf, size_t len,
+                                        size_t input_stride,
+                                        size_t output_stride)
+{
+  double y = *prev_y;
+  const double scale = 0.5 / SOX_SAMPLE_MAX;
+  size_t emitted = 0;
+
+  if (f->order == 8) {
+    const double *a = f->a;
+    const double *g = f->g;
+    double s0 = state[0];
+    double s1 = state[1];
+    double s2 = state[2];
+    double s3 = state[3];
+    double s4 = state[4];
+    double s5 = state[5];
+    double s6 = state[6];
+    double s7 = state[7];
+
+#define SDM_PACKED_ORDER8_STEP(target) do {                                 \
+      double x = *ibuf * scale;                                             \
+      double d0 = s0 - g[0] * s1 + x - y;                                  \
+      double d1 = s1 + s0 - g[1] * s2;                                     \
+      double d2 = s2 + s1 - g[2] * s3;                                     \
+      double d3 = s3 + s2 - g[3] * s4;                                     \
+      double d4 = s4 + s3 - g[4] * s5;                                     \
+      double d5 = s5 + s4 - g[5] * s6;                                     \
+      double d6 = s6 + s5 - g[6] * s7;                                     \
+      double d7 = s7 + s6;                                                  \
+      double v01 = a[0] * d0 + a[1] * d1;                                  \
+      double v23 = a[2] * d2 + a[3] * d3;                                  \
+      double v45 = a[4] * d4 + a[5] * d5;                                  \
+      double v67 = a[6] * d6 + a[7] * d7;                                  \
+      double v = x + (v01 + v23) + (v45 + v67);                            \
+      y = signbit(v) ? -1.0 : 1.0;                                         \
+      (target) = (uint8_t)(((target) << 1) | (y > 0));                      \
+      s0 = d0, s1 = d1, s2 = d2, s3 = d3;                                 \
+      s4 = d4, s5 = d5, s6 = d6, s7 = d7;                                 \
+      ibuf += input_stride;                                                  \
+    } while (0)
+
+    while (packet_bits && len) {
+      SDM_PACKED_ORDER8_STEP(*packet);
+      packet_bits++;
+      len--;
+      if (packet_bits == 8) {
+        *obuf = SOX_DSD_PACKED_BYTE(*packet, 8);
+        obuf += output_stride;
+        packet_bits = 0;
+        *packet = 0;
+        emitted++;
+      }
+    }
+
+    while (len >= 8) {
+      uint8_t value = 0;
+      unsigned i;
+
+      for (i = 0; i < 8; ++i)
+        SDM_PACKED_ORDER8_STEP(value);
+      *obuf = SOX_DSD_PACKED_BYTE(value, 8);
+      obuf += output_stride;
+      emitted++;
+      len -= 8;
+    }
+
+    while (len--) {
+      SDM_PACKED_ORDER8_STEP(*packet);
+      packet_bits++;
+    }
+
+#undef SDM_PACKED_ORDER8_STEP
+
+    state[0] = s0;
+    state[1] = s1;
+    state[2] = s2;
+    state[3] = s3;
+    state[4] = s4;
+    state[5] = s5;
+    state[6] = s6;
+    state[7] = s7;
+  } else {
+    double next[MAX_FILTER_ORDER];
+
+    while (len--) {
+      double x = *ibuf * scale;
+      double v = sdm_filter_calc(state, next, f, x, y);
+
+      y = signbit(v) ? -1.0 : 1.0;
+      *packet = (uint8_t)((*packet << 1) | (y > 0));
+      if (++packet_bits == 8) {
+        *obuf = SOX_DSD_PACKED_BYTE(*packet, 8);
+        obuf += output_stride;
+        packet_bits = 0;
+        *packet = 0;
+        emitted++;
+      }
+      memcpy(state, next, (size_t)f->order * sizeof(*next));
+      ibuf += input_stride;
+    }
+  }
+
+  *prev_y = y;
+  return emitted;
+}
+
+static size_t sdm_process_double_packed(const sdm_filter_t *f,
+                                        double *state, double *prev_y,
+                                        uint8_t *packet,
+                                        unsigned packet_bits,
+                                        const double *ibuf,
+                                        sox_sample_t *obuf, size_t len,
+                                        size_t output_stride)
+{
+  double y = *prev_y;
+  const double scale = 0.5;
+  size_t emitted = 0;
+
+  if (f->order == 8) {
+    const double *a = f->a;
+    const double *g = f->g;
+    double s0 = state[0];
+    double s1 = state[1];
+    double s2 = state[2];
+    double s3 = state[3];
+    double s4 = state[4];
+    double s5 = state[5];
+    double s6 = state[6];
+    double s7 = state[7];
+
+#define SDM_DOUBLE_ORDER8_STEP(target) do {                                 \
+      double x = *ibuf++ * scale;                                           \
+      double d0 = s0 - g[0] * s1 + x - y;                                  \
+      double d1 = s1 + s0 - g[1] * s2;                                     \
+      double d2 = s2 + s1 - g[2] * s3;                                     \
+      double d3 = s3 + s2 - g[3] * s4;                                     \
+      double d4 = s4 + s3 - g[4] * s5;                                     \
+      double d5 = s5 + s4 - g[5] * s6;                                     \
+      double d6 = s6 + s5 - g[6] * s7;                                     \
+      double d7 = s7 + s6;                                                  \
+      double v01 = a[0] * d0 + a[1] * d1;                                  \
+      double v23 = a[2] * d2 + a[3] * d3;                                  \
+      double v45 = a[4] * d4 + a[5] * d5;                                  \
+      double v67 = a[6] * d6 + a[7] * d7;                                  \
+      double v = x + (v01 + v23) + (v45 + v67);                            \
+      y = signbit(v) ? -1.0 : 1.0;                                         \
+      (target) = (uint8_t)(((target) << 1) | (y > 0));                      \
+      s0 = d0, s1 = d1, s2 = d2, s3 = d3;                                 \
+      s4 = d4, s5 = d5, s6 = d6, s7 = d7;                                 \
+    } while (0)
+
+    while (packet_bits && len) {
+      SDM_DOUBLE_ORDER8_STEP(*packet);
+      packet_bits++;
+      len--;
+      if (packet_bits == 8) {
+        *obuf = SOX_DSD_PACKED_BYTE(*packet, 8);
+        obuf += output_stride;
+        packet_bits = 0;
+        *packet = 0;
+        emitted++;
+      }
+    }
+
+    while (len >= 8) {
+      uint8_t value = 0;
+      unsigned i;
+
+      for (i = 0; i < 8; ++i)
+        SDM_DOUBLE_ORDER8_STEP(value);
+      *obuf = SOX_DSD_PACKED_BYTE(value, 8);
+      obuf += output_stride;
+      emitted++;
+      len -= 8;
+    }
+
+    while (len--) {
+      SDM_DOUBLE_ORDER8_STEP(*packet);
+      packet_bits++;
+    }
+
+#undef SDM_DOUBLE_ORDER8_STEP
+
+    state[0] = s0;
+    state[1] = s1;
+    state[2] = s2;
+    state[3] = s3;
+    state[4] = s4;
+    state[5] = s5;
+    state[6] = s6;
+    state[7] = s7;
+  } else {
+    double next[MAX_FILTER_ORDER];
+
+    while (len--) {
+      double x = *ibuf++ * scale;
+      double v = sdm_filter_calc(state, next, f, x, y);
+
+      y = signbit(v) ? -1.0 : 1.0;
+      *packet = (uint8_t)((*packet << 1) | (y > 0));
+      if (++packet_bits == 8) {
+        *obuf = SOX_DSD_PACKED_BYTE(*packet, 8);
+        obuf += output_stride;
+        packet_bits = 0;
+        *packet = 0;
+        emitted++;
+      }
+      memcpy(state, next, (size_t)f->order * sizeof(*next));
+    }
+  }
+
+  *prev_y = y;
+  return emitted;
+}
+
 int sdm_process(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf,
                 size_t *ilen, size_t *olen)
 {
@@ -1327,6 +1568,11 @@ int sdm_process(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf,
     }
   } else {
     sdm_process_simple(p, ibuf, out, len);
+    if (!sdm_simple_state_valid(p)) {
+      p->failed = 1;
+      *olen = 0;
+      return SOX_EOF;
+    }
     out += len;
   }
   
@@ -1430,7 +1676,8 @@ sdm_t *sdm_init(const char *filter_name,
                 unsigned freq,
                 unsigned trellis_order,
                 unsigned trellis_num,
-                unsigned trellis_latency)
+                unsigned trellis_latency,
+                unsigned threads)
 {
   sdm_t *p;
   const sdm_filter_t *f;
@@ -1451,13 +1698,25 @@ sdm_t *sdm_init(const char *filter_name,
     lsx_fail("trellis latency too high (max %d)", SDM_TRELLIS_MAX_LAT);
     return NULL;
   }
-  
+
+  if (!threads) {
+#if defined HAVE_OPENMP
+    threads = (unsigned)omp_get_max_threads();
+#else
+    threads = 1;
+#endif
+  }
+
+  if (trellis_order)
+    threads = 1;
+
   p = aligned_alloc((size_t)32, sizeof(*p));
   if (!p)
     return NULL;
   
   memset(p, 0, sizeof(*p));
   
+  p->threads = threads;
   p->filter = sdm_find_filter(filter_name, freq);
   if (!p->filter) {
     lsx_fail("invalid filter name `%s'", filter_name);
@@ -1508,12 +1767,69 @@ void sdm_close(sdm_t *p)
 //MARK:- SoX interface
 
 typedef struct sdm_effect {
-  sdm_t        *sdm;
+  sdm_t        **sdm;
+  sox_effect_t **rate;
+  sox_sample_t *rate_input;
+  double       *rate_output;
+  double       *rate_pending;
+  size_t        rate_input_capacity;
+  size_t        rate_output_capacity;
+  size_t        rate_pending_capacity;
+  size_t        rate_pending_count;
+  sox_bool      rate_drained;
+  size_t       *rate_consumed;
+  size_t       *rate_produced;
+  size_t       *rate_emitted;
+  uint8_t       *packet;
+  uint8_t       packet_bits;
   const char   *filter_name;
+  sox_rate_t    out_rate;
+  uint32_t      channels;
+  uint32_t      threads;
   uint32_t      trellis_order;
   uint32_t      trellis_num;
   uint32_t      trellis_lat;
 } sdm_effect_t;
+
+static void destroy_rate_effect(sox_effect_t *rate)
+{
+  if (rate) {
+    rate->handler.stop(rate);
+    free(rate->priv);
+    free(rate);
+  }
+}
+
+static void sdm_effect_cleanup(sdm_effect_t *p)
+{
+  unsigned channel;
+  size_t state_count = p->channels;
+
+  if (p->rate)
+    for (channel = 0; channel < p->channels; ++channel)
+      destroy_rate_effect(p->rate[channel]);
+  for (channel = 0; channel < state_count; ++channel)
+    if (p->sdm && p->sdm[channel])
+      sdm_close(p->sdm[channel]);
+  free(p->rate_emitted);
+  free(p->rate_produced);
+  free(p->rate_consumed);
+  free(p->rate_output);
+  free(p->rate_pending);
+  free(p->rate_input);
+  free(p->rate);
+  free(p->packet);
+  free(p->sdm);
+  p->rate_emitted = NULL;
+  p->rate_produced = NULL;
+  p->rate_consumed = NULL;
+  p->rate_output = NULL;
+  p->rate_pending = NULL;
+  p->rate_input = NULL;
+  p->rate = NULL;
+  p->packet = NULL;
+  p->sdm = NULL;
+}
 
 static int getopts(sox_effect_t *effp, int argc, char **argv)
 {
@@ -1521,11 +1837,20 @@ static int getopts(sox_effect_t *effp, int argc, char **argv)
   lsx_getopt_t optstate;
   int c;
   
-  lsx_getopt_init(argc, argv, "+f:t:n:l:", NULL, lsx_getopt_flag_none,
+  lsx_getopt_init(argc, argv, "+f:j:r:t:n:l:", NULL, lsx_getopt_flag_none,
                   1, &optstate);
   
   while ((c = lsx_getopt(&optstate)) != -1) switch (c) {
     case 'f': p->filter_name = optstate.arg; break;
+      GETOPT_NUMERIC(optstate, 'j', threads, 1, SDM_MAX_THREADS)
+    case 'r': {
+      char *end;
+      p->out_rate = lsx_parse_frequency(optstate.arg, &end);
+      if (p->out_rate <= 0 || *end)
+        return lsx_usage(effp);
+      effp->out_signal.rate = p->out_rate;
+      break;
+    }
       GETOPT_NUMERIC(optstate, 't', trellis_order, 3, SDM_TRELLIS_MAX_ORDER)
       GETOPT_NUMERIC(optstate, 'n', trellis_num, 4, SDM_TRELLIS_MAX_NUM)
       GETOPT_NUMERIC(optstate, 'l', trellis_lat, 100, SDM_TRELLIS_MAX_LAT)
@@ -1538,14 +1863,368 @@ static int getopts(sox_effect_t *effp, int argc, char **argv)
 static int start(sox_effect_t *effp)
 {
   sdm_effect_t *p = effp->priv;
-  
-  p->sdm = sdm_init(p->filter_name, effp->in_signal.rate,
-                    p->trellis_order, p->trellis_num, p->trellis_lat);
-  if (!p->sdm)
+  sox_rate_t sdm_rate = p->out_rate ? p->out_rate : effp->in_signal.rate;
+  unsigned channel;
+
+  p->channels = effp->in_signal.channels;
+  p->sdm = lsx_calloc(p->channels, sizeof(*p->sdm));
+  p->rate_emitted = lsx_calloc(p->channels,
+                               sizeof(*p->rate_emitted));
+  if (p->out_rate && p->out_rate != effp->in_signal.rate) {
+    p->rate = lsx_calloc(p->channels, sizeof(*p->rate));
+    p->rate_consumed = lsx_calloc(p->channels,
+                                  sizeof(*p->rate_consumed));
+    p->rate_produced = lsx_calloc(p->channels,
+                                  sizeof(*p->rate_produced));
+  }
+
+  for (channel = 0; channel < p->channels; ++channel) {
+    p->sdm[channel] = sdm_init(
+        p->filter_name, (unsigned)sdm_rate, p->trellis_order,
+        p->trellis_num, p->trellis_lat, p->threads);
+    if (!p->sdm[channel]) {
+      sdm_effect_cleanup(p);
+      return SOX_EOF;
+    }
+  }
+
+  if (p->rate) {
+    for (channel = 0; channel < p->channels; ++channel) {
+      char rate_arg[32];
+      char *args[2] = { "-v", rate_arg };
+      sox_effect_t *rate = sox_create_effect(lsx_rate_effect_fn());
+      int result;
+
+      rate->in_signal = effp->in_signal;
+      rate->in_signal.channels = 1;
+      if (channel)
+        rate->in_signal.mult = NULL;
+      rate->out_signal = rate->in_signal;
+      rate->out_signal.rate = p->out_rate;
+      snprintf(rate_arg, sizeof(rate_arg), "%.17g", p->out_rate);
+      result = sox_effect_options(rate, 2, args);
+      if (result == SOX_SUCCESS)
+        result = rate->handler.start(rate);
+      if (result != SOX_SUCCESS) {
+        free(rate->priv);
+        free(rate);
+        sdm_effect_cleanup(p);
+        return SOX_EOF;
+      }
+      p->rate[channel] = rate;
+    }
+  }
+
+  p->threads = p->sdm[0]->threads;
+  if (p->rate && p->sdm[0]->trellis_mask) {
+    lsx_fail("internal SDM resampling is not supported with trellis mode");
+    sdm_effect_cleanup(p);
     return SOX_EOF;
-  
+  }
+  p->packet = lsx_calloc(p->channels, sizeof(*p->packet));
   effp->out_signal.precision = 1;
+  effp->out_signal.rate = sdm_rate;
+  if (!p->sdm[0]->trellis_mask)
+    effp->out_signal.packing = SOX_DSD_PACKING_BYTE;
   
+  return SOX_SUCCESS;
+}
+
+static int resize_rate_buffers(sdm_effect_t *p, size_t input_frames,
+                               size_t output_frames)
+{
+  if (input_frames > SOX_SIZE_MAX / p->channels ||
+      output_frames > SOX_SIZE_MAX / p->channels) {
+    lsx_fail("SDM rate buffer size overflow");
+    return SOX_EOF;
+  }
+
+  if (input_frames > p->rate_input_capacity) {
+    p->rate_input = lsx_realloc_array(
+        p->rate_input, input_frames * p->channels,
+        sizeof(*p->rate_input));
+    p->rate_input_capacity = input_frames;
+  }
+  if (output_frames > p->rate_output_capacity) {
+    p->rate_output = lsx_realloc_array(
+        p->rate_output, output_frames * p->channels,
+        sizeof(*p->rate_output));
+    p->rate_output_capacity = output_frames;
+  }
+  if (p->channels == 1 &&
+      output_frames > p->rate_pending_capacity) {
+    p->rate_pending = lsx_realloc_array(
+        p->rate_pending, output_frames, sizeof(*p->rate_pending));
+    p->rate_pending_capacity = output_frames;
+  }
+  return SOX_SUCCESS;
+}
+
+static size_t process_mono_pending(sdm_effect_t *p, sox_sample_t *obuf,
+                                   size_t frames)
+{
+  sdm_t *sdm = p->sdm[0];
+  size_t emitted = sdm_process_double_packed(
+      sdm->filter, sdm->simple_state, &sdm->prev_y, p->packet,
+      p->packet_bits, p->rate_pending, obuf, frames, 1);
+
+  if (!sdm_simple_state_valid(sdm)) {
+    sdm->failed = 1;
+    return 0;
+  }
+  p->packet_bits = (uint8_t)((p->packet_bits + frames) & 7);
+  p->rate_pending_count -= frames;
+  if (p->rate_pending_count)
+    memmove(p->rate_pending, p->rate_pending + frames,
+            p->rate_pending_count * sizeof(*p->rate_pending));
+  return emitted;
+}
+
+static int flow_rate_mono(sdm_effect_t *p, const sox_sample_t *ibuf,
+                          sox_sample_t *obuf, size_t *isamp,
+                          size_t *osamp)
+{
+  size_t output_frames = *osamp * 8;
+  size_t consumed = *isamp;
+  size_t produced;
+  size_t emitted = 0;
+
+  if (output_frames < p->packet_bits) {
+    *isamp = *osamp = 0;
+    return SOX_SUCCESS;
+  }
+  output_frames -= p->packet_bits;
+
+  if (p->rate_pending_count > output_frames) {
+    emitted = process_mono_pending(p, obuf, output_frames);
+    *isamp = 0;
+    *osamp = emitted;
+    return SOX_SUCCESS;
+  }
+
+  if (resize_rate_buffers(p, *isamp, output_frames) != SOX_SUCCESS)
+    return SOX_EOF;
+  produced = output_frames;
+
+  if (!p->rate_pending_count) {
+    lsx_rate_flow_double(p->rate[0], ibuf, &consumed,
+                         p->rate_output, &produced);
+    {
+      double *swap = p->rate_pending;
+      p->rate_pending = p->rate_output;
+      p->rate_output = swap;
+    }
+    p->rate_pending_count = produced;
+    if (p->rate_pending_count) {
+      size_t prime = min(
+          p->rate_pending_count, (size_t)(8 - p->packet_bits));
+      emitted = process_mono_pending(p, obuf, prime);
+    }
+  } else {
+#if defined HAVE_OPENMP
+    #pragma omp parallel sections \
+        if(sox_globals.use_threads && p->threads > 1 && \
+           omp_get_max_threads() > 1) num_threads(2)
+    {
+      #pragma omp section
+#endif
+      {
+        lsx_rate_flow_double(p->rate[0], ibuf, &consumed,
+                             p->rate_output, &produced);
+      }
+#if defined HAVE_OPENMP
+      #pragma omp section
+#endif
+      {
+        emitted = process_mono_pending(
+            p, obuf, p->rate_pending_count);
+      }
+#if defined HAVE_OPENMP
+    }
+#endif
+    {
+      double *swap = p->rate_pending;
+      p->rate_pending = p->rate_output;
+      p->rate_output = swap;
+    }
+    p->rate_pending_count = produced;
+  }
+  *isamp = consumed;
+  *osamp = emitted;
+  return SOX_SUCCESS;
+}
+
+static int drain_rate_mono(sdm_effect_t *p, sox_sample_t *obuf,
+                           size_t *osamp)
+{
+  size_t output_frames = *osamp * 8;
+  size_t emitted = 0;
+
+  if (output_frames < p->packet_bits) {
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
+  output_frames -= p->packet_bits;
+
+  while (!emitted) {
+    size_t produced = output_frames;
+
+    if (p->rate_pending_count > output_frames) {
+      emitted = process_mono_pending(p, obuf, output_frames);
+      break;
+    }
+
+    if (!p->rate_pending_count && !p->rate_drained) {
+      if (resize_rate_buffers(p, 0, output_frames) != SOX_SUCCESS)
+        return SOX_EOF;
+      lsx_rate_drain_double(p->rate[0], p->rate_output, &produced);
+      if (!produced)
+        p->rate_drained = sox_true;
+      else {
+        double *swap = p->rate_pending;
+        p->rate_pending = p->rate_output;
+        p->rate_output = swap;
+        p->rate_pending_count = produced;
+      }
+      continue;
+    }
+
+    if (p->rate_pending_count) {
+      size_t pending = p->rate_pending_count;
+
+      if (resize_rate_buffers(p, 0, output_frames) != SOX_SUCCESS)
+        return SOX_EOF;
+      if (!p->rate_drained) {
+#if defined HAVE_OPENMP
+        #pragma omp parallel sections \
+            if(sox_globals.use_threads && p->threads > 1 && \
+               omp_get_max_threads() > 1) num_threads(2)
+        {
+          #pragma omp section
+#endif
+          {
+            lsx_rate_drain_double(p->rate[0], p->rate_output,
+                                  &produced);
+            if (!produced)
+              p->rate_drained = sox_true;
+          }
+#if defined HAVE_OPENMP
+          #pragma omp section
+#endif
+          {
+            emitted = process_mono_pending(p, obuf, pending);
+          }
+#if defined HAVE_OPENMP
+        }
+#endif
+      } else {
+        produced = 0;
+        emitted = process_mono_pending(p, obuf, pending);
+      }
+
+      {
+        double *swap = p->rate_pending;
+        p->rate_pending = p->rate_output;
+        p->rate_output = swap;
+      }
+      p->rate_pending_count = produced;
+      if (emitted)
+        break;
+      continue;
+    }
+
+    if (p->packet_bits && *osamp) {
+      obuf[0] = SOX_DSD_PACKED_BYTE(
+          p->packet[0] << (8 - p->packet_bits), p->packet_bits);
+      p->packet_bits = 0;
+      p->packet[0] = 0;
+      emitted = 1;
+    }
+    break;
+  }
+
+  *osamp = emitted;
+  return SOX_SUCCESS;
+}
+
+static int process_rate_output(sdm_effect_t *p, sox_sample_t *obuf,
+                               size_t input_frames, size_t output_frames,
+                               sox_bool draining, size_t *consumed,
+                               size_t *emitted)
+{
+  const size_t channels = p->channels;
+  size_t channel;
+  ptrdiff_t job;
+
+  if (resize_rate_buffers(p, input_frames, output_frames) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (!output_frames) {
+    *consumed = 0;
+    *emitted = 0;
+    return SOX_SUCCESS;
+  }
+
+  for (channel = 0; channel < channels; ++channel) {
+    p->rate_consumed[channel] = input_frames;
+    p->rate_produced[channel] = output_frames;
+    p->rate_emitted[channel] = 0;
+  }
+
+#if defined HAVE_OPENMP
+  {
+    int thread_count = (int)min(
+        min(channels, (size_t)p->threads),
+        (size_t)omp_get_max_threads());
+    #pragma omp parallel for \
+        if(sox_globals.use_threads && thread_count > 1) \
+        num_threads(thread_count) schedule(static)
+#endif
+    for (job = 0; job < (ptrdiff_t)channels; ++job) {
+      const sox_sample_t *rate_input = input_frames ?
+          p->rate_input + (size_t)job * input_frames : NULL;
+      double *rate_output =
+          p->rate_output + (size_t)job * output_frames;
+
+      if (draining)
+        lsx_rate_drain_double(p->rate[job], rate_output,
+                              p->rate_produced + job);
+      else
+        lsx_rate_flow_double(p->rate[job], rate_input,
+                             p->rate_consumed + job, rate_output,
+                             p->rate_produced + job);
+      sdm_t *sdm = p->sdm[job];
+
+      p->rate_emitted[job] = sdm_process_double_packed(
+          sdm->filter, sdm->simple_state, &sdm->prev_y,
+          p->packet + job, p->packet_bits, rate_output, obuf + job,
+          p->rate_produced[job], channels);
+      if (!sdm_simple_state_valid(sdm))
+        sdm->failed = 1;
+    }
+#if defined HAVE_OPENMP
+  }
+#endif
+
+  for (channel = 1; channel < channels; ++channel) {
+    if (p->rate_consumed[channel] != p->rate_consumed[0] ||
+        p->rate_produced[channel] != p->rate_produced[0] ||
+        p->rate_emitted[channel] != p->rate_emitted[0]) {
+      lsx_fail("SDM channel resamplers flowed asymmetrically");
+      return SOX_EOF;
+    }
+  }
+
+  for (channel = 0; channel < channels; ++channel) {
+    if (p->sdm[channel]->failed) {
+      lsx_fail("SDM diverged on channel %zu", channel + 1);
+      return SOX_ECONVERGE;
+    }
+  }
+  *emitted = p->rate_emitted[0];
+  p->packet_bits = (uint8_t)(
+      (p->packet_bits + p->rate_produced[0]) & 7);
+
+  *consumed = p->rate_consumed[0];
   return SOX_SUCCESS;
 }
 
@@ -1553,32 +2232,235 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
                 sox_sample_t *obuf, size_t *isamp, size_t *osamp)
 {
   sdm_effect_t *p = effp->priv;
-  return sdm_process(p->sdm, ibuf, obuf, isamp, osamp);
+  const size_t channels = p->channels;
+  size_t wide;
+  sdm_t *first = p->sdm[0];
+  ptrdiff_t job;
+
+  if (p->rate && channels == 1) {
+    int result = flow_rate_mono(p, ibuf, obuf, isamp, osamp);
+    if (p->sdm[0]->failed) {
+      *osamp = 0;
+      lsx_fail("SDM diverged on channel 1");
+      return SOX_ECONVERGE;
+    }
+    return result;
+  }
+
+  if (p->rate) {
+    size_t input_frames = *isamp / channels;
+    size_t output_frames = (*osamp / channels) * 8;
+    size_t consumed;
+    size_t emitted;
+    size_t channel;
+    size_t frame;
+
+    if (output_frames < p->packet_bits) {
+      *isamp = *osamp = 0;
+      return SOX_SUCCESS;
+    }
+    output_frames -= p->packet_bits;
+
+    if (resize_rate_buffers(p, input_frames, output_frames) != SOX_SUCCESS)
+      return SOX_EOF;
+    for (channel = 0; channel < channels; ++channel)
+      for (frame = 0; frame < input_frames; ++frame)
+        p->rate_input[channel * input_frames + frame] =
+            ibuf[frame * channels + channel];
+
+    if (process_rate_output(p, obuf, input_frames, output_frames,
+                            sox_false, &consumed, &emitted) != SOX_SUCCESS)
+      return SOX_EOF;
+    *isamp = consumed * channels;
+    *osamp = emitted * channels;
+    return SOX_SUCCESS;
+  }
+
+  if (first->trellis_mask) {
+    wide = min(*isamp, *osamp) / channels;
+    *isamp = wide * channels;
+    size_t pre = first->pending < first->trellis_lat ?
+        min(first->trellis_lat - first->pending, wide) : 0;
+#if defined HAVE_OPENMP
+    int thread_count = (int)min(
+        channels, (size_t)omp_get_max_threads());
+    #pragma omp parallel for \
+        if(sox_globals.use_threads && thread_count > 1) \
+        num_threads(thread_count) schedule(static)
+#endif
+    for (job = 0; job < (ptrdiff_t)channels; ++job) {
+      sdm_t *sdm = p->sdm[job];
+      size_t i;
+
+      for (i = 0; i < pre; ++i)
+        sdm_sample_trellis(sdm, ibuf[i * channels + job] *
+                           (0.5 / SOX_SAMPLE_MAX));
+      sdm->pending += pre;
+
+      for (i = pre; i < wide; ++i)
+        obuf[(i - pre) * channels + job] = sdm_sample_trellis(
+            sdm, ibuf[i * channels + job] * (0.5 / SOX_SAMPLE_MAX));
+    }
+    *osamp = (wide - pre) * channels;
+  } else {
+    size_t groups = *osamp / channels;
+    size_t max_frames = groups * 8;
+    size_t emitted;
+
+    if (max_frames < p->packet_bits) {
+      *isamp = *osamp = 0;
+      return SOX_SUCCESS;
+    }
+
+    max_frames -= p->packet_bits;
+    wide = min(*isamp / channels, max_frames);
+    emitted = (p->packet_bits + wide) / 8;
+    *isamp = wide * channels;
+#if defined HAVE_OPENMP
+    int thread_count = (int)min(
+        min(channels, (size_t)p->threads),
+        (size_t)omp_get_max_threads());
+    #pragma omp parallel for \
+        if(sox_globals.use_threads && thread_count > 1) \
+        num_threads(thread_count) schedule(static)
+#endif
+    for (job = 0; job < (ptrdiff_t)channels; ++job) {
+      sdm_t *sdm = p->sdm[job];
+      size_t channel_emitted = sdm_process_simple_packed(
+          sdm->filter, sdm->simple_state, &sdm->prev_y,
+          p->packet + job, p->packet_bits, ibuf + job, obuf + job,
+          wide, channels, channels);
+      p->rate_emitted[job] = channel_emitted;
+      if (!sdm_simple_state_valid(sdm))
+        sdm->failed = 1;
+    }
+    for (job = 0; job < (ptrdiff_t)channels; ++job) {
+      if (p->sdm[job]->failed) {
+        *osamp = 0;
+        lsx_fail("SDM diverged on channel %td", job + 1);
+        return SOX_ECONVERGE;
+      }
+      if (p->rate_emitted[job] != emitted) {
+        *osamp = 0;
+        lsx_fail("SDM channels packed asymmetrically");
+        return SOX_EOF;
+      }
+    }
+    p->packet_bits = (uint8_t)((p->packet_bits + wide) & 7);
+    *osamp = emitted * channels;
+  }
+
+  return SOX_SUCCESS;
 }
 
 static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
 {
   sdm_effect_t *p = effp->priv;
-  return sdm_drain(p->sdm, obuf, osamp);
+  const size_t channels = p->channels;
+  sdm_t *first = p->sdm[0];
+  size_t len;
+  ptrdiff_t channel;
+
+  if (p->rate && channels == 1) {
+    int result = drain_rate_mono(p, obuf, osamp);
+    if (p->sdm[0]->failed) {
+      *osamp = 0;
+      lsx_fail("SDM diverged on channel 1");
+      return SOX_ECONVERGE;
+    }
+    return result;
+  }
+
+  if (p->rate) {
+    size_t output_frames = (*osamp / channels) * 8;
+    size_t consumed;
+    size_t emitted;
+
+    if (output_frames < p->packet_bits) {
+      *osamp = 0;
+      return SOX_SUCCESS;
+    }
+    output_frames -= p->packet_bits;
+    if (process_rate_output(p, obuf, 0, output_frames, sox_true,
+                            &consumed, &emitted) != SOX_SUCCESS)
+      return SOX_EOF;
+    if (emitted) {
+      *osamp = emitted * channels;
+      return SOX_SUCCESS;
+    }
+  }
+
+  if (!first->trellis_mask) {
+    size_t channels = p->channels;
+    size_t channel;
+
+    if (!p->packet_bits || *osamp < channels) {
+      *osamp = 0;
+      return SOX_SUCCESS;
+    }
+
+    for (channel = 0; channel < channels; ++channel)
+      obuf[channel] = SOX_DSD_PACKED_BYTE(
+          p->packet[channel] << (8 - p->packet_bits),
+          p->packet_bits);
+    p->packet_bits = 0;
+    memset(p->packet, 0, channels);
+    *osamp = channels;
+    return SOX_SUCCESS;
+  }
+
+  if (!first->draining && first->pending < first->trellis_lat) {
+    unsigned flush = first->trellis_lat - first->pending;
+
+    for (channel = 0; channel < (ptrdiff_t)channels; ++channel) {
+      unsigned count = flush;
+      while (count--)
+        sdm_sample_trellis(p->sdm[channel], 0.0);
+    }
+  }
+
+  len = min(first->pending, *osamp / channels);
+  for (channel = 0; channel < (ptrdiff_t)channels; ++channel) {
+    sdm_t *sdm = p->sdm[channel];
+    size_t i;
+
+    sdm->draining = 1;
+    sdm->pending -= len;
+    for (i = 0; i < len; ++i)
+      obuf[i * channels + channel] = sdm_sample_trellis(sdm, 0.0);
+  }
+
+  *osamp = len * channels;
+  return SOX_SUCCESS;
 }
 
 static int stop(sox_effect_t *effp)
 {
   sdm_effect_t *p = effp->priv;
-  sdm_close(p->sdm);
+
+  sdm_effect_cleanup(p);
   return SOX_SUCCESS;
 }
 
 const sox_effect_handler_t *lsx_sdm_effect_fn(void)
 {
   static sox_effect_handler_t handler = {
-    "sdm", "[-f filter] [-t order] [-n num] [-l latency]"
-    "\n  -f       Noise-shaping filter"
+    "sdm", "[-f filter] [-j threads] [-r rate]"
+    " [-t order] [-n num] [-l latency]"
+    "\n  -f       Noise-shaping filter:"
+    "\n           sdm-4..sdm-8, clans-4..clans-8"
+    "\n           All orders: DSD64 through DSD1024"
+    "\n           DSD rates use the 44.1-kHz family"
+    "\n  -j       Maximum worker threads (defaults to OpenMP maximum)"
+    "\n  -r       Resample internally with rate -v and pass double"
+    "\n           samples directly to the packed SDM path"
     "\n           Advanced options:"
     "\n  -t       Override trellis order"
     "\n  -n       Override number of trellis paths"
-    "\n  -l       Override trellis latency",
-    SOX_EFF_PREC, getopts, start, flow, drain, stop, 0, sizeof(sdm_effect_t),
+    "\n  -l       Override trellis latency"
+    "\n           Trellis mode is not supported with -r",
+    SOX_EFF_PREC | SOX_EFF_RATE | SOX_EFF_MCHAN,
+    getopts, start, flow, drain, stop, 0, sizeof(sdm_effect_t),
   };
   return &handler;
 }

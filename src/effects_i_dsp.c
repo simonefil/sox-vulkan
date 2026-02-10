@@ -621,6 +621,15 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     dest[i] = src[i];
 }
 
+void lsx_normalize_samples(double * const dest, double const * const src,
+    size_t const n)
+{
+  size_t i;
+  double const scale = 1. / SOX_SAMPLE_MAX;
+  for (i = 0; i < n; ++i)
+    dest[i] = src[i] * scale;
+}
+
 #pragma STDC FENV_ACCESS OFF
 #undef _
 #else
@@ -640,6 +649,13 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
   size_t i;
   for (i = 0; i < n; ++i)
     dest[i] = SOX_SAMPLE_TO_FLOAT_64BIT(src[i],);
+}
+
+void lsx_normalize_samples(double * const dest, double const * const src,
+    size_t const n)
+{
+  if (dest != src)
+    memcpy(dest, src, n * sizeof(*dest));
 }
 
 #endif

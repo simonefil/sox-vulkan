@@ -450,6 +450,13 @@ Native SoX audio sample type (alias for sox_int32_t).
 */
 typedef sox_int32_t sox_sample_t;
 
+#define SOX_DSD_PACKING_BYTE 8
+#define SOX_DSD_PACKED_BYTE(data, valid_bits) \
+  ((sox_sample_t)((uint8_t)(data) | ((uint32_t)(valid_bits) << 8)))
+#define SOX_DSD_PACKED_DATA(sample) ((uint8_t)(sample))
+#define SOX_DSD_PACKED_VALID_BITS(sample) \
+  (((uint32_t)(sample) >> 8) & 15u)
+
 /**
 Client API:
 Samples per second is stored as a double.
@@ -499,7 +506,8 @@ enum sox_error_t {
   SOX_ENOMEM,          /**< Can't alloc memory = 2002 */
   SOX_EPERM,           /**< Operation not permitted = 2003 */
   SOX_ENOTSUP,         /**< Operation not supported = 2004 */
-  SOX_EINVAL           /**< Invalid argument = 2005 */
+  SOX_EINVAL,          /**< Invalid argument = 2005 */
+  SOX_ECONVERGE        /**< Numerical algorithm failed to converge = 2006 */
 };
 
 /**
@@ -1184,6 +1192,19 @@ typedef size_t (LSX_API * sox_format_handler_write)(
 
 /**
 Client API:
+Callback to write bytes of packed DSD carried in sox_sample_t values.
+Each value contains one byte and its valid-bit count via the
+SOX_DSD_PACKED_* macros.
+@returns number of packed values consumed.
+*/
+typedef size_t (LSX_API * sox_format_handler_write_packed_dsd)(
+    LSX_PARAM_INOUT sox_format_t * ft,
+    LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf,
+    size_t len
+    );
+
+/**
+Client API:
 Callback to close writer (decoder),
 used by sox_format_handler.stopwrite.
 @returns SOX_SUCCESS if successful.
@@ -1364,6 +1385,7 @@ typedef struct sox_signalinfo_t {
   unsigned         precision;    /**< bits per sample, 0 if unknown */
   sox_uint64_t     length;       /**< samples * chans in file, 0 if unknown, -1 if unspecified */
   double           * mult;       /**< Effects headroom multiplier; may be null */
+  unsigned         packing;      /**< DSD bits carried by each internal sample, or 0 for PCM */
 } sox_signalinfo_t;
 
 /**
@@ -1550,6 +1572,7 @@ struct sox_format_t {
   void             * priv;          /**< Format handler's private data area */
   char const       * codec_options; /**< Internal codec options, if supported by the handler */
   char const       * channel_layout; /**< Explicit output channel layout, if supported by the handler */
+  sox_format_handler_write_packed_dsd write_packed_dsd; /**< Optional packed DSD writer. */
   unsigned char    * read_replay_buffer; /**< Internal bytes consumed while probing a non-seekable input. */
   size_t             read_replay_size; /**< Internal size of the input probe replay buffer. */
   size_t             read_replay_pos; /**< Internal current position in the input probe replay buffer. */
@@ -2011,6 +2034,14 @@ sox_write(
     LSX_PARAM_INOUT sox_format_t * ft, /**< Format pointer. */
     LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf, /**< Buffer from which to read samples. */
     size_t len /**< Number of samples available in buf. */
+    );
+
+size_t
+LSX_API
+sox_write_packed_dsd(
+    LSX_PARAM_INOUT sox_format_t * ft,
+    LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf,
+    size_t len
     );
 
 /**

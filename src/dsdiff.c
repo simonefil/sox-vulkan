@@ -26,8 +26,12 @@
 struct dsdiff {
 	uint64_t data_size;
 	uint8_t *buf;
+	uint8_t *packed_buf;
+	size_t packed_capacity;
 	uint32_t bit_pos;
 };
+
+static size_t dff_write_packed(sox_format_t *, const sox_sample_t *, size_t);
 
 #define ID(a, b, c, d) ((a) << 24 | (b) << 16 | (c) << 8 | (d))
 
@@ -298,7 +302,8 @@ static int dff_startwrite(sox_format_t *ft)
 	}
 
 	dff->data_size = 0;
-	dff->buf = lsx_malloc(ft->signal.channels);
+	ft->write_packed_dsd = dff_write_packed;
+	dff->buf = lsx_calloc(ft->signal.channels, 1);
 	if (!dff->buf)
 		return SOX_ENOMEM;
 
@@ -386,6 +391,86 @@ static size_t dff_write(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 	return wsamp * nchan;
 }
 
+static size_t dff_write_packed(sox_format_t *ft,
+			       const sox_sample_t *buf, size_t len)
+{
+	struct dsdiff *dff = ft->priv;
+	unsigned channels = ft->signal.channels;
+	size_t consumed = 0;
+
+	if (!dff->bit_pos) {
+		size_t full = 0;
+		size_t i;
+
+		while (full + channels <= len &&
+		       SOX_DSD_PACKED_VALID_BITS(buf[full]) == 8) {
+			for (i = 1; i < channels; ++i)
+				if (SOX_DSD_PACKED_VALID_BITS(buf[full + i]) != 8)
+					return consumed;
+			full += channels;
+		}
+
+		if (full) {
+			if (full > dff->packed_capacity) {
+				dff->packed_buf = lsx_realloc(dff->packed_buf, full);
+				dff->packed_capacity = full;
+			}
+			for (i = 0; i < full; ++i)
+				dff->packed_buf[i] =
+					SOX_DSD_PACKED_DATA(buf[i]);
+			if (lsx_write_b_buf(ft, dff->packed_buf, full) < full)
+				return 0;
+			dff->data_size += full;
+			buf += full;
+			len -= full;
+			consumed += full;
+		}
+	}
+
+	while (len >= channels) {
+		unsigned valid = SOX_DSD_PACKED_VALID_BITS(buf[0]);
+		unsigned i, j;
+
+		if (!valid || valid > 8 - dff->bit_pos)
+			break;
+
+		if (valid == 8 && !dff->bit_pos) {
+			for (i = 0; i < channels; ++i) {
+				if (SOX_DSD_PACKED_VALID_BITS(buf[i]) != valid)
+					return consumed;
+				dff->buf[i] = SOX_DSD_PACKED_DATA(buf[i]);
+			}
+			if (dff_write_buf(ft))
+				break;
+			dff->data_size += channels;
+		} else {
+			for (i = 0; i < channels; ++i) {
+				uint8_t data = SOX_DSD_PACKED_DATA(buf[i]);
+
+				if (SOX_DSD_PACKED_VALID_BITS(buf[i]) != valid)
+					return consumed;
+				for (j = 0; j < valid; ++j)
+					dff->buf[i] |=
+						((data >> (7 - j)) & 1) <<
+						(7 - dff->bit_pos - j);
+			}
+			dff->bit_pos += valid;
+			if (dff->bit_pos == 8) {
+				dff->bit_pos = 0;
+				if (dff_write_buf(ft))
+					break;
+				dff->data_size += channels;
+			}
+		}
+
+		buf += channels;
+		len -= channels;
+		consumed += channels;
+	}
+
+	return consumed;
+}
+
 static int dff_stopwrite(sox_format_t *ft)
 {
 	struct dsdiff *dff = ft->priv;
@@ -401,6 +486,7 @@ static int dff_stopwrite(sox_format_t *ft)
 	}
 
 	free(dff->buf);
+	free(dff->packed_buf);
 
 	if (err)
 		return err;

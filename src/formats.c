@@ -1334,6 +1334,38 @@ size_t sox_write(sox_format_t * ft, const sox_sample_t *buf, size_t len)
   return actual;
 }
 
+size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf,
+                            size_t len)
+{
+  size_t actual;
+  size_t channels = ft->signal.channels;
+  size_t i;
+
+  if (!ft->write_packed_dsd || !channels || len % channels)
+    return 0;
+
+  for (i = 0; i < len; i += channels) {
+    unsigned valid = SOX_DSD_PACKED_VALID_BITS(buf[i]);
+    size_t channel;
+
+    if (!valid || valid > 8)
+      return 0;
+    for (channel = 1; channel < channels; ++channel)
+      if (SOX_DSD_PACKED_VALID_BITS(buf[i + channel]) != valid)
+        return 0;
+  }
+
+  actual = (*ft->write_packed_dsd)(ft, buf, len);
+  if (actual > len || actual % channels)
+    return 0;
+
+  for (i = 0; i < actual; i += channels)
+    ft->olength +=
+        SOX_DSD_PACKED_VALID_BITS(buf[i]) * channels;
+
+  return actual;
+}
+
 int sox_close(sox_format_t * ft)
 {
   int result = SOX_SUCCESS;

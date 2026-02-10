@@ -214,6 +214,7 @@ chmod +x build_static_libs.sh
 | MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
+| DSD | DSF and DSDIFF/DFF read and write; WSD read | Built in |
 | libsndfile | Multi-format audio I/O | libsndfile |
 | ID3 Tag | MP3 metadata support | libid3tag |
 | PNG | Spectrogram output | libpng, zlib |
@@ -359,6 +360,8 @@ This lists all formats enabled in the current build. Look for:
 - `dtshd` - DTS-HD elementary streams (decode only)
 - `wav` - WAV support
 - `wavpack` - WavPack support
+- `dsf`, `dff` - DSD stream read and write
+- `wsd` - WSD stream read
 
 ### 3. Check Audio Devices
 
@@ -399,6 +402,11 @@ This lists all formats enabled in the current build. Look for:
 ./output/sox input-5.1-side.wav -C 1536 \
   --channel-layout '5.1(side)' output.dts
 
+# Encode PCM to DSD512
+./output/sox --multi-threaded --buffer 524288 input.wav \
+  -r 22579200 output.dsf \
+  sdm -f sdm-8 -r 22579200
+
 # Generate a five-second test tone
 ./output/sox -n test.wav synth 5 sine 440
 ```
@@ -417,8 +425,13 @@ This lists all formats enabled in the current build. Look for:
 | MLP | 16- or 24-bit PCM up to 5.1 at 44.1-192 kHz | Preserves valid 20-bit source precision; the encoder pads an incomplete final frame |
 | DTS | DTS core up to 5.1(side), 32-3840 kbit/s | DTS core, DTS-ES, DTS 96/24, DTS-HD HRA/MA, DTS Express/LBR, and channel-based DTS:X presentations |
 | DTS-HD | Not supported | Use `dtshd` for extended DTS-HD streams and `dts` for core or mixed inputs |
+| DSD | DSF and DSDIFF/DFF at DSD64, DSD128, DSD256, DSD512 and DSD1024 | WSD is read-only; `sdm-4` through `sdm-8` and `clans-4` through `clans-8` are available |
 
 Run `sox --help-format FORMAT` for the sample rates, channel layouts, compression values, and read/write capabilities available for a specific format.
+
+#### DSD modulation
+
+The `sdm` effect performs PCM-to-DSD sigma-delta modulation; DSF and DSDIFF writers only pack the resulting one-bit stream. `-r RATE` fuses the very-high-quality resampler with the modulator and passes normalized double-precision samples directly to it. Channels are processed concurrently when multithreading is enabled; use `-j N` to cap workers, or omit it to use the OpenMP runtime limit. Each individual channel retains the full-rate causal SDM recurrence.
 
 #### Channel Layouts
 

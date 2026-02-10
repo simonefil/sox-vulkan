@@ -683,6 +683,50 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   return SOX_SUCCESS;
 }
 
+int lsx_rate_flow_double(sox_effect_t *effp, const sox_sample_t *ibuf,
+                         size_t *isamp, double *obuf, size_t *osamp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t odone = *osamp;
+  sample_t const *s = rate_output(&p->rate, NULL, &odone);
+
+  lsx_normalize_samples(obuf, s, odone);
+
+  if (*isamp && odone < *osamp) {
+    size_t output_room = *osamp - odone;
+    double input_limit = ceil(output_room * p->rate.factor);
+    size_t idone = input_limit >= (double)*isamp ?
+        *isamp : min(*isamp, max((size_t)RATE_MIN_INPUT_CHUNK,
+            (size_t)input_limit));
+    sample_t *t = rate_input(&p->rate, NULL, idone);
+
+    lsx_load_samples(t, ibuf, idone);
+    rate_process(&p->rate);
+    *isamp = idone;
+
+    {
+      size_t more = *osamp - odone;
+      s = rate_output(&p->rate, NULL, &more);
+      lsx_normalize_samples(obuf + odone, s, more);
+      odone += more;
+    }
+  }
+  else
+    *isamp = 0;
+
+  *osamp = odone;
+  return SOX_SUCCESS;
+}
+
+int lsx_rate_drain_double(sox_effect_t *effp, double *obuf, size_t *osamp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t isamp = 0;
+
+  rate_flush(&p->rate);
+  return lsx_rate_flow_double(effp, NULL, &isamp, obuf, osamp);
+}
+
 static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
 {
   priv_t * p = (priv_t *)effp->priv;

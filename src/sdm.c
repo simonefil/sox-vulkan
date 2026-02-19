@@ -42,6 +42,9 @@
 
 #include "sox_i.h"
 #include "sdm.h"
+#if HAVE_VULKAN
+#include "sdm_vulkan.h"
+#endif
 #include <assert.h>
 
 #define MAX_FILTER_ORDER 8
@@ -1789,6 +1792,16 @@ typedef struct sdm_effect {
   uint32_t      trellis_order;
   uint32_t      trellis_num;
   uint32_t      trellis_lat;
+#if HAVE_VULKAN
+  lsx_sdm_vulkan_t *vulkan;
+  float         *vulkan_input;
+  size_t        vulkan_input_frames;
+  size_t        vulkan_input_capacity;
+  uint8_t const *vulkan_output;
+  size_t        vulkan_output_bytes;
+  size_t        vulkan_output_stride;
+  size_t        vulkan_output_pos;
+#endif
 } sdm_effect_t;
 
 static void destroy_rate_effect(sox_effect_t *rate)
@@ -1805,6 +1818,12 @@ static void sdm_effect_cleanup(sdm_effect_t *p)
   unsigned channel;
   size_t state_count = p->channels;
 
+#if HAVE_VULKAN
+  lsx_sdm_vulkan_destroy(p->vulkan);
+  free(p->vulkan_input);
+  p->vulkan = NULL;
+  p->vulkan_input = NULL;
+#endif
   if (p->rate)
     for (channel = 0; channel < p->channels; ++channel)
       destroy_rate_effect(p->rate[channel]);
@@ -1867,6 +1886,44 @@ static int start(sox_effect_t *effp)
   unsigned channel;
 
   p->channels = effp->in_signal.channels;
+#if HAVE_VULKAN
+  if (sox_globals.use_vulkan) {
+    size_t core_frames;
+    size_t lookahead = lsx_sdm_vulkan_lookahead();
+
+    if (!p->out_rate || p->out_rate == effp->in_signal.rate) {
+      lsx_fail("Vulkan SDM requires -r with a DSD64..DSD1024 output rate");
+      return SOX_EOF;
+    }
+    if (effp->in_signal.rate > UINT_MAX || p->out_rate > UINT_MAX ||
+        effp->in_signal.rate != (unsigned)effp->in_signal.rate ||
+        p->out_rate != (unsigned)p->out_rate) {
+      lsx_fail("Vulkan SDM requires integer input and output sample rates");
+      return SOX_EOF;
+    }
+    if (p->trellis_order || p->trellis_num || p->trellis_lat) {
+      lsx_fail("Vulkan SDM does not support trellis options");
+      return SOX_EOF;
+    }
+    if (p->filter_name)
+      lsx_warn("Vulkan SDM uses the conservative MASH-2/FSM; -f is ignored");
+    if (p->threads)
+      lsx_warn("Vulkan SDM schedules channels on the GPU; -j is ignored");
+    p->vulkan = lsx_sdm_vulkan_create((unsigned)effp->in_signal.rate,
+        (unsigned)p->out_rate, p->channels);
+    if (!p->vulkan)
+      return SOX_EOF;
+    core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
+    p->vulkan_input_capacity = core_frames + lookahead;
+    p->vulkan_input = lsx_calloc(
+        p->vulkan_input_capacity * p->channels,
+        sizeof(*p->vulkan_input));
+    effp->out_signal.precision = 1;
+    effp->out_signal.rate = p->out_rate;
+    effp->out_signal.packing = SOX_DSD_PACKING_WORD;
+    return SOX_SUCCESS;
+  }
+#endif
   p->sdm = lsx_calloc(p->channels, sizeof(*p->sdm));
   p->rate_emitted = lsx_calloc(p->channels,
                                sizeof(*p->rate_emitted));
@@ -2228,15 +2285,135 @@ static int process_rate_output(sdm_effect_t *p, sox_sample_t *obuf,
   return SOX_SUCCESS;
 }
 
+#if HAVE_VULKAN
+static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf,
+                               size_t *osamp)
+{
+  size_t capacity = *osamp / p->channels;
+  size_t remaining = p->vulkan_output_bytes - p->vulkan_output_pos;
+  size_t groups = min(capacity, remaining / 4u);
+  size_t channel;
+
+  /*
+   * The GPU output is planar because DSF stores channels in separate blocks.
+   * A SoX sample carries one complete 32-bit DSD word in this packed mode.
+   */
+  for (channel = 0; channel < p->channels; ++channel)
+    memcpy(obuf + channel * groups,
+        p->vulkan_output +
+          channel * p->vulkan_output_stride +
+          p->vulkan_output_pos,
+        groups * sizeof(*obuf));
+  p->vulkan_output_pos += groups * 4u;
+  if (p->vulkan_output_pos == p->vulkan_output_bytes) {
+    p->vulkan_output = NULL;
+    p->vulkan_output_bytes = 0;
+    p->vulkan_output_stride = 0;
+    p->vulkan_output_pos = 0;
+  }
+  *osamp = groups * p->channels;
+}
+
+static int process_vulkan_input(sdm_effect_t *p, size_t frames,
+                                size_t available_frames)
+{
+  if (lsx_sdm_vulkan_process(
+      p->vulkan, p->vulkan_input, frames, available_frames,
+      &p->vulkan_output, &p->vulkan_output_bytes,
+      &p->vulkan_output_stride) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (p->vulkan_output_bytes % 4u ||
+      p->vulkan_output_stride % 4u) {
+    lsx_fail("Vulkan DSD output is not word aligned");
+    return SOX_EOF;
+  }
+  p->vulkan_output_pos = 0;
+  return SOX_SUCCESS;
+}
+
+static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
+    sox_sample_t const *ibuf, sox_sample_t *obuf,
+    size_t *isamp, size_t *osamp)
+{
+  size_t input_frames = *isamp / p->channels;
+  size_t room;
+  size_t consumed;
+  size_t frame;
+  size_t channel;
+  size_t core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
+  size_t lookahead = lsx_sdm_vulkan_lookahead();
+
+  if (p->vulkan_output) {
+    *isamp = 0;
+    emit_vulkan_output(p, obuf, osamp);
+    return SOX_SUCCESS;
+  }
+  room = p->vulkan_input_capacity - p->vulkan_input_frames;
+  consumed = min(input_frames, room);
+  /* SoX input is interleaved; the backend transposes it after chunking. */
+  for (frame = 0; frame < consumed; ++frame)
+    for (channel = 0; channel < p->channels; ++channel)
+      p->vulkan_input[
+          (p->vulkan_input_frames + frame) * p->channels +
+          channel] = SOX_SAMPLE_TO_FLOAT_32BIT(
+              ibuf[frame * p->channels + channel], effp->clips);
+  p->vulkan_input_frames += consumed;
+  *isamp = consumed * p->channels;
+  if (p->vulkan_input_frames < p->vulkan_input_capacity) {
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
+  if (process_vulkan_input(p, core_frames,
+      core_frames + lookahead) != SOX_SUCCESS) {
+    *osamp = 0;
+    return SOX_EOF;
+  }
+  /* Retain the future half of the centred FIR as the next chunk's look-ahead. */
+  memmove(
+      p->vulkan_input,
+      p->vulkan_input + core_frames * p->channels,
+      lookahead * p->channels * sizeof(*p->vulkan_input));
+  p->vulkan_input_frames = lookahead;
+  emit_vulkan_output(p, obuf, osamp);
+  return SOX_SUCCESS;
+}
+
+static int drain_vulkan(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
+{
+  if (p->vulkan_output) {
+    emit_vulkan_output(p, obuf, osamp);
+    return SOX_SUCCESS;
+  }
+  if (p->vulkan_input_frames) {
+    size_t frames = p->vulkan_input_frames;
+
+    if (process_vulkan_input(p, frames, frames) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    p->vulkan_input_frames = 0;
+    emit_vulkan_output(p, obuf, osamp);
+    return SOX_SUCCESS;
+  }
+  *osamp = 0;
+  return SOX_SUCCESS;
+}
+#endif
+
 static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
                 sox_sample_t *obuf, size_t *isamp, size_t *osamp)
 {
   sdm_effect_t *p = effp->priv;
   const size_t channels = p->channels;
   size_t wide;
-  sdm_t *first = p->sdm[0];
+  sdm_t *first;
   ptrdiff_t job;
 
+#if HAVE_VULKAN
+  if (p->vulkan)
+    return flow_vulkan(effp, p, ibuf, obuf, isamp, osamp);
+#endif
+  first = p->sdm[0];
   if (p->rate && channels == 1) {
     int result = flow_rate_mono(p, ibuf, obuf, isamp, osamp);
     if (p->sdm[0]->failed) {
@@ -2357,10 +2534,15 @@ static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
 {
   sdm_effect_t *p = effp->priv;
   const size_t channels = p->channels;
-  sdm_t *first = p->sdm[0];
+  sdm_t *first;
   size_t len;
   ptrdiff_t channel;
 
+#if HAVE_VULKAN
+  if (p->vulkan)
+    return drain_vulkan(p, obuf, osamp);
+#endif
+  first = p->sdm[0];
   if (p->rate && channels == 1) {
     int result = drain_rate_mono(p, obuf, osamp);
     if (p->sdm[0]->failed) {

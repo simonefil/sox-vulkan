@@ -1,0 +1,469 @@
+/*
+ * Vulkan MASH-2 and finite-state DSD modulator for SoX.
+ *
+ * This library is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or (at
+ * your option) any later version.
+ */
+
+#version 450
+
+#define LOCAL_SIZE 256u
+#define PHASE_BITS 24u
+#define PHASE_SCALE (1u << PHASE_BITS)
+#define PHASE_MASK (PHASE_SCALE - 1u)
+
+#define MODE_INPUT 0u
+#define MODE_SCAN 1u
+#define MODE_ADD 2u
+#define MODE_STAGE1 3u
+#define MODE_STAGE2_INPUT 4u
+#define MODE_STAGE2 5u
+#define MODE_TABLES 6u
+#define MODE_COMPOSE 7u
+#define MODE_SEEDS 8u
+#define MODE_REPLAY 9u
+#define MODE_ADD_INITIAL_PHASE 10u
+#define MODE_UPDATE_MASH_STATE 11u
+
+/*
+ * A two-stage MASH can be evaluated with modular prefix scans, but its final
+ * one-bit error-feedback reducer remains causal.  The reducer has only 69
+ * reachable states.  Each 256-sample block therefore computes a transition
+ * for all 69 inputs, the transition tables are prefix-composed to obtain the
+ * true seed of every block, and the blocks are replayed concurrently.
+ *
+ * Dispatches select one operation through Parameters.mode.  WorkGroupID.y
+ * selects the channel, so all channels follow the same command sequence while
+ * operating on disjoint buffer regions.
+ */
+
+layout(local_size_x = LOCAL_SIZE) in;
+
+layout(push_constant) uniform Parameters {
+    uint mode;
+    uint sample_count;
+    uint block_count;
+    uint state_count;
+    uint source_offset;
+    uint target_offset;
+    uint parent_offset;
+    uint element_count;
+    uint compose_offset;
+    uint table_source;
+    uint block_samples;
+    uint initial_state;
+    float input_gain;
+    uint stage_index;
+    uint scan_storage_count;
+    uint padding;
+} params;
+
+layout(std430, binding = 0) readonly buffer InputSamples {
+    float values[];
+} input_samples;
+
+layout(std430, binding = 1) buffer ScanValues {
+    uint values[];
+} scan_values;
+
+layout(std430, binding = 2) buffer Stage1Values {
+    uint values[];
+} stage1_values;
+
+layout(std430, binding = 3) buffer MashValues {
+    int values[];
+} mash_values;
+
+layout(std430, binding = 4) readonly buffer States {
+    ivec2 values[];
+} states;
+
+layout(std430, binding = 5) readonly buffer StateLookup {
+    int values[];
+} state_lookup;
+
+layout(std430, binding = 6) buffer TablesA {
+    uint values[];
+} tables_a;
+
+layout(std430, binding = 7) buffer TablesB {
+    uint values[];
+} tables_b;
+
+layout(std430, binding = 8) buffer BlockSeeds {
+    uint values[];
+} block_seeds;
+
+layout(std430, binding = 9) buffer OutputWords {
+    uint values[];
+} output_words;
+
+layout(std430, binding = 10) buffer PersistentState {
+    uint values[];
+} persistent_state;
+
+shared uint scan_shared[LOCAL_SIZE];
+
+uint channel_index()
+{
+    return gl_WorkGroupID.y;
+}
+
+uint sample_base()
+{
+    return channel_index() * params.sample_count;
+}
+
+uint scan_base()
+{
+    return channel_index() * params.scan_storage_count;
+}
+
+uint table_base()
+{
+    return channel_index() *
+        params.block_count * params.state_count;
+}
+
+uint block_base()
+{
+    return channel_index() * params.block_count;
+}
+
+uint word_base()
+{
+    return channel_index() * (params.sample_count / 32u);
+}
+
+uint persistent_base()
+{
+    return channel_index() * 4u;
+}
+
+uint phase_add(uint first, uint second)
+{
+    return (first + second) & PHASE_MASK;
+}
+
+uint quantize_input(float sample_value)
+{
+    /* Q8.24 phase makes both MASH accumulators associative modulo 2^24. */
+    float normalized =
+        0.5 * (clamp(sample_value * params.input_gain, -1.0, 1.0) + 1.0);
+    return uint(roundEven(normalized * float(PHASE_SCALE)));
+}
+
+uint carry(uint previous_phase, uint increment)
+{
+    return (previous_phase + increment) >> PHASE_BITS;
+}
+
+ivec2 reduction_step(ivec2 state, int value, out uint output_bit)
+{
+    int quantizer_input = value + state.x;
+    output_bit = quantizer_input > 0 ? 1u : 0u;
+    int correction = int(output_bit) - quantizer_input;
+    int limited = clamp(correction, -5, 5);
+    return ivec2(state.y - 2 * limited, limited);
+}
+
+uint state_index(ivec2 state)
+{
+    int slot = (state.x + 13) * 11 + state.y + 5;
+    if (slot < 0 || slot >= 297)
+        return 0xffffffffu;
+    int result = state_lookup.values[slot];
+    return result < 0 ? 0xffffffffu : uint(result);
+}
+
+void initialize_input()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint base = sample_base();
+    if (index < params.sample_count)
+        scan_values.values[scan_base() + index] =
+            quantize_input(input_samples.values[base + index]);
+}
+
+void scan_level()
+{
+    uint lane = gl_LocalInvocationID.x;
+    uint index = gl_WorkGroupID.x * LOCAL_SIZE + lane;
+    uint base = scan_base();
+    uint value = index < params.element_count
+        ? scan_values.values[
+            base + params.source_offset + index] : 0u;
+    scan_shared[lane] = value;
+    barrier();
+
+    /* Inclusive Hillis-Steele scan; phase_add supplies modulo-2^24 addition. */
+    for (uint offset = 1u; offset < LOCAL_SIZE; offset <<= 1u) {
+        uint addend = lane >= offset
+            ? scan_shared[lane - offset] : 0u;
+        barrier();
+        scan_shared[lane] = phase_add(scan_shared[lane], addend);
+        barrier();
+    }
+
+    if (index < params.element_count)
+        scan_values.values[
+            base + params.source_offset + index] =
+            scan_shared[lane];
+    if (lane == LOCAL_SIZE - 1u ||
+        index + 1u == params.element_count)
+        scan_values.values[
+            base + params.target_offset + gl_WorkGroupID.x] =
+                scan_shared[lane];
+}
+
+void add_parent_prefix()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint block = index / LOCAL_SIZE;
+    uint base = scan_base();
+    if (index >= params.element_count || block == 0u)
+        return;
+    uint parent = scan_values.values[
+        base + params.parent_offset + block - 1u];
+    uint slot = base + params.source_offset + index;
+    scan_values.values[slot] =
+        phase_add(scan_values.values[slot], parent);
+}
+
+void add_initial_phase()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint base = scan_base();
+    uint persistent = persistent_base();
+    if (index >= params.sample_count)
+        return;
+    uint slot = base + params.source_offset + index;
+    scan_values.values[slot] = phase_add(
+        scan_values.values[slot],
+        persistent_state.values[persistent + params.stage_index]);
+}
+
+void finalize_stage1()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint base = sample_base();
+    uint scan = scan_base();
+    uint persistent = persistent_base();
+    if (index >= params.sample_count)
+        return;
+    uint phase = scan_values.values[scan + index];
+    uint previous_phase = index == 0u
+        ? persistent_state.values[persistent]
+        : scan_values.values[scan + index - 1u];
+    uint first_output =
+        carry(previous_phase,
+            quantize_input(input_samples.values[base + index]));
+    stage1_values.values[base + index] =
+        phase | (first_output << PHASE_BITS);
+}
+
+void initialize_stage2()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint base = sample_base();
+    if (index < params.sample_count)
+        scan_values.values[scan_base() + index] =
+            stage1_values.values[base + index] & PHASE_MASK;
+}
+
+uint stage2_output(uint index)
+{
+    uint base = sample_base();
+    uint scan = scan_base();
+    uint persistent = persistent_base();
+    uint previous_phase = index == 0u
+        ? persistent_state.values[persistent + 1u]
+        : scan_values.values[scan + index - 1u];
+    uint increment =
+        stage1_values.values[base + index] & PHASE_MASK;
+    return carry(previous_phase, increment);
+}
+
+void finalize_stage2()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint base = sample_base();
+    uint persistent = persistent_base();
+    if (index >= params.sample_count)
+        return;
+    int first_output =
+        int(stage1_values.values[base + index] >> PHASE_BITS);
+    int second_output = int(stage2_output(index));
+    int previous_second = index == 0u
+        ? int(persistent_state.values[persistent + 2u])
+        : int(stage2_output(index - 1u));
+    mash_values.values[base + index] =
+        first_output + second_output - previous_second;
+}
+
+void update_mash_state()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+    uint base = sample_base();
+    uint scan = scan_base();
+    uint persistent = persistent_base();
+    uint last = params.sample_count - 1u;
+    if (params.stage_index == 0u)
+        persistent_state.values[persistent] =
+            stage1_values.values[base + last] & PHASE_MASK;
+    else {
+        persistent_state.values[persistent + 1u] =
+            scan_values.values[scan + last];
+        persistent_state.values[persistent + 2u] =
+            stage2_output(last);
+    }
+}
+
+void build_tables()
+{
+    uint item = gl_GlobalInvocationID.x;
+    uint total = params.block_count * params.state_count;
+    uint samples = sample_base();
+    uint tables = table_base();
+    if (item >= total)
+        return;
+    uint block = item / params.state_count;
+    uint source_state = item % params.state_count;
+    uint begin = block * params.block_samples;
+    uint end = min(begin + params.block_samples, params.sample_count);
+    ivec2 state = states.values[source_state];
+    uint ignored;
+    /* Map every possible source state across this independent block. */
+    for (uint sample_index = begin; sample_index < end; ++sample_index)
+        state = reduction_step(
+            state, mash_values.values[samples + sample_index],
+            ignored);
+    tables_a.values[tables + item] = state_index(state);
+}
+
+void compose_tables()
+{
+    uint item = gl_GlobalInvocationID.x;
+    uint total = params.block_count * params.state_count;
+    uint tables = table_base();
+    if (item >= total)
+        return;
+    uint block = item / params.state_count;
+    uint source_state = item % params.state_count;
+    uint result;
+    /*
+     * Ping-pong a doubling prefix over block transition functions.  Function
+     * composition is associative even though sample-by-sample reduction is
+     * causal.
+     */
+    if (params.table_source == 0u) {
+        result = tables_a.values[tables + item];
+        if (block >= params.compose_offset) {
+            uint previous = tables_a.values[
+                tables + (block - params.compose_offset) *
+                    params.state_count + source_state];
+            result = tables_a.values[
+                tables + block * params.state_count + previous];
+        }
+        tables_b.values[tables + item] = result;
+    } else {
+        result = tables_b.values[tables + item];
+        if (block >= params.compose_offset) {
+            uint previous = tables_b.values[
+                tables + (block - params.compose_offset) *
+                    params.state_count + source_state];
+            result = tables_b.values[
+                tables + block * params.state_count + previous];
+        }
+        tables_a.values[tables + item] = result;
+    }
+}
+
+void select_seeds()
+{
+    uint block = gl_GlobalInvocationID.x;
+    uint blocks = block_base();
+    uint tables = table_base();
+    uint persistent = persistent_base();
+    if (block >= params.block_count)
+        return;
+    uint initial_state =
+        persistent_state.values[persistent + 3u];
+    if (block == 0u) {
+        block_seeds.values[blocks + block] = initial_state;
+        return;
+    }
+    uint item = tables +
+        (block - 1u) * params.state_count + initial_state;
+    block_seeds.values[blocks + block] =
+        params.table_source == 0u
+        ? tables_a.values[item] : tables_b.values[item];
+}
+
+void replay_blocks()
+{
+    uint block = gl_GlobalInvocationID.x;
+    uint samples = sample_base();
+    uint blocks = block_base();
+    uint words = word_base();
+    uint persistent = persistent_base();
+    if (block >= params.block_count)
+        return;
+    uint begin = block * params.block_samples;
+    uint end = min(begin + params.block_samples, params.sample_count);
+    ivec2 state =
+        states.values[block_seeds.values[blocks + block]];
+    uint packed = 0u;
+    uint packed_index = words + (begin >> 5u);
+    /*
+     * Seeds now contain the exact serial state at each block boundary, so
+     * blocks can be replayed independently and packed directly as DSD words.
+     */
+    for (uint sample_index = begin; sample_index < end; ++sample_index) {
+        uint output_bit;
+        state = reduction_step(
+            state, mash_values.values[samples + sample_index],
+            output_bit);
+        packed |= output_bit << (sample_index & 31u);
+        if ((sample_index & 31u) == 31u) {
+            output_words.values[packed_index++] = packed;
+            packed = 0u;
+        }
+    }
+    if ((end & 31u) != 0u)
+        output_words.values[packed_index] = packed;
+    if (block + 1u == params.block_count)
+        persistent_state.values[persistent + 3u] =
+            state_index(state);
+}
+
+void main()
+{
+    if (params.mode == MODE_INPUT)
+        initialize_input();
+    else if (params.mode == MODE_SCAN)
+        scan_level();
+    else if (params.mode == MODE_ADD)
+        add_parent_prefix();
+    else if (params.mode == MODE_STAGE1)
+        finalize_stage1();
+    else if (params.mode == MODE_STAGE2_INPUT)
+        initialize_stage2();
+    else if (params.mode == MODE_STAGE2)
+        finalize_stage2();
+    else if (params.mode == MODE_TABLES)
+        build_tables();
+    else if (params.mode == MODE_COMPOSE)
+        compose_tables();
+    else if (params.mode == MODE_SEEDS)
+        select_seeds();
+    else if (params.mode == MODE_REPLAY)
+        replay_blocks();
+    else if (params.mode == MODE_ADD_INITIAL_PHASE)
+        add_initial_phase();
+    else if (params.mode == MODE_UPDATE_MASH_STATE)
+        update_mash_state();
+}

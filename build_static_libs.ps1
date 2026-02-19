@@ -10,6 +10,7 @@
 param(
     [int]$Jobs = $env:NUMBER_OF_PROCESSORS,
     [switch]$Clean,
+    [switch]$KeepBuild,
     [switch]$Help,
 
     # Codec exclusion options (all enabled by default)
@@ -23,6 +24,7 @@ param(
     [switch]$NoId3tag,
     [switch]$NoPng,
     [switch]$NoFfmpeg,
+    [switch]$NoVulkan,
 
     # Audio driver options
     # Default: waveaudio (libao not supported on Windows)
@@ -53,6 +55,7 @@ $EnableSndfile = -not $NoSndfile
 $EnableId3tag = -not $NoId3tag
 $EnablePng = -not $NoPng
 $EnableFfmpeg = -not $NoFfmpeg
+$EnableVulkan = -not $NoVulkan
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS
@@ -1172,6 +1175,15 @@ function Test-SoxExecutable($binary) {
     }
 
     Write-Success "sox.exe smoke test passed"
+
+    if ($EnableVulkan) {
+        $help = & $binary --help 2>&1
+        if ($LASTEXITCODE -ne 0 -or
+            -not ($help | Select-String -SimpleMatch "--vulkan")) {
+            throw "sox.exe help does not expose the enabled Vulkan backend"
+        }
+        Write-Success "sox.exe Vulkan help check passed"
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -1186,6 +1198,7 @@ function Show-Help {
     Write-Host "General Options:"
     Write-Host "  -Jobs N             Number of parallel build jobs (default: auto)"
     Write-Host "  -Clean              Remove build and output directories"
+    Write-Host "  -KeepBuild          Keep downloaded sources, static libraries, and build directories"
     Write-Host "  -Help               Show this help message"
     Write-Host ""
     Write-Host "Codec Options (all enabled by default, use to exclude):"
@@ -1199,6 +1212,7 @@ function Show-Help {
     Write-Host "  -NoId3tag           Exclude ID3 tag support"
     Write-Host "  -NoPng              Exclude PNG spectrogram support"
     Write-Host "  -NoFfmpeg           Exclude FFmpeg codec and container support"
+    Write-Host "  -NoVulkan           Exclude the Windows/NVIDIA Vulkan DSD backend"
     Write-Host ""
     Write-Host "Audio Driver Options:"
     Write-Host "  Default drivers: waveaudio (Windows native)"
@@ -1208,6 +1222,7 @@ function Show-Help {
     Write-Host "Examples:"
     Write-Host "  .\build_static_libs.ps1                    # Build with all codecs"
     Write-Host "  .\build_static_libs.ps1 -NoMp2 -NoId3tag   # Exclude MP2 and ID3 tag"
+    Write-Host "  .\build_static_libs.ps1 -NoVulkan           # Build without Vulkan SDK"
     Write-Host ""
     exit 0
 }
@@ -1252,6 +1267,21 @@ function Main {
     }
     Write-Info "Found CMake: $script:CMakePath"
 
+    if ($EnableVulkan) {
+        $glslc = Get-Command glslc.exe -ErrorAction SilentlyContinue
+        if (-not $glslc -and $env:VULKAN_SDK) {
+            $sdkGlslc = Join-Path $env:VULKAN_SDK "Bin\glslc.exe"
+            if (Test-Path $sdkGlslc) {
+                $glslc = Get-Item $sdkGlslc
+            }
+        }
+        if (-not $glslc) {
+            Write-Err "Vulkan SDK with glslc is required. Install it or use -NoVulkan."
+            exit 1
+        }
+        Write-Info "Found glslc: $($glslc.FullName)"
+    }
+
     if (-not (Test-Command "tar")) {
         Write-Warn "tar not found in PATH, will try to use built-in Windows tar"
     }
@@ -1279,6 +1309,8 @@ function Main {
     Write-Host "    ID3 Tag:    $EnableId3tag"
     Write-Host "    PNG:        $EnablePng"
     Write-Host "    FFmpeg:     $EnableFfmpeg"
+    Write-Host "  Acceleration:"
+    Write-Host "    Vulkan DSD: $EnableVulkan"
     Write-Host "  Audio Drivers:"
     Write-Host "    Waveaudio:  $EnableWaveaudio"
     Write-Host ""
@@ -1360,6 +1392,7 @@ function Main {
             "-DSTATIC_LIBS_DIR=$StaticLibsDir"
             "-DWITH_OPENMP=ON"
             "-DSOX_REQUIRE_OPENMP=ON"
+            "-DWITH_VULKAN=$($EnableVulkan.ToString().ToUpperInvariant())"
             "-DWITH_FFMPEG_CODECS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
             "-DWITH_FFMPEG_FORMATS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
         )
@@ -1410,13 +1443,15 @@ function Main {
 
     Write-Success "Binary copied to: $OutputDir\sox.exe"
 
-    # Cleanup temporary files
-    Write-Info "Cleaning up temporary files..."
-    if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
-    if (Test-Path $StaticLibsDir) { Remove-Item -Recurse -Force $StaticLibsDir }
-    if (Test-Path $SoxBuildDir) { Remove-Item -Recurse -Force $SoxBuildDir }
-
-    Write-Success "Cleanup complete!"
+    if ($KeepBuild) {
+        Write-Info "Keeping build directories for incremental rebuilds."
+    } else {
+        Write-Info "Cleaning up temporary build files..."
+        if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
+        if (Test-Path $StaticLibsDir) { Remove-Item -Recurse -Force $StaticLibsDir }
+        if (Test-Path $SoxBuildDir) { Remove-Item -Recurse -Force $SoxBuildDir }
+        Write-Success "Cleanup complete!"
+    }
 
     Write-Host ""
     Write-Host "=============================================="

@@ -181,6 +181,64 @@ set(LIBSOX_FORMAT_HEADERS
     ffmpeg-codec.h
 )
 
+if(HAVE_VULKAN)
+    set(SDM_VULKAN_FIR_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_polyphase.comp")
+    set(SDM_VULKAN_MASH_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_mash2_fsm.comp")
+    set(SDM_VULKAN_FIR_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase.comp.spv")
+    set(SDM_VULKAN_MASH_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm.comp.spv")
+    set(SDM_VULKAN_FIR_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase_spv.inc")
+    set(SDM_VULKAN_MASH_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm_spv.inc")
+
+    add_executable(sox_embed_binary
+        "${CMAKE_CURRENT_SOURCE_DIR}/embed_binary.c")
+    if(MSVC)
+        target_compile_definitions(
+            sox_embed_binary PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+    add_custom_command(
+        OUTPUT "${SDM_VULKAN_FIR_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${SDM_VULKAN_FIR_SPV}" "${SDM_VULKAN_FIR_SOURCE}"
+        DEPENDS "${SDM_VULKAN_FIR_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${SDM_VULKAN_MASH_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${SDM_VULKAN_MASH_SPV}" "${SDM_VULKAN_MASH_SOURCE}"
+        DEPENDS "${SDM_VULKAN_MASH_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${SDM_VULKAN_FIR_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${SDM_VULKAN_FIR_SPV}" "${SDM_VULKAN_FIR_INC}"
+                sdm_vulkan_fir_spv
+        DEPENDS sox_embed_binary "${SDM_VULKAN_FIR_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${SDM_VULKAN_MASH_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${SDM_VULKAN_MASH_SPV}" "${SDM_VULKAN_MASH_INC}"
+                sdm_vulkan_mash_spv
+        DEPENDS sox_embed_binary "${SDM_VULKAN_MASH_SPV}"
+        VERBATIM
+    )
+    add_custom_target(
+        sdm_vulkan_shaders
+        DEPENDS "${SDM_VULKAN_FIR_INC}" "${SDM_VULKAN_MASH_INC}"
+    )
+    list(APPEND LIBSOX_EFFECTS_SOURCES sdm_vulkan.c)
+    list(APPEND LIBSOX_EFFECTS_HEADERS sdm_vulkan.h)
+endif()
+
 # Combine all sources
 set(LIBSOX_SOURCES
     ${LIBSOX_CORE_SOURCES}
@@ -196,6 +254,13 @@ set(LIBSOX_HEADERS
 
 # Create libsox library
 add_library(libsox ${LIBSOX_SOURCES} ${LIBSOX_HEADERS})
+
+if(HAVE_VULKAN)
+    add_dependencies(libsox sdm_vulkan_shaders)
+    target_link_libraries(libsox PRIVATE Vulkan::Vulkan)
+    target_include_directories(libsox PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
 
 # Set output name (produces libsox.so on Linux, libsox.lib on Windows)
 set_target_properties(libsox PROPERTIES

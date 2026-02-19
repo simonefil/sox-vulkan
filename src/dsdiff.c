@@ -32,6 +32,8 @@ struct dsdiff {
 };
 
 static size_t dff_write_packed(sox_format_t *, const sox_sample_t *, size_t);
+static size_t dff_write_packed_words(sox_format_t *,
+	const sox_sample_t *, size_t);
 
 #define ID(a, b, c, d) ((a) << 24 | (b) << 16 | (c) << 8 | (d))
 
@@ -303,6 +305,7 @@ static int dff_startwrite(sox_format_t *ft)
 
 	dff->data_size = 0;
 	ft->write_packed_dsd = dff_write_packed;
+	ft->write_packed_dsd_words = dff_write_packed_words;
 	dff->buf = lsx_calloc(ft->signal.channels, 1);
 	if (!dff->buf)
 		return SOX_ENOMEM;
@@ -469,6 +472,50 @@ static size_t dff_write_packed(sox_format_t *ft,
 	}
 
 	return consumed;
+}
+
+static uint8_t dff_reverse_byte(uint8_t value)
+{
+	value = (uint8_t)((value >> 4) | (value << 4));
+	value = (uint8_t)(((value & 0xcc) >> 2) | ((value & 0x33) << 2));
+	return (uint8_t)(((value & 0xaa) >> 1) | ((value & 0x55) << 1));
+}
+
+static size_t dff_write_packed_words(sox_format_t *ft,
+	const sox_sample_t *buf, size_t len)
+{
+	struct dsdiff *dff = ft->priv;
+	unsigned channels = ft->signal.channels;
+	size_t bytes;
+	size_t group;
+
+	if (dff->bit_pos || !channels || len % channels ||
+	    len > SOX_SIZE_MAX / 4)
+		return 0;
+	bytes = len * 4;
+	if (bytes > dff->packed_capacity) {
+		dff->packed_buf = lsx_realloc(dff->packed_buf, bytes);
+		dff->packed_capacity = bytes;
+	}
+	/* GPU words are planar; DSDIFF stores bytes interleaved by channel. */
+	for (group = 0; group < len / channels; ++group) {
+		unsigned byte;
+		for (byte = 0; byte < 4; ++byte) {
+			unsigned channel;
+			for (channel = 0; channel < channels; ++channel) {
+				uint32_t word = (uint32_t)
+					buf[channel * (len / channels) + group];
+				dff->packed_buf[
+					(group * 4 + byte) * channels + channel] =
+					dff_reverse_byte(
+						(uint8_t)(word >> (byte * 8)));
+			}
+		}
+	}
+	if (lsx_write_b_buf(ft, dff->packed_buf, bytes) < bytes)
+		return 0;
+	dff->data_size += bytes;
+	return len;
 }
 
 static int dff_stopwrite(sox_format_t *ft)

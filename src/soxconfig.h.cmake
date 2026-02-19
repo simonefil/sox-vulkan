@@ -51,6 +51,7 @@
 #cmakedefine HAVE_MAGIC               1
 #cmakedefine HAVE_PNG                 1
 #cmakedefine HAVE_OPENMP              1
+#cmakedefine HAVE_VULKAN              1
 
 /* Standard headers */
 #cmakedefine HAVE_BYTESWAP_H          1

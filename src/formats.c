@@ -1366,6 +1366,22 @@ size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf,
   return actual;
 }
 
+size_t sox_write_packed_dsd_words(sox_format_t *ft,
+                                  const sox_sample_t *buf, size_t len)
+{
+  size_t actual;
+  size_t channels = ft->signal.channels;
+
+  if (!ft->write_packed_dsd_words ||
+      !channels || len % channels)
+    return 0;
+  actual = (*ft->write_packed_dsd_words)(ft, buf, len);
+  if (actual > len || actual % channels)
+    return 0;
+  ft->olength += actual * 32u;
+  return actual;
+}
+
 int sox_close(sox_format_t * ft)
 {
   int result = SOX_SUCCESS;

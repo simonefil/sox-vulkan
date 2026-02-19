@@ -94,3 +94,5 @@ sox_version
 sox_version_info
 sox_write
 sox_write_handler
+sox_write_packed_dsd
+sox_write_packed_dsd_words

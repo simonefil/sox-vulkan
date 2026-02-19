@@ -24,6 +24,7 @@ This repository includes build scripts for compiling SoX with statically linked 
 - Visual Studio 2019 or later (with C++ workload)
 - PowerShell 7 (`pwsh`)
 - CMake 3.15 or later
+- Vulkan SDK with `glslc` (required by default for the Vulkan DSD backend; use `-NoVulkan` to disable it)
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
@@ -166,8 +167,14 @@ chmod +x build_static_libs.sh
 # Build without FFmpeg-backed formats
 .\build_static_libs.ps1 -NoFfmpeg
 
+# Build without the Vulkan DSD backend
+.\build_static_libs.ps1 -NoVulkan
+
 # Build with 4 parallel jobs
 .\build_static_libs.ps1 -Jobs 4
+
+# Keep dependency sources and build directories for incremental rebuilds
+.\build_static_libs.ps1 -KeepBuild
 
 # Clean build directories
 .\build_static_libs.ps1 -Clean
@@ -245,6 +252,7 @@ chmod +x build_static_libs.sh
 |----------|-------------|
 | `-Jobs N` | Number of parallel build jobs (default: auto) |
 | `-Clean` | Remove all build and output directories |
+| `-KeepBuild` | Keep dependency sources, static libraries, and build directories |
 | `-Help` | Show help message |
 
 **Codec Exclusion:**
@@ -259,6 +267,7 @@ chmod +x build_static_libs.sh
 | `-NoWavpack` | Exclude WavPack support |
 | `-NoSndfile` | Exclude libsndfile support |
 | `-NoFfmpeg` | Exclude FFmpeg-backed format support |
+| `-NoVulkan` | Exclude the Windows/NVIDIA Vulkan DSD backend |
 | `-NoId3tag` | Exclude ID3 tag support |
 | `-NoPng` | Exclude PNG spectrogram support |
 
@@ -411,6 +420,14 @@ This lists all formats enabled in the current build. Look for:
 ./output/sox -n test.wav synth 5 sine 440
 ```
 
+On Windows, enable the NVIDIA Vulkan encode path explicitly:
+
+```powershell
+.\output\sox.exe --multi-threaded --vulkan --buffer 524288 input.wav `
+  -r 22579200 output.dsf `
+  sdm -r 22579200
+```
+
 #### Codec Summary
 
 | Format | Encoding | Decoding and limits |
@@ -432,6 +449,10 @@ Run `sox --help-format FORMAT` for the sample rates, channel layouts, compressio
 #### DSD modulation
 
 The `sdm` effect performs PCM-to-DSD sigma-delta modulation; DSF and DSDIFF writers only pack the resulting one-bit stream. `-r RATE` fuses the very-high-quality resampler with the modulator and passes normalized double-precision samples directly to it. Channels are processed concurrently when multithreading is enabled; use `-j N` to cap workers, or omit it to use the OpenMP runtime limit. Each individual channel retains the full-rate causal SDM recurrence.
+
+On Windows builds compiled with Vulkan support, the global `--vulkan` option selects the NVIDIA Vulkan encode path for `sdm -r`. It accepts one through six channels and PCM input rates that are integer multiples of either 44.1 or 48 kHz. Output is restricted to the fixed DSD64, DSD128, DSD256, DSD512, and DSD1024 rates in the 44.1 kHz family. The backend performs rational `L/M` conversion with a 257-tap-per-phase Kaiser-windowed FIR on the GPU, using a 20 kHz passband edge and the lower of the source and output Nyquist frequencies as the stopband edge, followed by the conservative MASH-2 finite-state modulator at a fixed −3 dB input gain. CPU filter selections (`-f`), `-j`, and trellis options do not alter this path; trellis is rejected and the other two options are reported as ignored. DSF and DSDIFF output use a channel-major packed-word path, so the final duration is rounded up by at most 31 DSD samples to complete the last 32-bit word. DSD decoding remains on the normal CPU path.
+
+Vulkan shaders are compiled to SPIR-V and embedded in the executable at build time, so no shader or data files are installed beside `sox.exe`. The only additional runtime dependency is the system `vulkan-1.dll` loader supplied with the Vulkan-capable display driver. The release gate was validated on Windows with an NVIDIA RTX 3080 using 30-second mono, stereo, and 5.1 inputs across DSD64 through DSD1024; the integrated DSF output was bit-identical to the standalone reference for signed 32-bit PCM input.
 
 #### Channel Layouts
 
@@ -498,7 +519,7 @@ On macOS, every dependency must come from `/usr/lib` or `/System/Library`, for e
 
 FFmpeg and the bundled codec libraries must not appear as `.dylib` dependencies.
 
-On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and `bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual C++ Redistributable for OpenMP support. Codec DLLs, MSYS runtime DLLs, `VCRUNTIME`, `MSVCP`, and `ucrtbase` must not appear.
+On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and `bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual C++ Redistributable for OpenMP support and `vulkan-1.dll` when the Vulkan DSD backend is enabled. Codec DLLs, MSYS runtime DLLs, `VCRUNTIME`, `MSVCP`, and `ucrtbase` must not appear.
 
 ### 6. Test Audio Playback
 

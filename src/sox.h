@@ -451,6 +451,7 @@ Native SoX audio sample type (alias for sox_int32_t).
 typedef sox_int32_t sox_sample_t;
 
 #define SOX_DSD_PACKING_BYTE 8
+#define SOX_DSD_PACKING_WORD 32
 #define SOX_DSD_PACKED_BYTE(data, valid_bits) \
   ((sox_sample_t)((uint8_t)(data) | ((uint32_t)(valid_bits) << 8)))
 #define SOX_DSD_PACKED_DATA(sample) ((uint8_t)(sample))
@@ -1205,6 +1206,19 @@ typedef size_t (LSX_API * sox_format_handler_write_packed_dsd)(
 
 /**
 Client API:
+Callback to write complete 32-bit DSD words carried directly in
+sox_sample_t values. Bit zero is the earliest bit in each word. Words are
+grouped by channel within each buffer.
+@returns number of packed words consumed.
+*/
+typedef size_t (LSX_API * sox_format_handler_write_packed_dsd_words)(
+    LSX_PARAM_INOUT sox_format_t * ft,
+    LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf,
+    size_t len
+    );
+
+/**
+Client API:
 Callback to close writer (decoder),
 used by sox_format_handler.stopwrite.
 @returns SOX_SUCCESS if successful.
@@ -1373,6 +1387,8 @@ typedef struct sox_globals_t {
   Plugins should use similarly-sized DFTs to get best performance.
   */
   size_t       log2_dft_min_size;
+
+  sox_bool     use_vulkan;      /**< Private: true if the Vulkan backend was requested */
 } sox_globals_t;
 
 /**
@@ -1573,6 +1589,8 @@ struct sox_format_t {
   char const       * codec_options; /**< Internal codec options, if supported by the handler */
   char const       * channel_layout; /**< Explicit output channel layout, if supported by the handler */
   sox_format_handler_write_packed_dsd write_packed_dsd; /**< Optional packed DSD writer. */
+  /** Optional writer for complete, channel-major 32-bit DSD words. */
+  sox_format_handler_write_packed_dsd_words write_packed_dsd_words;
   unsigned char    * read_replay_buffer; /**< Internal bytes consumed while probing a non-seekable input. */
   size_t             read_replay_size; /**< Internal size of the input probe replay buffer. */
   size_t             read_replay_pos; /**< Internal current position in the input probe replay buffer. */
@@ -2039,6 +2057,14 @@ sox_write(
 size_t
 LSX_API
 sox_write_packed_dsd(
+    LSX_PARAM_INOUT sox_format_t * ft,
+    LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf,
+    size_t len
+    );
+
+size_t
+LSX_API
+sox_write_packed_dsd_words(
     LSX_PARAM_INOUT sox_format_t * ft,
     LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf,
     size_t len

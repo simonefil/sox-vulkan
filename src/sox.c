@@ -667,19 +667,36 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
   (void)effp, (void)obuf;
   if (effp->in_signal.packing) {
     size_t channels = effp->in_signal.channels;
-    size_t i;
 
     *osamp = 0;
-    if (effp->in_signal.packing != SOX_DSD_PACKING_BYTE ||
-        !ofile->ft->write_packed_dsd) {
+    if ((effp->in_signal.packing == SOX_DSD_PACKING_BYTE &&
+         !ofile->ft->write_packed_dsd) ||
+        (effp->in_signal.packing == SOX_DSD_PACKING_WORD &&
+         !ofile->ft->write_packed_dsd_words) ||
+        (effp->in_signal.packing != SOX_DSD_PACKING_BYTE &&
+         effp->in_signal.packing != SOX_DSD_PACKING_WORD)) {
       lsx_fail("packed DSD output requires a DSF or DSDIFF writer");
       return SOX_EOF;
     }
 
-    len = *isamp ?
-        sox_write_packed_dsd(ofile->ft, ibuf, *isamp) : 0;
-    for (i = 0; i < len; i += channels)
-      output_samples += SOX_DSD_PACKED_VALID_BITS(ibuf[i]);
+    if (effp->in_signal.packing == SOX_DSD_PACKING_WORD) {
+      len = *isamp ?
+          sox_write_packed_dsd_words(ofile->ft, ibuf, *isamp) : 0;
+      output_samples += 32 * (len / channels);
+    } else {
+      len = *isamp ?
+          sox_write_packed_dsd(ofile->ft, ibuf, *isamp) : 0;
+      if (len && SOX_DSD_PACKED_VALID_BITS(ibuf[0]) == 8 &&
+          SOX_DSD_PACKED_VALID_BITS(
+              ibuf[len - channels]) == 8)
+        output_samples += 8 * (len / channels);
+      else {
+        size_t i;
+        for (i = 0; i < len; i += channels)
+          output_samples +=
+              SOX_DSD_PACKED_VALID_BITS(ibuf[i]);
+      }
+    }
     output_eof = len != *isamp ? sox_true : sox_false;
     return len == *isamp ? SOX_SUCCESS : SOX_EOF;
   }
@@ -1984,6 +2001,11 @@ static void usage(char const * message)
   static char const * const linesThreads[] = {
 "--multi-threaded         Enable parallel effects channels processing"
   };
+#if HAVE_VULKAN
+  static char const * const linesVulkan[] = {
+"--vulkan                Enable the Vulkan FIR and DSD modulation backend"
+  };
+#endif
   static char const * const lines3[] = {
 "--norm                   Guard (see --guard) & normalise",
 "--play-rate-arg ARG      Default `rate' argument for auto-resample with `play'",
@@ -2055,6 +2077,10 @@ static void usage(char const * message)
   if (info->flags & sox_version_have_threads)
     for (i = 0; i < array_length(linesThreads); ++i)
       puts(linesThreads[i]);
+#if HAVE_VULKAN
+  for (i = 0; i < array_length(linesVulkan); ++i)
+    puts(linesVulkan[i]);
+#endif
   for (i = 0; i < array_length(lines3); ++i)
     puts(lines3[i]);
   display_supported_formats();
@@ -2236,6 +2262,7 @@ static struct lsx_option_t const long_options[] = {
   {"dft-min"         , lsx_option_arg_required, NULL, 0},
   {"ffmpeg-opts"     , lsx_option_arg_required, NULL, 0},
   {"channel-layout"  , lsx_option_arg_required, NULL, 0},
+  {"vulkan"          , lsx_option_arg_none    , NULL, 0},
 
   {"bits"            , lsx_option_arg_required, NULL, 'b'},
   {"channels"        , lsx_option_arg_required, NULL, 'c'},
@@ -2439,6 +2466,14 @@ static char parse_gopts_and_fopts(file_t * f)
           usage("--channel-layout requires a non-empty layout name");
         free(f->channel_layout);
         f->channel_layout = lsx_strdup(optstate.arg);
+        break;
+      case 28:
+#if HAVE_VULKAN
+        sox_globals.use_vulkan = sox_true;
+#else
+        lsx_fail("this build of SoX does not include Vulkan support");
+        exit(1);
+#endif
         break;
       }
       break;

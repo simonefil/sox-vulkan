@@ -71,6 +71,9 @@ option(WITH_OPENMP "Enable OpenMP support" ON)
 option(SOX_REQUIRE_OPENMP
     "Fail configuration when OpenMP support is unavailable"
     OFF)
+option(WITH_VULKAN
+    "Enable the Windows Vulkan backend for FIR and DSD modulation"
+    OFF)
 
 if(BUILD_STATIC_EXECUTABLE)
     set(BUILD_SHARED_LIBS OFF)
@@ -227,6 +230,16 @@ if(WITH_OPENMP)
         message(FATAL_ERROR
             "OpenMP support is required but was not found for the C compiler")
     endif()
+endif()
+
+if(WITH_VULKAN)
+    if(NOT IS_WINDOWS)
+        message(FATAL_ERROR
+            "The Vulkan DSD backend currently supports Windows only")
+    endif()
+    find_package(Vulkan REQUIRED)
+    find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
+    set(HAVE_VULKAN TRUE)
 endif()
 
 # Find packages using pkg-config when available
@@ -931,6 +944,7 @@ message(STATUS "  PNG (spectrogram):     ${HAVE_PNG}")
 message(STATUS "  libmagic:              ${HAVE_MAGIC}")
 message(STATUS "  LADSPA:                ${HAVE_LADSPA_H}")
 message(STATUS "  OpenMP:                ${HAVE_OPENMP}")
+message(STATUS "  Vulkan DSD:            ${HAVE_VULKAN}")
 message(STATUS "")
 
 # pkg-config file

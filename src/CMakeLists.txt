@@ -186,14 +186,26 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_polyphase.comp")
     set(SDM_VULKAN_MASH_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_mash2_fsm.comp")
+    set(FIR_VULKAN_PARTITION_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f64.comp")
+    set(RATE_VULKAN_POLYPHASE_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f64.comp")
     set(SDM_VULKAN_FIR_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase.comp.spv")
     set(SDM_VULKAN_MASH_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm.comp.spv")
+    set(FIR_VULKAN_PARTITION_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64.comp.spv")
     set(SDM_VULKAN_FIR_INC
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase_spv.inc")
     set(SDM_VULKAN_MASH_INC
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm_spv.inc")
+    set(FIR_VULKAN_PARTITION_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64_spv.inc")
 
     add_executable(sox_embed_binary
         "${CMAKE_CURRENT_SOURCE_DIR}/embed_binary.c")
@@ -216,6 +228,20 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${FIR_VULKAN_PARTITION_SPV}"
+                "${FIR_VULKAN_PARTITION_SOURCE}"
+        DEPENDS "${FIR_VULKAN_PARTITION_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_POLYPHASE_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_POLYPHASE_SPV}" "${RATE_VULKAN_POLYPHASE_SOURCE}"
+        DEPENDS "${RATE_VULKAN_POLYPHASE_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
         OUTPUT "${SDM_VULKAN_FIR_INC}"
         COMMAND $<TARGET_FILE:sox_embed_binary>
                 "${SDM_VULKAN_FIR_SPV}" "${SDM_VULKAN_FIR_INC}"
@@ -231,12 +257,44 @@ if(HAVE_VULKAN)
         DEPENDS sox_embed_binary "${SDM_VULKAN_MASH_SPV}"
         VERBATIM
     )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${FIR_VULKAN_PARTITION_SPV}"
+                "${FIR_VULKAN_PARTITION_INC}"
+                fir_partition_f64_spv
+        DEPENDS sox_embed_binary "${FIR_VULKAN_PARTITION_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_POLYPHASE_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_POLYPHASE_SPV}" "${RATE_VULKAN_POLYPHASE_INC}" rate_polyphase_f64_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_POLYPHASE_SPV}"
+        VERBATIM
+    )
     add_custom_target(
         sdm_vulkan_shaders
-        DEPENDS "${SDM_VULKAN_FIR_INC}" "${SDM_VULKAN_MASH_INC}"
+        DEPENDS
+            "${SDM_VULKAN_FIR_INC}"
+            "${SDM_VULKAN_MASH_INC}"
+            "${FIR_VULKAN_PARTITION_INC}"
+            "${RATE_VULKAN_POLYPHASE_INC}"
     )
-    list(APPEND LIBSOX_EFFECTS_SOURCES sdm_vulkan.c)
-    list(APPEND LIBSOX_EFFECTS_HEADERS sdm_vulkan.h)
+    list(APPEND LIBSOX_EFFECTS_SOURCES
+        fir_vulkan.c
+        glslang_dynamic.c
+        rate_vulkan.c
+        rate_polyphase_vulkan.c
+        sdm_vulkan.c
+        vulkan_engine.c
+    )
+    list(APPEND LIBSOX_EFFECTS_HEADERS
+        fir_vulkan.h
+        rate_vulkan.h
+        rate_polyphase_vulkan.h
+        sdm_vulkan.h
+        vulkan_engine.h
+    )
 endif()
 
 # Combine all sources
@@ -257,9 +315,13 @@ add_library(libsox ${LIBSOX_SOURCES} ${LIBSOX_HEADERS})
 
 if(HAVE_VULKAN)
     add_dependencies(libsox sdm_vulkan_shaders)
+    target_compile_definitions(libsox PRIVATE VKFFT_BACKEND=0)
     target_link_libraries(libsox PRIVATE Vulkan::Vulkan)
     target_include_directories(libsox PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(libsox SYSTEM PRIVATE
+        "${VKFFT_INCLUDE_DIR}"
+        "$ENV{VULKAN_SDK}/Include/glslang/Include")
 endif()
 
 # Set output name (produces libsox.so on Linux, libsox.lib on Windows)
@@ -566,13 +628,20 @@ add_executable(sox_exe ${SOX_SOURCES})
 set_target_properties(sox_exe PROPERTIES
     OUTPUT_NAME sox
 )
-
 # Add static_libs to link path for sox_exe
 if(EXISTS "${STATIC_LIBS_DIR}/lib")
     target_link_directories(sox_exe PRIVATE "${STATIC_LIBS_DIR}/lib")
 endif()
 
 target_link_libraries(sox_exe PRIVATE libsox)
+
+if(HAVE_VULKAN)
+    add_custom_command(TARGET sox_exe POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${GLSLANG_RUNTIME_DLL}" "$<TARGET_FILE_DIR:sox_exe>"
+        VERBATIM
+    )
+endif()
 
 # pthread is needed by WavPack on the BSD platforms.
 if(HAVE_WAVPACK AND CMAKE_SYSTEM_NAME MATCHES "FreeBSD|OpenBSD|NetBSD|DragonFly")
@@ -595,6 +664,12 @@ install(TARGETS libsox
 install(TARGETS sox_exe
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+if(HAVE_VULKAN)
+    install(FILES "${GLSLANG_RUNTIME_DLL}"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
 # Install header
 install(FILES sox.h

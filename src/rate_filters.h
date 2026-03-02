@@ -86,13 +86,18 @@ static const sample_t half_fir_coefs_13[] = {
 #define COEFS half_fir_coefs_13
 #include "rate_half_fir.h"
 
-static struct {int num_coefs; stage_fn_t fn; float att;} const half_firs[] = {
-  { 8, h8 , 136.51},
-  { 9, h9 , 152.32},
-  {10, h10, 168.07},
-  {11, h11, 183.78},
-  {12, h12, 199.44},
-  {13, h13, 212.75},
+static struct {
+  int num_coefs;
+  sample_t const * coefs;
+  stage_fn_t fn;
+  float att;
+} const half_firs[] = {
+  { 8, half_fir_coefs_8 , h8 , 136.51},
+  { 9, half_fir_coefs_9 , h9 , 152.32},
+  {10, half_fir_coefs_10, h10, 168.07},
+  {11, half_fir_coefs_11, h11, 183.78},
+  {12, half_fir_coefs_12, h12, 199.44},
+  {13, half_fir_coefs_13, h13, 212.75},
 };
 
 #define HI_PREC_CLOCK

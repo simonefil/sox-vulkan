@@ -1,0 +1,25 @@
+/* Partitioned VkFFT FIR backend for SoX.
+ *
+ * This library is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or (at
+ * your option) any later version.
+ */
+
+#ifndef LSX_FIR_VULKAN_H
+#define LSX_FIR_VULKAN_H
+
+#include "vulkan_engine.h"
+
+typedef struct lsx_fir_vulkan lsx_fir_vulkan_t;
+
+lsx_fir_vulkan_t *lsx_fir_vulkan_create(
+    lsx_vulkan_context_t *vulkan, double const *coefficients,
+    size_t taps, uint32_t channels);
+void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context);
+size_t lsx_fir_vulkan_block_frames(void);
+int lsx_fir_vulkan_process(
+    lsx_fir_vulkan_t *context, double const *input,
+    double const **output);
+
+#endif

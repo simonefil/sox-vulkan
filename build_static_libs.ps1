@@ -80,6 +80,7 @@ $Versions = @{
     libmad = "0.15.1b"
     libid3tag = "0.15.1b"
     ffmpeg = "8.1.2"
+    vkfft = "1.3.4"
 }
 
 # ------------------------------------------------------------------------------
@@ -283,6 +284,34 @@ function Build-CMakeProject($srcDir, $extraFlags = @()) {
 # ------------------------------------------------------------------------------
 # Build functions for each library
 # ------------------------------------------------------------------------------
+
+function Install-VkFFT {
+    Write-Info "========== Installing VkFFT $($Versions.vkfft) =========="
+
+    $url = "https://github.com/DTolm/VkFFT/archive/refs/tags/v$($Versions.vkfft).tar.gz"
+    $archive = Join-Path $DownloadDir "VkFFT-$($Versions.vkfft).tar.gz"
+    $src = Join-Path $SrcDir "VkFFT-$($Versions.vkfft)"
+    $expectedSha256 = "b61055393adb3adc79009fe12401cbfbbdfba584e665e9c35fcbf4b32fb31f30"
+
+    Download-File $url $archive
+    $actualSha256 = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $expectedSha256) {
+        throw "VkFFT archive checksum mismatch: $actualSha256"
+    }
+
+    if (-not (Test-Path $src)) {
+        Extract-Archive $archive $SrcDir
+    }
+
+    $includeDir = Join-Path $StaticLibsDir "include"
+    $licenseDir = Join-Path $StaticLibsDir "share\licenses\VkFFT"
+    New-Item -ItemType Directory -Path $includeDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $licenseDir -Force | Out-Null
+    Copy-Item (Join-Path $src "vkFFT") $includeDir -Recurse -Force
+    Copy-Item (Join-Path $src "LICENSE") $licenseDir -Force
+
+    Write-Success "VkFFT headers installed"
+}
 
 function Build-Zlib {
     Write-Info "========== Building zlib $($Versions.zlib) =========="
@@ -1142,19 +1171,19 @@ function Test-StaticDependencies($binary) {
         throw "dumpbin.exe not found; run from a Visual Studio Developer PowerShell."
     }
 
-    Write-Info "Verifying static third-party dependencies (the MSVC OpenMP runtime may be dynamic)..."
+    Write-Info "Verifying that audio codec dependencies are static..."
     $dependencies = & $dumpbin.Source /dependents $binary 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect executable dependencies with dumpbin"
     }
 
-    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-|VCRUNTIME|MSVCP|api-ms-win-crt|ucrtbase"
+    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {
         throw "Unexpected dynamic dependency detected:`n$($unexpected -join [Environment]::NewLine)"
     }
 
-    Write-Success "Third-party dependencies and the C/C++ runtime are statically linked"
+    Write-Success "Audio codec dependencies are statically linked"
 }
 
 function Test-SoxExecutable($binary) {
@@ -1212,7 +1241,7 @@ function Show-Help {
     Write-Host "  -NoId3tag           Exclude ID3 tag support"
     Write-Host "  -NoPng              Exclude PNG spectrogram support"
     Write-Host "  -NoFfmpeg           Exclude FFmpeg codec and container support"
-    Write-Host "  -NoVulkan           Exclude the Windows/NVIDIA Vulkan DSD backend"
+    Write-Host "  -NoVulkan           Exclude the Windows Vulkan FIR and DSD backends"
     Write-Host ""
     Write-Host "Audio Driver Options:"
     Write-Host "  Default drivers: waveaudio (Windows native)"
@@ -1268,8 +1297,12 @@ function Main {
     Write-Info "Found CMake: $script:CMakePath"
 
     if ($EnableVulkan) {
+        if (-not $env:VULKAN_SDK) {
+            Write-Err "VULKAN_SDK is required for the Vulkan/VkFFT build."
+            exit 1
+        }
         $glslc = Get-Command glslc.exe -ErrorAction SilentlyContinue
-        if (-not $glslc -and $env:VULKAN_SDK) {
+        if (-not $glslc) {
             $sdkGlslc = Join-Path $env:VULKAN_SDK "Bin\glslc.exe"
             if (Test-Path $sdkGlslc) {
                 $glslc = Get-Item $sdkGlslc
@@ -1280,6 +1313,13 @@ function Main {
             exit 1
         }
         Write-Info "Found glslc: $($glslc.FullName)"
+
+        $glslangHeader = Join-Path $env:VULKAN_SDK "Include\glslang\Include\glslang_c_interface.h"
+        $glslangRuntime = Join-Path $env:VULKAN_SDK "Bin\glslang.dll"
+        if (-not (Test-Path $glslangHeader) -or -not (Test-Path $glslangRuntime)) {
+            Write-Err "Vulkan SDK with glslang C headers and glslang.dll is required."
+            exit 1
+        }
     }
 
     if (-not (Test-Command "tar")) {
@@ -1322,6 +1362,9 @@ function Main {
     # Build libraries in dependency order
     # Level 0: No dependencies (always needed)
     Build-Zlib
+    if ($EnableVulkan) {
+        Install-VkFFT
+    }
 
     # Codec libraries
     if ($EnableOgg -or $EnableFlac -or $EnableOpus) {
@@ -1430,8 +1473,8 @@ function Main {
     Test-StaticDependencies $soxExe
     Test-SoxExecutable $soxExe
 
-    # Copy binary to output directory
-    Write-Info "Copying sox binary to output directory..."
+    # Copy binary and non-codec runtime dependencies to output directory
+    Write-Info "Copying SoX and runtime dependencies to output directory..."
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
     if (Test-Path $soxExe) {
@@ -1441,7 +1484,18 @@ function Main {
         exit 1
     }
 
+    if ($EnableVulkan) {
+        $glslangDll = Join-Path (Split-Path -Parent $soxExe) "glslang.dll"
+        if (-not (Test-Path $glslangDll)) {
+            throw "glslang.dll was not copied beside sox.exe by the Vulkan build"
+        }
+        Copy-Item $glslangDll $OutputDir
+    }
+
     Write-Success "Binary copied to: $OutputDir\sox.exe"
+    if ($EnableVulkan) {
+        Write-Success "Vulkan runtime copied to: $OutputDir\glslang.dll"
+    }
 
     if ($KeepBuild) {
         Write-Info "Keeping build directories for incremental rebuilds."
@@ -1459,6 +1513,9 @@ function Main {
     Write-Host "=============================================="
     Write-Host ""
     Write-Host "Output binary: $OutputDir\sox.exe"
+    if ($EnableVulkan) {
+        Write-Host "Vulkan runtime: $OutputDir\glslang.dll"
+    }
     Write-Host ""
 }
 

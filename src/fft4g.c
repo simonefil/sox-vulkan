@@ -322,9 +322,6 @@ static void rftfsub(int n, double *a, int nc, double const *c);
 
 void cdft(int n, int isgn, double *a, int *ip, double *w)
 {
-    if (n > FFT4G_MAX_SIZE)
-        return;
-
     if (n > (ip[0] << 2)) {
         makewt(n >> 2, ip, w);
     }
@@ -347,9 +344,6 @@ void rdft(int n, int isgn, double *a, int *ip, double *w)
     int nw, nc;
     double xi;
     
-    if (n > FFT4G_MAX_SIZE)
-        return;
-
     nw = ip[0];
     if (n > (nw << 2)) {
         nw = n >> 2;
@@ -390,9 +384,6 @@ void ddct(int n, int isgn, double *a, int *ip, double *w)
     int j, nw, nc;
     double xr;
     
-    if (n > FFT4G_MAX_SIZE)
-        return;
-
     nw = ip[0];
     if (n > (nw << 2)) {
         nw = n >> 2;
@@ -444,9 +435,6 @@ void ddst(int n, int isgn, double *a, int *ip, double *w)
     int j, nw, nc;
     double xr;
     
-    if (n > FFT4G_MAX_SIZE)
-        return;
-
     nw = ip[0];
     if (n > (nw << 2)) {
         nw = n >> 2;
@@ -498,9 +486,6 @@ void dfct(int n, double *a, double *t, int *ip, double *w)
     int j, k, l, m, mh, nw, nc;
     double xr, xi, yr, yi;
     
-    if (n > FFT4G_MAX_SIZE)
-        return;
-
     nw = ip[0];
     if (n > (nw << 3)) {
         nw = n >> 3;
@@ -591,9 +576,6 @@ void dfst(int n, double *a, double *t, int *ip, double *w)
     int j, k, l, m, mh, nw, nc;
     double xr, xi, yr, yi;
     
-    if (n > FFT4G_MAX_SIZE)
-        return;
-
     nw = ip[0];
     if (n > (nw << 3)) {
         nw = n >> 3;
@@ -726,10 +708,9 @@ static void makect(int nc, int *ip, double *c)
 
 static void bitrv2(int n, int *ip0, double *a)
 {
-    int j, j1, k, k1, l, m, m2, ip[256];
+    int j, j1, k, k1, l, m, m2, *ip = ip0;
     double xr, xi, yr, yi;
     
-    (void)ip0;
     ip[0] = 0;
     l = n;
     m = 1;
@@ -827,10 +808,9 @@ static void bitrv2(int n, int *ip0, double *a)
 
 static void bitrv2conj(int n, int *ip0, double *a)
 {
-    int j, j1, k, k1, l, m, m2, ip[256];
+    int j, j1, k, k1, l, m, m2, *ip = ip0;
     double xr, xi, yr, yi;
     
-    (void)ip0;
     ip[0] = 0;
     l = n;
     m = 1;
@@ -1359,4 +1339,3 @@ static void dstsub(int n, double *a, int nc, double const *c)
     }
     a[m] *= c[0];
 }
-

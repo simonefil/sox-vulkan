@@ -10,11 +10,13 @@
 #define LSX_SDM_VULKAN_H
 
 #include "sox.h"
+#include "vulkan_engine.h"
 
 typedef struct lsx_sdm_vulkan lsx_sdm_vulkan_t;
 
 lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
-    unsigned input_rate, unsigned output_rate, unsigned channels);
+    lsx_vulkan_context_t *vulkan, unsigned input_rate,
+    unsigned output_rate, unsigned channels);
 void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context);
 size_t lsx_sdm_vulkan_input_capacity(
     lsx_sdm_vulkan_t const *context);

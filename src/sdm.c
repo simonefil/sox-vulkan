@@ -1890,6 +1890,7 @@ static int start(sox_effect_t *effp)
   if (sox_globals.use_vulkan) {
     size_t core_frames;
     size_t lookahead = lsx_sdm_vulkan_lookahead();
+    lsx_vulkan_context_t *vulkan;
 
     if (!p->out_rate || p->out_rate == effp->in_signal.rate) {
       lsx_fail("Vulkan SDM requires -r with a DSD64..DSD1024 output rate");
@@ -1909,7 +1910,11 @@ static int start(sox_effect_t *effp)
       lsx_warn("Vulkan SDM uses the conservative MASH-2/FSM; -f is ignored");
     if (p->threads)
       lsx_warn("Vulkan SDM schedules channels on the GPU; -j is ignored");
-    p->vulkan = lsx_sdm_vulkan_create((unsigned)effp->in_signal.rate,
+    vulkan = lsx_vulkan_context_get(effp->global_info);
+    if (!vulkan)
+      return SOX_EOF;
+    p->vulkan = lsx_sdm_vulkan_create(vulkan,
+        (unsigned)effp->in_signal.rate,
         (unsigned)p->out_rate, p->channels);
     if (!p->vulkan)
       return SOX_EOF;

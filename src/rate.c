@@ -30,6 +30,11 @@
 #include <assert.h>
 #include <string.h>
 
+#if HAVE_VULKAN
+#include "rate_polyphase_vulkan.h"
+#include "rate_vulkan.h"
+#endif
+
 #define calloc     lsx_calloc
 #define malloc     lsx_malloc
 #define raw_coef_t double
@@ -87,10 +92,25 @@ typedef struct { /* So generated filter coefs may be shared between channels */
   dft_filter_t dft_filter[2];
 } rate_shared_t;
 
+typedef enum {
+  rate_stage_half_fir,
+  rate_stage_dft,
+  rate_stage_cubic,
+  rate_stage_poly_fir
+} rate_stage_kind_t;
+
+static char const *rate_stage_name(rate_stage_kind_t kind)
+{
+  static char const *names[] = {"half_fir", "dft", "cubic", "poly_fir"};
+
+  return (unsigned)kind < array_length(names) ? names[kind] : "unknown";
+}
+
 struct stage;
 typedef void (* stage_fn_t)(struct stage * input, fifo_t * output);
 typedef struct stage {
   /* Common to all stage types: */
+  rate_stage_kind_t kind;
   stage_fn_t fn;
   fifo_t     fifo;
   int        pre;       /* Number of past samples to store */
@@ -115,12 +135,22 @@ typedef struct stage {
     hi_prec_clock_t hi_prec_clock;
   } at, step;
   sox_bool   use_hi_prec_clock;
-  int        L, remL, remM;
-  int        n, phase_bits;
+  int        L, M, remL, remM;
+  int        n, phase_bits, phase_count, interp_order;
+  sample_t const * static_coefs;
 } stage_t;
 
-#define stage_occupancy(s) max(0, fifo_occupancy(&(s)->fifo) - (s)->pre_post)
 #define stage_read_p(s) ((sample_t *)fifo_read_ptr(&(s)->fifo) + (s)->pre)
+
+static int stage_occupancy(stage_t * s)
+{
+  size_t const occupancy = fifo_occupancy(&s->fifo);
+
+  if (occupancy <= (size_t)s->pre_post)
+    return 0;
+  assert(occupancy - (size_t)s->pre_post <= INT_MAX);
+  return (int)(occupancy - (size_t)s->pre_post);
+}
 
 static void cubic_stage_fn(stage_t * p, fifo_t * output_fifo)
 {
@@ -233,17 +263,19 @@ static void dft_stage_init(
     for (i = 0; i < num_taps; ++i)
       f->coefs[(i + dft_length - num_taps + 1) & (dft_length - 1)]
         = h[i] / dft_length * 2 * L;
-    free(h);
+    f->taps = h;
     f->num_taps = num_taps;
     f->dft_length = dft_length;
     lsx_safe_rdft(dft_length, 1, f->coefs);
     lsx_debug("fir_len=%i dft_length=%i Fp=%g Fs=%g Fn=%g att=%g %i/%i",
         num_taps, dft_length, Fp, Fs, Fn, att, L, M);
   }
+  stage->kind = rate_stage_dft;
   stage->fn = dft_stage_fn;
   stage->preload = f->post_peak / L;
   stage->remL    = f->post_peak % L;
   stage->L = L;
+  stage->M = M;
   stage->step.parts.integer = abs(3-M) == 1 && Fs == 1? -M/2 : M;
   stage->dft_filter_num = instance;
 }
@@ -252,9 +284,13 @@ static void dft_stage_init(
 
 typedef struct {
   double     factor;
-  uint64_t   samples_in, samples_out;
   int        num_stages;
   stage_t    * stages;
+} rate_plan_t;
+
+typedef struct {
+  rate_plan_t plan;
+  uint64_t    samples_in, samples_out;
 } rate_t;
 
 #define pre_stage       p->stages[shift]
@@ -272,9 +308,9 @@ typedef enum {
   rolloff_none, rolloff_small /* <= 0.01 dB */, rolloff_medium /* <= 0.35 dB */
 } rolloff_t;
 
-static void rate_init(
+static void rate_plan_create(
   /* Private work areas (to be supplied by the client):                       */
-  rate_t * p,                /* Per audio channel.                            */
+  rate_plan_t * p,           /* Per audio channel.                            */
   rate_shared_t * shared,    /* Between channels (undergoing same rate change)*/
                             
   /* Public parameters:                                             Typically */
@@ -354,7 +390,9 @@ static void rate_init(
 
   for (n = 0; n + 1u < array_length(half_firs) && att > half_firs[n].att; ++n);
   for (i = 0, s = p->stages; i < shift; ++i, ++s) {
+    s->kind = rate_stage_half_fir;
     s->fn = half_firs[n].fn;
+    s->static_coefs = half_firs[n].coefs;
     s->pre_post = 4 * half_firs[n].num_coefs;
     s->preload = s->pre = s->pre_post >> 1;
   }
@@ -374,6 +412,7 @@ static void rate_init(
   }
 
   if (!bits) {                                  /* Quick and dirty arb stage: */
+    arb_stage.kind = rate_stage_cubic;
     arb_stage.fn = cubic_stage_fn;
     arb_stage.step.all = arbM * MULT32 + .5;
     arb_stage.pre_post = max(3, arb_stage.step.parts.integer);
@@ -426,12 +465,16 @@ static void rate_init(
           num_coefs, phases, order, lsx_sigfigs3((double)coefs_size));
       free(coefs);
     }
+    arb_stage.kind = rate_stage_poly_fir;
     arb_stage.fn = f1->fn;
     arb_stage.pre_post = num_coefs4 - 1;
     arb_stage.preload = (num_coefs - 1) >> 1;
     arb_stage.n = num_coefs4;
     arb_stage.phase_bits = phase_bits;
+    arb_stage.phase_count = phases;
+    arb_stage.interp_order = order;
     arb_stage.L = arbL;
+    arb_stage.M = (int)arbM;
     arb_stage.use_hi_prec_clock = mode > 1 && use_hi_prec_clock && !rational;
     if (arb_stage.use_hi_prec_clock) {
       arb_stage.at.hi_prec_clock = at;
@@ -448,50 +491,78 @@ static void rate_init(
     dft_stage_init(1, 1 - (1 - (1 - tbw0) *
         (upsample? factor * postL / postM : 1)) * tbw_tighten, Fs_a,
         (double)max(postL, postM), att, phase, &post_stage, postL, postM);
+}
 
-  for (i = 0, s = p->stages; i < p->num_stages; ++i, ++s) {
+static void rate_cpu_start(rate_t * p)
+{
+  rate_plan_t * plan = &p->plan;
+  stage_t * s;
+  int i;
+
+  for (i = 0, s = plan->stages; i < plan->num_stages; ++i, ++s) {
     fifo_create(&s->fifo, (int)sizeof(sample_t));
-    memset(fifo_reserve(&s->fifo, s->preload), 0, sizeof(sample_t)*s->preload);
+    memset(fifo_reserve(&s->fifo, s->preload), 0, sizeof(sample_t) * s->preload);
     lsx_debug("%5i|%-5i preload=%i remL=%i",
         s->pre, s->pre_post - s->pre, s->preload, s->remL);
   }
   fifo_create(&s->fifo, (int)sizeof(sample_t));
 }
 
-static void rate_process(rate_t * p)
+static void rate_plan_destroy(rate_plan_t * p)
 {
-  stage_t * stage = p->stages;
+  rate_shared_t *shared;
+
+  if (!p->num_stages)
+    return;
+
+  shared = p->stages[0].shared;
+  free(shared->dft_filter[0].coefs);
+  free(shared->dft_filter[0].taps);
+  free(shared->dft_filter[1].coefs);
+  free(shared->dft_filter[1].taps);
+  free(shared->poly_fir_coefs);
+  memset(shared, 0, sizeof(*shared));
+  free(p->stages);
+  memset(p, 0, sizeof(*p));
+}
+
+static void rate_cpu_process(rate_t * p)
+{
+  rate_plan_t * plan = &p->plan;
+  stage_t * stage = plan->stages;
   int i;
 
-  for (i = 0; i < p->num_stages; ++i, ++stage)
+  for (i = 0; i < plan->num_stages; ++i, ++stage)
     stage->fn(stage, &(stage+1)->fifo);
 }
 
-static sample_t * rate_input(rate_t * p, sample_t const * samples, size_t n)
+static sample_t * rate_cpu_input(rate_t * p, sample_t const * samples, size_t n)
 {
   p->samples_in += n;
-  return fifo_write(&p->stages[0].fifo, n, samples);
+  return fifo_write(&p->plan.stages[0].fifo, n, samples);
 }
 
-static sample_t const * rate_output(rate_t * p, sample_t * samples, size_t * n)
+static sample_t const * rate_cpu_output(
+    rate_t * p, sample_t * samples, size_t * n)
 {
-  fifo_t * fifo = &p->stages[p->num_stages].fifo;
+  fifo_t * fifo = &p->plan.stages[p->plan.num_stages].fifo;
+
   p->samples_out += *n = min(*n, (size_t)fifo_occupancy(fifo));
   return fifo_read(fifo, *n, samples);
 }
 
-static void rate_flush(rate_t * p)
+static void rate_cpu_flush(rate_t * p)
 {
-  fifo_t * fifo = &p->stages[p->num_stages].fifo;
-  uint64_t samples_out = p->samples_in / p->factor + .5;
+  fifo_t * fifo = &p->plan.stages[p->plan.num_stages].fifo;
+  uint64_t samples_out = p->samples_in / p->plan.factor + .5;
   size_t remaining = samples_out > p->samples_out ?
       (size_t)(samples_out - p->samples_out) : 0;
   sample_t * buff = calloc(1024, sizeof(*buff));
 
   if (remaining > 0) {
     while ((size_t)fifo_occupancy(fifo) < remaining) {
-      rate_input(p, buff, (size_t) 1024);
-      rate_process(p);
+      rate_cpu_input(p, buff, (size_t) 1024);
+      rate_cpu_process(p);
     }
     fifo_trim_to(fifo, remaining);
     p->samples_in = 0;
@@ -499,23 +570,17 @@ static void rate_flush(rate_t * p)
   free(buff);
 }
 
-static void rate_close(rate_t * p)
+static void rate_cpu_stop(rate_t * p)
 {
-  rate_shared_t *shared;
+  rate_plan_t * plan = &p->plan;
   int i;
 
-  if (!p->num_stages)
+  if (!plan->num_stages)
     return;
 
-  shared = p->stages[0].shared;
-
-  for (i = 0; i <= p->num_stages; ++i)
-    fifo_delete(&p->stages[i].fifo);
-  free(shared->dft_filter[0].coefs);
-  free(shared->dft_filter[1].coefs);
-  free(shared->poly_fir_coefs);
-  memset(shared, 0, sizeof(*shared));
-  free(p->stages);
+  for (i = 0; i <= plan->num_stages; ++i)
+    fifo_delete(&plan->stages[i].fifo);
+  rate_plan_destroy(plan);
 }
 
 /*------------------------------- SoX Wrapper --------------------------------*/
@@ -524,10 +589,130 @@ typedef struct {
   sox_rate_t      out_rate;
   int             rolloff, coef_interp, max_coefs_size;
   double          bit_depth, phase, bw_0dB_pc, anti_aliasing_pc;
-  sox_bool        use_hi_prec_clock, noIOpt, given_0dB_pt;
+  sox_bool        use_hi_prec_clock, noIOpt, given_0dB_pt, vulkan_eligible;
   rate_t          rate;
   rate_shared_t   shared, * shared_ptr;
+#if HAVE_VULKAN
+  struct rate_vulkan_stage_executor *vulkan_stages;
+  fifo_t          *vulkan_fifos;
+  size_t          vulkan_stage_count;
+#endif
 } priv_t;
+
+#if HAVE_VULKAN
+typedef struct rate_vulkan_stage_executor {
+  rate_stage_kind_t kind;
+  lsx_rate_vulkan_t *dft;
+  lsx_rate_polyphase_vulkan_t *polyphase;
+} rate_vulkan_stage_executor_t;
+
+static sox_bool rate_vulkan_plan_supported(rate_plan_t const *plan)
+{
+  int index;
+
+  if (plan->num_stages < 1)
+    return sox_false;
+  for (index = 0; index < plan->num_stages; ++index) {
+    stage_t const *stage = &plan->stages[index];
+
+    if (stage->kind == rate_stage_dft) {
+      dft_filter_t const *filter = &stage->shared->dft_filter[stage->dft_filter_num];
+
+      if (stage->L < 1 || stage->M < 1 || lsx_fir_vulkan_block_frames() % stage->L)
+        return sox_false;
+      if (index > 0 && stage->L > 1 && filter->post_peak % stage->L)
+        return sox_false;
+    }
+    else if (stage->kind == rate_stage_poly_fir) {
+      if (stage->interp_order != 0 || stage->use_hi_prec_clock || stage->phase_count != stage->L || stage->M < 1 || stage->at.parts.integer < 0 || stage->at.parts.integer >= stage->L)
+        return sox_false;
+    }
+    else if (stage->kind != rate_stage_half_fir)
+      return sox_false;
+  }
+  return sox_true;
+}
+
+static double *rate_vulkan_half_taps(stage_t const *stage)
+{
+  size_t taps = (size_t)stage->pre_post + 1u;
+  size_t coefficients = (size_t)stage->pre / 2u;
+  double *result = lsx_calloc(taps, sizeof(*result));
+  size_t index;
+
+  result[stage->pre] = .5;
+  for (index = 0; index < coefficients; ++index) {
+    size_t offset = 2u * index + 1u;
+
+    result[stage->pre - offset] = stage->static_coefs[index];
+    result[stage->pre + offset] = stage->static_coefs[index];
+  }
+  return result;
+}
+
+static int rate_vulkan_start(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  lsx_vulkan_context_t *vulkan = lsx_vulkan_context_get(effp->global_info);
+  size_t channels = effp->in_signal.channels;
+  size_t created_fifos = 0;
+  int index;
+
+  if (!vulkan)
+    return SOX_EOF;
+  p->vulkan_stage_count = (size_t)p->rate.plan.num_stages;
+  p->vulkan_stages = lsx_calloc(p->vulkan_stage_count, sizeof(*p->vulkan_stages));
+  p->vulkan_fifos = lsx_calloc(p->vulkan_stage_count + 1u, sizeof(*p->vulkan_fifos));
+  for (index = 0; index <= p->rate.plan.num_stages; ++index) {
+    fifo_create(&p->vulkan_fifos[index], sizeof(double));
+    ++created_fifos;
+  }
+  for (index = 0; index < p->rate.plan.num_stages; ++index) {
+    stage_t const *stage = &p->rate.plan.stages[index];
+    rate_vulkan_stage_executor_t *executor = &p->vulkan_stages[index];
+
+    executor->kind = stage->kind;
+    if (stage->kind == rate_stage_dft) {
+      dft_filter_t const *filter = &stage->shared->dft_filter[stage->dft_filter_num];
+
+      executor->dft = lsx_rate_vulkan_create(vulkan, filter->taps, (size_t)filter->num_taps, (size_t)filter->post_peak, (uint32_t)stage->L, (uint32_t)stage->M, (uint32_t)channels);
+      if (!executor->dft)
+        goto error;
+    }
+    else {
+      double *half_taps = stage->kind == rate_stage_half_fir ? rate_vulkan_half_taps(stage) : NULL;
+      double const *coefficients = half_taps ? half_taps : stage->shared->poly_fir_coefs;
+      uint32_t taps = half_taps ? (uint32_t)stage->pre_post + 1u : (uint32_t)stage->n;
+      uint32_t phase_count = half_taps ? 1u : (uint32_t)stage->phase_count;
+      uint32_t phase_step = half_taps ? 2u : (uint32_t)stage->M;
+      uint32_t phase_start = half_taps ? 0u : (uint32_t)stage->at.parts.integer;
+
+      executor->polyphase = lsx_rate_polyphase_vulkan_create(vulkan, coefficients, taps, phase_count, phase_step, phase_start, (uint32_t)channels);
+      free(half_taps);
+      if (!executor->polyphase)
+        goto error;
+      memset(fifo_reserve(&p->vulkan_fifos[index], stage->preload * channels), 0, stage->preload * channels * sizeof(double));
+    }
+  }
+  effp->flows = 1;
+  lsx_report("Vulkan rate plan: %lu stages, %lu channel%s", (unsigned long)p->vulkan_stage_count, (unsigned long)channels, channels == 1u ? "" : "s");
+  return SOX_SUCCESS;
+
+error:
+  for (index = 0; index < (int)p->vulkan_stage_count; ++index) {
+    lsx_rate_vulkan_destroy(p->vulkan_stages[index].dft);
+    lsx_rate_polyphase_vulkan_destroy(p->vulkan_stages[index].polyphase);
+  }
+  while (created_fifos)
+    fifo_delete(&p->vulkan_fifos[--created_fifos]);
+  free(p->vulkan_stages);
+  free(p->vulkan_fifos);
+  p->vulkan_stages = NULL;
+  p->vulkan_fifos = NULL;
+  p->vulkan_stage_count = 0;
+  return SOX_EOF;
+}
+#endif
 
 static int create(sox_effect_t * effp, int argc, char **argv)
 {
@@ -592,6 +777,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     }
     rej = p->bit_depth * linear_to_dB(2.);
   }
+  p->vulkan_eligible = quality >= 2;
 
   if (bw_3dB_pc && p->bw_0dB_pc) {
     lsx_fail("conflicting bandwidth options");
@@ -639,17 +825,187 @@ static int start(sox_effect_t * effp)
 
   effp->out_signal.channels = effp->in_signal.channels;
   effp->out_signal.rate = out_rate;
-  rate_init(&p->rate, p->shared_ptr, effp->in_signal.rate/out_rate,p->bit_depth,
-      p->phase, p->bw_0dB_pc, p->anti_aliasing_pc, p->rolloff, !p->given_0dB_pt,
-      p->use_hi_prec_clock, p->coef_interp, p->max_coefs_size, p->noIOpt);
+  rate_plan_create(&p->rate.plan, p->shared_ptr,
+      effp->in_signal.rate / out_rate, p->bit_depth,
+      p->phase, p->bw_0dB_pc, p->anti_aliasing_pc, p->rolloff,
+      !p->given_0dB_pt, p->use_hi_prec_clock,
+      p->coef_interp, p->max_coefs_size, p->noIOpt);
 
-  if (!p->rate.num_stages) {
+  if (!p->rate.plan.num_stages) {
     lsx_warn("input and output rates too close, skipping resampling");
     return SOX_EFF_NULL;
   }
+  {
+    int stage_index;
 
+    for (stage_index = 0; stage_index < p->rate.plan.num_stages; ++stage_index) {
+      stage_t const *stage = &p->rate.plan.stages[stage_index];
+      lsx_debug("rate plan stage %d/%d: %s L=%d M=%d phases=%d interpolation=%d taps=%d preload=%d", stage_index + 1, p->rate.plan.num_stages, rate_stage_name(stage->kind), stage->L, stage->M, stage->phase_count, stage->interp_order, stage->n, stage->preload);
+    }
+  }
+
+#if HAVE_VULKAN
+  if (sox_globals.use_vulkan && p->vulkan_eligible && rate_vulkan_plan_supported(&p->rate.plan)) {
+    if (rate_vulkan_start(effp) != SOX_SUCCESS) {
+      rate_plan_destroy(&p->rate.plan);
+      return SOX_EOF;
+    }
+    return SOX_SUCCESS;
+  }
+#endif
+  rate_cpu_start(&p->rate);
   return SOX_SUCCESS;
 }
+
+#if HAVE_VULKAN
+static int process_vulkan_stages(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t channels = effp->in_signal.channels;
+  size_t index;
+
+  for (index = 0; index < p->vulkan_stage_count; ++index) {
+    rate_vulkan_stage_executor_t *executor = &p->vulkan_stages[index];
+    fifo_t *input_fifo = &p->vulkan_fifos[index];
+    fifo_t *output_fifo = &p->vulkan_fifos[index + 1u];
+
+    if (executor->kind == rate_stage_dft) {
+      size_t block_samples = lsx_rate_vulkan_input_frames(executor->dft) * channels;
+
+      while ((size_t)fifo_occupancy(input_fifo) >= block_samples) {
+        double const *input = fifo_read(input_fifo, block_samples, NULL);
+        double const *output;
+        size_t output_frames;
+
+        if (lsx_rate_vulkan_process(executor->dft, input, &output, &output_frames) != SOX_SUCCESS)
+          return SOX_EOF;
+        if (output_frames)
+          fifo_write(output_fifo, output_frames * channels, output);
+      }
+    }
+    else {
+      size_t taps = lsx_rate_polyphase_vulkan_taps(executor->polyphase);
+      size_t block_frames = lsx_rate_polyphase_vulkan_block_frames();
+      size_t occupancy_frames = (size_t)fifo_occupancy(input_fifo) / channels;
+
+      while (occupancy_frames > taps - 1u) {
+        size_t processable_frames = min(block_frames, occupancy_frames - (taps - 1u));
+        double const *input = fifo_read_ptr(input_fifo);
+        double const *output;
+        size_t output_frames;
+        size_t consumed_frames;
+
+        if (lsx_rate_polyphase_vulkan_process(executor->polyphase, input, processable_frames, &output, &output_frames, &consumed_frames) != SOX_SUCCESS)
+          return SOX_EOF;
+        fifo_read(input_fifo, consumed_frames * channels, NULL);
+        if (output_frames)
+          fifo_write(output_fifo, output_frames * channels, output);
+        occupancy_frames = (size_t)fifo_occupancy(input_fifo) / channels;
+      }
+    }
+  }
+  return SOX_SUCCESS;
+}
+
+static int flow_vulkan(sox_effect_t *effp, sox_sample_t const *ibuf, sox_sample_t *obuf, size_t *isamp, size_t *osamp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t channels = effp->in_signal.channels;
+  fifo_t *input_fifo = &p->vulkan_fifos[0];
+  fifo_t *output_fifo = &p->vulkan_fifos[p->vulkan_stage_count];
+  size_t odone = min(*osamp, (size_t)fifo_occupancy(output_fifo));
+  double const *output;
+
+  odone -= odone % channels;
+  output = fifo_read(output_fifo, odone, NULL);
+  if (odone) {
+    lsx_save_samples(obuf, output, odone, &effp->clips);
+    p->rate.samples_out += odone;
+  }
+  if (*isamp && odone < *osamp) {
+    size_t idone = *isamp - *isamp % channels;
+    double *input = fifo_write(input_fifo, idone, NULL);
+
+    lsx_load_samples(input, ibuf, idone);
+    p->rate.samples_in += idone;
+    *isamp = idone;
+    if (process_vulkan_stages(effp) != SOX_SUCCESS) {
+      *osamp = odone;
+      return SOX_EOF;
+    }
+  }
+  else
+    *isamp = 0;
+  *osamp = odone;
+  return SOX_SUCCESS;
+}
+
+static int flow_vulkan_double(sox_effect_t *effp, sox_sample_t const *ibuf, double *obuf, size_t *isamp, size_t *osamp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t channels = effp->in_signal.channels;
+  fifo_t *input_fifo = &p->vulkan_fifos[0];
+  fifo_t *output_fifo = &p->vulkan_fifos[p->vulkan_stage_count];
+  size_t odone = min(*osamp, (size_t)fifo_occupancy(output_fifo));
+  double const *output;
+
+  odone -= odone % channels;
+  output = fifo_read(output_fifo, odone, NULL);
+  if (odone) {
+    lsx_normalize_samples(obuf, output, odone);
+    p->rate.samples_out += odone;
+  }
+  if (*isamp && odone < *osamp) {
+    size_t idone = *isamp - *isamp % channels;
+    double *input = fifo_write(input_fifo, idone, NULL);
+
+    lsx_load_samples(input, ibuf, idone);
+    p->rate.samples_in += idone;
+    *isamp = idone;
+    if (process_vulkan_stages(effp) != SOX_SUCCESS) {
+      *osamp = odone;
+      return SOX_EOF;
+    }
+  }
+  else
+    *isamp = 0;
+  *osamp = odone;
+  return SOX_SUCCESS;
+}
+
+static size_t vulkan_remaining_samples(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t channels = effp->in_signal.channels;
+  uint64_t input_frames = p->rate.samples_in / channels;
+  uint64_t target_samples = (uint64_t)(input_frames / p->rate.plan.factor + .5) * channels;
+
+  return target_samples > p->rate.samples_out ? (size_t)(target_samples - p->rate.samples_out) : 0;
+}
+
+static int flush_vulkan(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t channels = effp->in_signal.channels;
+  rate_vulkan_stage_executor_t *first = &p->vulkan_stages[0];
+  fifo_t *input_fifo = &p->vulkan_fifos[0];
+  fifo_t *output_fifo = &p->vulkan_fifos[p->vulkan_stage_count];
+  size_t block_frames = first->kind == rate_stage_dft ? lsx_rate_vulkan_input_frames(first->dft) : lsx_rate_polyphase_vulkan_block_frames();
+  size_t block_samples = block_frames * channels;
+  size_t remaining = vulkan_remaining_samples(effp);
+
+  while ((size_t)fifo_occupancy(output_fifo) < remaining) {
+    double *zeros = fifo_write(input_fifo, block_samples, NULL);
+
+    memset(zeros, 0, block_samples * sizeof(*zeros));
+    if (process_vulkan_stages(effp) != SOX_SUCCESS)
+      return SOX_EOF;
+  }
+  if ((size_t)fifo_occupancy(output_fifo) > remaining)
+    fifo_trim_to(output_fifo, remaining);
+  return SOX_SUCCESS;
+}
+#endif
 
 static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
                 sox_sample_t * obuf, size_t * isamp, size_t * osamp)
@@ -657,23 +1013,27 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   priv_t * p = (priv_t *)effp->priv;
   size_t odone = *osamp;
 
-  sample_t const * s = rate_output(&p->rate, NULL, &odone);
+#if HAVE_VULKAN
+  if (p->vulkan_stage_count)
+    return flow_vulkan(effp, ibuf, obuf, isamp, osamp);
+#endif
+  sample_t const * s = rate_cpu_output(&p->rate, NULL, &odone);
   lsx_save_samples(obuf, s, odone, &effp->clips);
 
   if (*isamp && odone < *osamp) {
     size_t output_room = *osamp - odone;
-    double input_limit = ceil(output_room * p->rate.factor);
+    double input_limit = ceil(output_room * p->rate.plan.factor);
     size_t idone = input_limit >= (double)*isamp ?
         *isamp : min(*isamp, max((size_t)RATE_MIN_INPUT_CHUNK,
             (size_t)input_limit));
-    sample_t * t = rate_input(&p->rate, NULL, idone);
+    sample_t * t = rate_cpu_input(&p->rate, NULL, idone);
     lsx_load_samples(t, ibuf, idone);
-    rate_process(&p->rate);
+    rate_cpu_process(&p->rate);
     *isamp = idone;
 
     {
       size_t more = *osamp - odone;
-      s = rate_output(&p->rate, NULL, &more);
+      s = rate_cpu_output(&p->rate, NULL, &more);
       lsx_save_samples(obuf + odone, s, more, &effp->clips);
       odone += more;
     }
@@ -688,25 +1048,30 @@ int lsx_rate_flow_double(sox_effect_t *effp, const sox_sample_t *ibuf,
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t odone = *osamp;
-  sample_t const *s = rate_output(&p->rate, NULL, &odone);
+
+#if HAVE_VULKAN
+  if (p->vulkan_stage_count)
+    return flow_vulkan_double(effp, ibuf, obuf, isamp, osamp);
+#endif
+  sample_t const *s = rate_cpu_output(&p->rate, NULL, &odone);
 
   lsx_normalize_samples(obuf, s, odone);
 
   if (*isamp && odone < *osamp) {
     size_t output_room = *osamp - odone;
-    double input_limit = ceil(output_room * p->rate.factor);
+    double input_limit = ceil(output_room * p->rate.plan.factor);
     size_t idone = input_limit >= (double)*isamp ?
         *isamp : min(*isamp, max((size_t)RATE_MIN_INPUT_CHUNK,
             (size_t)input_limit));
-    sample_t *t = rate_input(&p->rate, NULL, idone);
+    sample_t *t = rate_cpu_input(&p->rate, NULL, idone);
 
     lsx_load_samples(t, ibuf, idone);
-    rate_process(&p->rate);
+    rate_cpu_process(&p->rate);
     *isamp = idone;
 
     {
       size_t more = *osamp - odone;
-      s = rate_output(&p->rate, NULL, &more);
+      s = rate_cpu_output(&p->rate, NULL, &more);
       lsx_normalize_samples(obuf + odone, s, more);
       odone += more;
     }
@@ -723,7 +1088,16 @@ int lsx_rate_drain_double(sox_effect_t *effp, double *obuf, size_t *osamp)
   priv_t *p = (priv_t *)effp->priv;
   size_t isamp = 0;
 
-  rate_flush(&p->rate);
+#if HAVE_VULKAN
+  if (p->vulkan_stage_count) {
+    if (flush_vulkan(effp) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    return flow_vulkan_double(effp, NULL, obuf, &isamp, osamp);
+  }
+#endif
+  rate_cpu_flush(&p->rate);
   return lsx_rate_flow_double(effp, NULL, &isamp, obuf, osamp);
 }
 
@@ -731,14 +1105,44 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
 {
   priv_t * p = (priv_t *)effp->priv;
   static size_t isamp = 0;
-  rate_flush(&p->rate);
+
+#if HAVE_VULKAN
+  if (p->vulkan_stage_count) {
+    if (flush_vulkan(effp) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    return flow_vulkan(effp, NULL, obuf, &isamp, osamp);
+  }
+#endif
+  rate_cpu_flush(&p->rate);
   return flow(effp, 0, obuf, &isamp, osamp);
 }
 
 static int stop(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *) effp->priv;
-  rate_close(&p->rate);
+
+#if HAVE_VULKAN
+  if (p->vulkan_stage_count) {
+    size_t index;
+
+    for (index = 0; index < p->vulkan_stage_count; ++index) {
+      lsx_rate_vulkan_destroy(p->vulkan_stages[index].dft);
+      lsx_rate_polyphase_vulkan_destroy(p->vulkan_stages[index].polyphase);
+      fifo_delete(&p->vulkan_fifos[index]);
+    }
+    fifo_delete(&p->vulkan_fifos[p->vulkan_stage_count]);
+    free(p->vulkan_stages);
+    free(p->vulkan_fifos);
+    p->vulkan_stages = NULL;
+    p->vulkan_fifos = NULL;
+    p->vulkan_stage_count = 0;
+    rate_plan_destroy(&p->rate.plan);
+    return SOX_SUCCESS;
+  }
+#endif
+  rate_cpu_stop(&p->rate);
   return SOX_SUCCESS;
 }
 

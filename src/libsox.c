@@ -145,7 +145,7 @@ sox_globals_t * sox_get_globals(void)
 
 /* FIXME: Not thread safe using globals */
 static sox_effects_globals_t s_sox_effects_globals =
-    {sox_plot_off, &s_sox_globals};
+    {sox_plot_off, &s_sox_globals, NULL};
 
 sox_effects_globals_t *
 sox_get_effects_globals(void)

@@ -2,7 +2,9 @@
 
 SoX is a command-line audio processing tool that can convert, apply effects, and play audio files in various formats.
 
-This repository includes build scripts for compiling SoX with statically linked codec libraries, producing a single portable executable.
+This repository includes build scripts for compiling SoX with statically
+linked codec libraries. Windows Vulkan builds additionally distribute the
+official dynamic `glslang.dll`.
 
 ---
 
@@ -24,7 +26,7 @@ This repository includes build scripts for compiling SoX with statically linked 
 - Visual Studio 2019 or later (with C++ workload)
 - PowerShell 7 (`pwsh`)
 - CMake 3.15 or later
-- Vulkan SDK with `glslc` (required by default for the Vulkan DSD backend; use `-NoVulkan` to disable it)
+- Vulkan SDK with `glslc`, glslang C headers, and `glslang.dll` (required by default for the Vulkan FIR and DSD backends; use `-NoVulkan` to disable them)
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
@@ -167,7 +169,7 @@ chmod +x build_static_libs.sh
 # Build without FFmpeg-backed formats
 .\build_static_libs.ps1 -NoFfmpeg
 
-# Build without the Vulkan DSD backend
+# Build without the Vulkan FIR and DSD backends
 .\build_static_libs.ps1 -NoVulkan
 
 # Build with 4 parallel jobs
@@ -267,7 +269,7 @@ chmod +x build_static_libs.sh
 | `-NoWavpack` | Exclude WavPack support |
 | `-NoSndfile` | Exclude libsndfile support |
 | `-NoFfmpeg` | Exclude FFmpeg-backed format support |
-| `-NoVulkan` | Exclude the Windows/NVIDIA Vulkan DSD backend |
+| `-NoVulkan` | Exclude the Windows/NVIDIA Vulkan FIR and DSD backends |
 | `-NoId3tag` | Exclude ID3 tag support |
 | `-NoPng` | Exclude PNG spectrogram support |
 
@@ -324,7 +326,9 @@ chmod +x build_static_libs.sh
 
 ## Verification
 
-After the build completes, verify the installation. The build scripts already reject executables that dynamically import bundled codecs or other bundled third-party libraries.
+After the build completes, verify the installation. The build scripts reject
+executables that dynamically import bundled codec libraries. Platform,
+OpenMP, and Vulkan infrastructure dependencies are allowed to remain dynamic.
 
 ### 1. Check Version
 
@@ -428,6 +432,12 @@ On Windows, enable the NVIDIA Vulkan encode path explicitly:
   sdm -r 22579200
 ```
 
+Use the Vulkan FIR backend for long coefficient files:
+
+```powershell
+.\output\sox.exe --vulkan input.wav output.wav fir impulse.txt
+```
+
 #### Codec Summary
 
 | Format | Encoding | Decoding and limits |
@@ -452,7 +462,31 @@ The `sdm` effect performs PCM-to-DSD sigma-delta modulation; DSF and DSDIFF writ
 
 On Windows builds compiled with Vulkan support, the global `--vulkan` option selects the NVIDIA Vulkan encode path for `sdm -r`. It accepts one through six channels and PCM input rates that are integer multiples of either 44.1 or 48 kHz. Output is restricted to the fixed DSD64, DSD128, DSD256, DSD512, and DSD1024 rates in the 44.1 kHz family. The backend performs rational `L/M` conversion with a 257-tap-per-phase Kaiser-windowed FIR on the GPU, using a 20 kHz passband edge and the lower of the source and output Nyquist frequencies as the stopband edge, followed by the conservative MASH-2 finite-state modulator at a fixed −3 dB input gain. CPU filter selections (`-f`), `-j`, and trellis options do not alter this path; trellis is rejected and the other two options are reported as ignored. DSF and DSDIFF output use a channel-major packed-word path, so the final duration is rounded up by at most 31 DSD samples to complete the last 32-bit word. DSD decoding remains on the normal CPU path.
 
-Vulkan shaders are compiled to SPIR-V and embedded in the executable at build time, so no shader or data files are installed beside `sox.exe`. The only additional runtime dependency is the system `vulkan-1.dll` loader supplied with the Vulkan-capable display driver. The release gate was validated on Windows with an NVIDIA RTX 3080 using 30-second mono, stereo, and 5.1 inputs across DSD64 through DSD1024; the integrated DSF output was bit-identical to the standalone reference for signed 32-bit PCM input.
+Vulkan shaders are compiled to SPIR-V and embedded in the executable at build time, so no shader or data files are installed beside `sox.exe`. The system `vulkan-1.dll` loader is supplied with the Vulkan-capable display driver. VkFFT runtime shader compilation uses the official dynamic `glslang.dll` copied from the Vulkan SDK and distributed beside `sox.exe`; it is not compiled or linked statically. The Microsoft Visual C++ Redistributable is required by glslang and by the OpenMP runtime. The release gate was validated on Windows with an NVIDIA RTX 3080 using 30-second mono, stereo, and 5.1 inputs across DSD64 through DSD1024; the integrated DSF output was bit-identical to the standalone reference for signed 32-bit PCM input.
+
+#### Vulkan FIR
+
+On Windows builds compiled with Vulkan support, `--vulkan` selects the
+partitioned VkFFT backend for the classic `fir` effect. It accepts one through
+six channels and preserves the coefficient file, output length, drain, and
+signed 32-bit SoX boundary used by the CPU implementation. The current command
+applies the same coefficient file independently to every channel; GPU kernel
+and history storage remain per-channel so future channel-to-file mapping does
+not require an algorithm change.
+
+The backend uses FP64, a 32768-point R2C/C2R transform, and 16384-tap uniform
+partitions. Qualification covers the supplied 1,048,576-tap filter at 384 kHz
+on 5.1 input and a generated 2,000,000-tap filter. `glslang.dll` is loaded only
+when VkFFT needs runtime compilation, so non-Vulkan SoX commands do not require
+initializing the Vulkan FIR path.
+
+#### Vulkan rate
+
+On Windows builds compiled with Vulkan support, `--vulkan` executes qualified `rate` plans containing arbitrary sequences of frequency-domain FIR, exact rational polyphase, and half-band FIR stages. The CPU planner remains authoritative for coefficients, topology, quality, phase, bandwidth, aliasing, sample count, latency, and drain. The GPU policy covers `medium`, `high`, and `very-high` exact-ratio plans, 44.1/48 kHz family crossings, common PCM multiples, and conversions to and from DSD64, DSD128, DSD256, DSD512, and DSD1024 rates. `quick`, `low`, interpolated polyphase clocks, block-incompatible interpolation factors, and unsupported plans continue through the unchanged CPU executor.
+
+The backend uses the shared FP64 partitioned VkFFT FIR engine, performs the planner-selected integer interpolation and decimation around it, and uses a dedicated FP64 shader for rational polyphase and sparse half-band convolution. It batches interleaved mono, stereo, and 5.1 channels. A downstream upsampling DFT stage whose `post_peak` is not divisible by its interpolation factor remains on CPU because its interstage subphase is not yet represented by the Vulkan executor. Verbose output reports each Vulkan stage and the total stage count when a composite executor is selected.
+
+Windows qualification on an RTX 3080 passed 127/127 cases, with 121 plans routed through Vulkan, a maximum signed-32-bit error of 2 LSB, maximum RMS error of 0.601106 LSB, minimum SNR of 174.122 dB, and no Vulkan validation errors. The unchanged CPU contract passed 690/690 cases. Standalone DSD-rate benchmarks remain slower than CPU: the measured Vulkan/CPU-single speed ratio ranged from 0.01x to 0.40x and from 0.01x to 0.26x against CPU multi-thread execution. Multiple pipeline startups, host-side staging, synchronous submissions, and transfers dominate, so this route is qualified for equivalence but is not a standalone performance recommendation; it is groundwork for the future GPU-resident chain.
 
 #### Channel Layouts
 
@@ -519,7 +553,13 @@ On macOS, every dependency must come from `/usr/lib` or `/System/Library`, for e
 
 FFmpeg and the bundled codec libraries must not appear as `.dylib` dependencies.
 
-On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and `bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual C++ Redistributable for OpenMP support and `vulkan-1.dll` when the Vulkan DSD backend is enabled. Codec DLLs, MSYS runtime DLLs, `VCRUNTIME`, `MSVCP`, and `ucrtbase` must not appear.
+On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and
+`bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual
+C++ Redistributable for OpenMP support and `vulkan-1.dll` when Vulkan is
+enabled. The Vulkan package also contains the dynamic `glslang.dll`, whose own
+dependencies can include the Microsoft C/C++ runtime. Codec DLLs and MSYS
+runtime DLLs must not appear: codec dependencies are linked statically, while
+Vulkan, glslang, OpenMP, and their platform runtimes remain dynamic.
 
 ### 6. Test Audio Playback
 

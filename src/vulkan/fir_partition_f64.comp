@@ -1,0 +1,52 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) buffer Working {
+  dvec2 values[];
+} working;
+
+layout(set = 0, binding = 1, std430) buffer History {
+  dvec2 values[];
+} history;
+
+layout(set = 0, binding = 2, std430) readonly buffer Kernels {
+  dvec2 values[];
+} kernels;
+
+layout(push_constant) uniform Parameters {
+  uint spectrum_bins;
+  uint partitions;
+  uint channels;
+  uint current_slot;
+} parameters;
+
+void main()
+{
+  const uint index = gl_GlobalInvocationID.x;
+
+  if (index < parameters.channels * parameters.spectrum_bins) {
+    const uint bin = index % parameters.spectrum_bins;
+    const uint channel = index / parameters.spectrum_bins;
+    dvec2 sum = dvec2(0.0);
+
+    for (uint part = 0;
+         part < parameters.partitions; ++part) {
+      const uint slot =
+          (parameters.current_slot + parameters.partitions -
+           part) % parameters.partitions;
+      const dvec2 value = history.values[
+          (channel * parameters.partitions + slot) *
+          parameters.spectrum_bins + bin];
+      const dvec2 coefficient = kernels.values[
+          (part * parameters.channels + channel) *
+          parameters.spectrum_bins + bin];
+
+      sum += dvec2(
+          value.x * coefficient.x - value.y * coefficient.y,
+          value.x * coefficient.y + value.y * coefficient.x);
+    }
+    working.values[index] = sum;
+  }
+}

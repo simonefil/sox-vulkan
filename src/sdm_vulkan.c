@@ -48,7 +48,6 @@
 #define SDM_VULKAN_INPUT_GAIN 0.7079457844f
 #define SDM_VULKAN_PASSBAND_HZ 20000.0
 #define SDM_VULKAN_KAISER_BETA 17.5
-#define NVIDIA_VENDOR_ID 0x10deu
 
 #define MODE_INPUT 0u
 #define MODE_SCAN 1u
@@ -122,20 +121,10 @@ lsx_static_assert(sizeof(state_t) == 8, vulkan_state_layout);
 lsx_static_assert(sizeof(mash_parameters_t) == 64, vulkan_mash_push_layout);
 lsx_static_assert(sizeof(fir_parameters_t) == 32, vulkan_fir_push_layout);
 
-typedef struct {
-  VkBuffer buffer;
-  VkDeviceMemory memory;
-  VkDeviceSize size;
-  void *mapped;
-} buffer_t;
+typedef lsx_vulkan_buffer_t buffer_t;
 
 struct lsx_sdm_vulkan {
-  VkInstance instance;
-  VkPhysicalDevice physical_device;
-  VkDevice device;
-  VkQueue queue;
-  uint32_t queue_family;
-  VkPhysicalDeviceProperties properties;
+  lsx_vulkan_context_t *vulkan;
   VkDescriptorSetLayout mash_descriptor_layout;
   VkDescriptorSetLayout fir_descriptor_layout;
   VkPipelineLayout mash_pipeline_layout;
@@ -145,7 +134,6 @@ struct lsx_sdm_vulkan {
   VkDescriptorPool descriptor_pool;
   VkDescriptorSet mash_descriptor_set;
   VkDescriptorSet fir_descriptor_set;
-  VkCommandPool command_pool;
   VkCommandBuffer command_buffer;
   VkFence fence;
   VkQueryPool query_pool;
@@ -186,10 +174,7 @@ static double monotonic_seconds(void)
 
 static int vk_result(VkResult result, char const *operation)
 {
-  if (result == VK_SUCCESS)
-    return SOX_SUCCESS;
-  lsx_fail("%s failed with Vulkan result %d", operation, (int)result);
-  return SOX_EOF;
+  return lsx_vulkan_result(result, operation);
 }
 
 static uint32_t divide_up(uint32_t value, uint32_t divisor)
@@ -207,77 +192,18 @@ static uint32_t greatest_common_divisor(uint32_t left, uint32_t right)
   return left;
 }
 
-static uint32_t memory_type(
-    lsx_sdm_vulkan_t const *context, uint32_t bits,
-    VkMemoryPropertyFlags required)
-{
-  VkPhysicalDeviceMemoryProperties properties;
-  uint32_t index;
-
-  vkGetPhysicalDeviceMemoryProperties(
-      context->physical_device, &properties);
-  for (index = 0; index < properties.memoryTypeCount; ++index)
-    if ((bits & (1u << index)) &&
-        (properties.memoryTypes[index].propertyFlags & required) ==
-            required)
-      return index;
-  return UINT32_MAX;
-}
-
 static int create_buffer(
     lsx_sdm_vulkan_t *context, buffer_t *buffer,
     VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryPropertyFlags properties)
 {
-  VkBufferCreateInfo buffer_info = {
-    VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, size, usage,
-    VK_SHARING_MODE_EXCLUSIVE, 0, NULL
-  };
-  VkMemoryRequirements requirements;
-  VkMemoryAllocateInfo allocation = {
-    VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, 0, 0
-  };
-
-  memset(buffer, 0, sizeof(*buffer));
-  buffer->size = size;
-  if (vk_result(vkCreateBuffer(
-      context->device, &buffer_info, NULL, &buffer->buffer),
-      "vkCreateBuffer") != SOX_SUCCESS)
-    return SOX_EOF;
-  vkGetBufferMemoryRequirements(
-      context->device, buffer->buffer, &requirements);
-  allocation.allocationSize = requirements.size;
-  allocation.memoryTypeIndex = memory_type(
-      context, requirements.memoryTypeBits, properties);
-  if (allocation.memoryTypeIndex == UINT32_MAX) {
-    lsx_fail("no compatible Vulkan memory type");
-    return SOX_EOF;
-  }
-  if (vk_result(vkAllocateMemory(
-      context->device, &allocation, NULL, &buffer->memory),
-      "vkAllocateMemory") != SOX_SUCCESS)
-    return SOX_EOF;
-  if (vk_result(vkBindBufferMemory(
-      context->device, buffer->buffer, buffer->memory, 0),
-      "vkBindBufferMemory") != SOX_SUCCESS)
-    return SOX_EOF;
-  if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
-      vk_result(vkMapMemory(
-          context->device, buffer->memory, 0, size, 0,
-          &buffer->mapped), "vkMapMemory") != SOX_SUCCESS)
-    return SOX_EOF;
-  return SOX_SUCCESS;
+  return lsx_vulkan_buffer_create(
+      context->vulkan, buffer, size, usage, properties);
 }
 
 static void destroy_buffer(lsx_sdm_vulkan_t *context, buffer_t *buffer)
 {
-  if (buffer->mapped)
-    vkUnmapMemory(context->device, buffer->memory);
-  if (buffer->buffer)
-    vkDestroyBuffer(context->device, buffer->buffer, NULL);
-  if (buffer->memory)
-    vkFreeMemory(context->device, buffer->memory, NULL);
-  memset(buffer, 0, sizeof(*buffer));
+  lsx_vulkan_buffer_destroy(context->vulkan, buffer);
 }
 
 static uint32_t scan_storage_count(
@@ -456,85 +382,8 @@ static int create_pipeline(
     size_t spirv_size, VkPipelineLayout layout,
     VkPipeline *pipeline)
 {
-  VkShaderModuleCreateInfo shader_info = {
-    VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-    NULL, 0, spirv_size, spirv
-  };
-  VkPipelineShaderStageCreateInfo stage = {
-    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO
-  };
-  VkComputePipelineCreateInfo pipeline_info = {
-    VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO
-  };
-  VkShaderModule shader;
-  int result;
-
-  result = vk_result(vkCreateShaderModule(
-      context->device, &shader_info, NULL, &shader),
-      "vkCreateShaderModule");
-  if (result != SOX_SUCCESS)
-    return result;
-  stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-  stage.module = shader;
-  stage.pName = "main";
-  pipeline_info.stage = stage;
-  pipeline_info.layout = layout;
-  result = vk_result(vkCreateComputePipelines(
-      context->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL,
-      pipeline), "vkCreateComputePipelines");
-  vkDestroyShaderModule(context->device, shader, NULL);
-  return result;
-}
-
-static int choose_nvidia_device(lsx_sdm_vulkan_t *context)
-{
-  uint32_t count = 0;
-  VkPhysicalDevice *devices;
-  uint32_t device_index;
-
-  if (vk_result(vkEnumeratePhysicalDevices(
-      context->instance, &count, NULL),
-      "vkEnumeratePhysicalDevices") != SOX_SUCCESS)
-    return SOX_EOF;
-  if (!count) {
-    lsx_fail("no Vulkan physical device found");
-    return SOX_EOF;
-  }
-  devices = lsx_calloc(count, sizeof(*devices));
-  if (vk_result(vkEnumeratePhysicalDevices(
-      context->instance, &count, devices),
-      "vkEnumeratePhysicalDevices") != SOX_SUCCESS) {
-    free(devices);
-    return SOX_EOF;
-  }
-  for (device_index = 0; device_index < count; ++device_index) {
-    VkPhysicalDeviceProperties properties;
-    uint32_t queue_count = 0;
-    VkQueueFamilyProperties *queues;
-    uint32_t queue_index;
-
-    vkGetPhysicalDeviceProperties(devices[device_index], &properties);
-    if (properties.vendorID != NVIDIA_VENDOR_ID)
-      continue;
-    vkGetPhysicalDeviceQueueFamilyProperties(
-        devices[device_index], &queue_count, NULL);
-    queues = lsx_calloc(queue_count, sizeof(*queues));
-    vkGetPhysicalDeviceQueueFamilyProperties(
-        devices[device_index], &queue_count, queues);
-    for (queue_index = 0; queue_index < queue_count; ++queue_index)
-      if (queues[queue_index].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-        context->physical_device = devices[device_index];
-        context->queue_family = queue_index;
-        context->properties = properties;
-        free(queues);
-        free(devices);
-        return SOX_SUCCESS;
-      }
-    free(queues);
-  }
-  free(devices);
-  lsx_fail("no NVIDIA Vulkan compute device found");
-  return SOX_EOF;
+  return lsx_vulkan_create_compute_pipeline(
+      context->vulkan, spirv, spirv_size, layout, pipeline);
 }
 
 static int create_descriptors_and_pipelines(
@@ -587,7 +436,7 @@ static int create_descriptors_and_pipelines(
   descriptor_info.bindingCount = SDM_VULKAN_MASH_BINDINGS;
   descriptor_info.pBindings = mash_bindings;
   if (vk_result(vkCreateDescriptorSetLayout(
-      context->device, &descriptor_info, NULL,
+      context->vulkan->device, &descriptor_info, NULL,
       &context->mash_descriptor_layout),
       "vkCreateDescriptorSetLayout MASH") != SOX_SUCCESS)
     return SOX_EOF;
@@ -602,7 +451,7 @@ static int create_descriptors_and_pipelines(
   descriptor_info.bindingCount = SDM_VULKAN_FIR_BINDINGS;
   descriptor_info.pBindings = fir_bindings;
   if (vk_result(vkCreateDescriptorSetLayout(
-      context->device, &descriptor_info, NULL,
+      context->vulkan->device, &descriptor_info, NULL,
       &context->fir_descriptor_layout),
       "vkCreateDescriptorSetLayout FIR") != SOX_SUCCESS)
     return SOX_EOF;
@@ -612,14 +461,14 @@ static int create_descriptors_and_pipelines(
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &mash_push;
   if (vk_result(vkCreatePipelineLayout(
-      context->device, &layout_info, NULL,
+      context->vulkan->device, &layout_info, NULL,
       &context->mash_pipeline_layout),
       "vkCreatePipelineLayout MASH") != SOX_SUCCESS)
     return SOX_EOF;
   layout_info.pSetLayouts = &context->fir_descriptor_layout;
   layout_info.pPushConstantRanges = &fir_push;
   if (vk_result(vkCreatePipelineLayout(
-      context->device, &layout_info, NULL,
+      context->vulkan->device, &layout_info, NULL,
       &context->fir_pipeline_layout),
       "vkCreatePipelineLayout FIR") != SOX_SUCCESS)
     return SOX_EOF;
@@ -637,7 +486,7 @@ static int create_descriptors_and_pipelines(
   pool_info.poolSizeCount = 1;
   pool_info.pPoolSizes = &pool_size;
   if (vk_result(vkCreateDescriptorPool(
-      context->device, &pool_info, NULL,
+      context->vulkan->device, &pool_info, NULL,
       &context->descriptor_pool),
       "vkCreateDescriptorPool") != SOX_SUCCESS)
     return SOX_EOF;
@@ -647,7 +496,7 @@ static int create_descriptors_and_pipelines(
   set_info.descriptorSetCount = 2;
   set_info.pSetLayouts = layouts;
   if (vk_result(vkAllocateDescriptorSets(
-      context->device, &set_info, sets),
+      context->vulkan->device, &set_info, sets),
       "vkAllocateDescriptorSets") != SOX_SUCCESS)
     return SOX_EOF;
   context->mash_descriptor_set = sets[0];
@@ -688,35 +537,16 @@ static int create_descriptors_and_pipelines(
     fir_writes[index].pBufferInfo = &fir_infos[index];
   }
   vkUpdateDescriptorSets(
-      context->device, SDM_VULKAN_MASH_BINDINGS,
+      context->vulkan->device, SDM_VULKAN_MASH_BINDINGS,
       mash_writes, 0, NULL);
   vkUpdateDescriptorSets(
-      context->device, SDM_VULKAN_FIR_BINDINGS,
+      context->vulkan->device, SDM_VULKAN_FIR_BINDINGS,
       fir_writes, 0, NULL);
   return SOX_SUCCESS;
 }
 
 static int initialize_vulkan(lsx_sdm_vulkan_t *context)
 {
-  VkApplicationInfo app = {
-    VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL,
-    "SoX Vulkan DSD", 1, "SoX", 1, VK_API_VERSION_1_1
-  };
-  VkInstanceCreateInfo instance_info = {
-    VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &app,
-    0, NULL, 0, NULL
-  };
-  float priority = 1.0f;
-  VkDeviceQueueCreateInfo queue_info = {
-    VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-    NULL, 0, 0, 1, &priority
-  };
-  VkDeviceCreateInfo device_info = {
-    VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO
-  };
-  VkCommandPoolCreateInfo pool_info = {
-    VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO
-  };
   VkCommandBufferAllocateInfo command_info = {
     VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO
   };
@@ -732,21 +562,6 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
       context->block_count * SDM_VULKAN_STATE_COUNT;
   uint32_t index;
   VkDeviceSize upload_size;
-
-  if (vk_result(vkCreateInstance(
-      &instance_info, NULL, &context->instance),
-      "vkCreateInstance") != SOX_SUCCESS ||
-      choose_nvidia_device(context) != SOX_SUCCESS)
-    return SOX_EOF;
-  queue_info.queueFamilyIndex = context->queue_family;
-  device_info.queueCreateInfoCount = 1;
-  device_info.pQueueCreateInfos = &queue_info;
-  if (vk_result(vkCreateDevice(
-      context->physical_device, &device_info, NULL,
-      &context->device), "vkCreateDevice") != SOX_SUCCESS)
-    return SOX_EOF;
-  vkGetDeviceQueue(
-      context->device, context->queue_family, 0, &context->queue);
 
   sizes[BUFFER_FIR_OUTPUT] = (VkDeviceSize)context->channels *
       context->output_frames * sizeof(float);
@@ -778,7 +593,7 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
     if (sizes[index] >
-        context->properties.limits.maxStorageBufferRange) {
+        context->vulkan->properties.limits.maxStorageBufferRange) {
       lsx_fail("Vulkan DSD buffer exceeds device storage range");
       return SOX_EOF;
     }
@@ -813,23 +628,19 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
   if (create_descriptors_and_pipelines(context) != SOX_SUCCESS)
     return SOX_EOF;
 
-  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  pool_info.queueFamilyIndex = context->queue_family;
-  if (vk_result(vkCreateCommandPool(
-      context->device, &pool_info, NULL, &context->command_pool),
-      "vkCreateCommandPool") != SOX_SUCCESS)
-    return SOX_EOF;
-  command_info.commandPool = context->command_pool;
+  command_info.commandPool = context->vulkan->command_pool;
   command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   command_info.commandBufferCount = 1;
   if (vk_result(vkAllocateCommandBuffers(
-      context->device, &command_info, &context->command_buffer),
+      context->vulkan->device, &command_info, &context->command_buffer),
       "vkAllocateCommandBuffers") != SOX_SUCCESS ||
       vk_result(vkCreateFence(
-      context->device, &fence_info, NULL, &context->fence),
-      "vkCreateFence") != SOX_SUCCESS ||
+      context->vulkan->device, &fence_info, NULL, &context->fence),
+      "vkCreateFence") != SOX_SUCCESS)
+    return SOX_EOF;
+  if (context->vulkan->timestamp_valid_bits &&
       vk_result(vkCreateQueryPool(
-      context->device, &query_info, NULL, &context->query_pool),
+      context->vulkan->device, &query_info, NULL, &context->query_pool),
       "vkCreateQueryPool") != SOX_SUCCESS)
     return SOX_EOF;
   return SOX_SUCCESS;
@@ -837,22 +648,8 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
 
 static int submit_and_wait(lsx_sdm_vulkan_t *context)
 {
-  VkSubmitInfo submit = {
-    VK_STRUCTURE_TYPE_SUBMIT_INFO, NULL,
-    0, NULL, NULL, 1, &context->command_buffer, 0, NULL
-  };
-
-  if (vk_result(vkResetFences(
-      context->device, 1, &context->fence),
-      "vkResetFences") != SOX_SUCCESS ||
-      vk_result(vkQueueSubmit(
-      context->queue, 1, &submit, context->fence),
-      "vkQueueSubmit") != SOX_SUCCESS ||
-      vk_result(vkWaitForFences(
-      context->device, 1, &context->fence, VK_TRUE, UINT64_MAX),
-      "vkWaitForFences") != SOX_SUCCESS)
-    return SOX_EOF;
-  return SOX_SUCCESS;
+  return lsx_vulkan_submit_and_wait(
+      context->vulkan, context->command_buffer, context->fence);
 }
 
 static int upload_buffer(
@@ -1073,7 +870,7 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
       SDM_VULKAN_FIR_LOCAL_SIZE);
   uint64_t timestamps[3];
   double period =
-      (double)context->properties.limits.timestampPeriod * 1e-9;
+      (double)context->vulkan->properties.limits.timestampPeriod * 1e-9;
 
   if (vk_result(vkResetCommandBuffer(
       context->command_buffer, 0),
@@ -1085,17 +882,19 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
   vkCmdCopyBuffer(
       context->command_buffer, context->upload.buffer,
       context->buffers[BUFFER_PCM_INPUT].buffer, 1, &input_copy);
-  vkCmdResetQueryPool(
-      context->command_buffer, context->query_pool, 0, 3);
+  if (context->query_pool)
+    vkCmdResetQueryPool(
+        context->command_buffer, context->query_pool, 0, 3);
   vkCmdPipelineBarrier(
       context->command_buffer,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
       1, &input_barrier, 0, NULL, 0, NULL);
-  vkCmdWriteTimestamp(
-      context->command_buffer,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      context->query_pool, 0);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 0);
   vkCmdBindPipeline(
       context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
       context->fir_pipeline);
@@ -1112,15 +911,17 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
       context->command_buffer, fir_groups,
       context->channels, 1);
   shader_barrier(context->command_buffer);
-  vkCmdWriteTimestamp(
-      context->command_buffer,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      context->query_pool, 1);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 1);
   record_mash(context);
-  vkCmdWriteTimestamp(
-      context->command_buffer,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      context->query_pool, 2);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 2);
   vkCmdPipelineBarrier(
       context->command_buffer,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -1138,22 +939,26 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
       context->command_buffer),
       "vkEndCommandBuffer") != SOX_SUCCESS)
     return SOX_EOF;
-  if (submit_and_wait(context) != SOX_SUCCESS ||
-      vk_result(vkGetQueryPoolResults(
-      context->device, context->query_pool, 0, 3,
-      sizeof(timestamps), timestamps, sizeof(timestamps[0]),
-      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
-      "vkGetQueryPoolResults") != SOX_SUCCESS)
+  if (submit_and_wait(context) != SOX_SUCCESS)
     return SOX_EOF;
-  context->fir_gpu_seconds +=
-      (double)(timestamps[1] - timestamps[0]) * period;
-  context->mash_gpu_seconds +=
-      (double)(timestamps[2] - timestamps[1]) * period;
+  if (context->query_pool) {
+    if (vk_result(vkGetQueryPoolResults(
+        context->vulkan->device, context->query_pool, 0, 3,
+        sizeof(timestamps), timestamps, sizeof(timestamps[0]),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+        "vkGetQueryPoolResults") != SOX_SUCCESS)
+      return SOX_EOF;
+    context->fir_gpu_seconds +=
+        (double)(timestamps[1] - timestamps[0]) * period;
+    context->mash_gpu_seconds +=
+        (double)(timestamps[2] - timestamps[1]) * period;
+  }
   return SOX_SUCCESS;
 }
 
 lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
-    unsigned input_rate, unsigned output_rate, unsigned channels)
+    lsx_vulkan_context_t *vulkan, unsigned input_rate,
+    unsigned output_rate, unsigned channels)
 {
   lsx_sdm_vulkan_t *context;
   state_t states[SDM_VULKAN_STATE_COUNT];
@@ -1169,6 +974,10 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
   uint64_t output_frames_wide;
   unsigned channel;
 
+  if (!vulkan) {
+    lsx_fail("Vulkan DSD requires a shared Vulkan context");
+    return NULL;
+  }
   if (*(uint8_t const *)&endian != 1) {
     lsx_fail("Vulkan DSD requires a little-endian host");
     return NULL;
@@ -1184,6 +993,7 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
     return NULL;
   }
   context = lsx_calloc(1, sizeof(*context));
+  context->vulkan = vulkan;
   if (!output_rate || output_rate % 44100u) {
     lsx_fail("Vulkan DSD requires a standard DSD output rate");
     free(context);
@@ -1308,7 +1118,7 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
   context->mash_parameters.scan_storage_count = context->scan_count;
   lsx_report(
       "Vulkan DSD backend: %s, DSD%u, %u channel%s",
-      context->properties.deviceName, context->dsd_factor,
+      context->vulkan->properties.deviceName, context->dsd_factor,
       channels, channels == 1u ? "" : "s");
   return context;
 
@@ -1330,46 +1140,44 @@ void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
         context->process_seconds,
         (unsigned long long)context->process_calls,
         context->fir_gpu_seconds, context->mash_gpu_seconds);
-  if (context->device)
-    vkDeviceWaitIdle(context->device);
-  if (context->device) {
+  if (context->vulkan->device)
+    vkDeviceWaitIdle(context->vulkan->device);
+  if (context->vulkan->device) {
     for (index = 0; index < BUFFER_COUNT; ++index)
       destroy_buffer(context, &context->buffers[index]);
     destroy_buffer(context, &context->upload);
     destroy_buffer(context, &context->download);
     if (context->query_pool)
       vkDestroyQueryPool(
-          context->device, context->query_pool, NULL);
+          context->vulkan->device, context->query_pool, NULL);
     if (context->fence)
-      vkDestroyFence(context->device, context->fence, NULL);
-    if (context->command_pool)
-      vkDestroyCommandPool(
-          context->device, context->command_pool, NULL);
+      vkDestroyFence(context->vulkan->device, context->fence, NULL);
+    if (context->command_buffer)
+      vkFreeCommandBuffers(
+          context->vulkan->device, context->vulkan->command_pool, 1,
+          &context->command_buffer);
     if (context->descriptor_pool)
       vkDestroyDescriptorPool(
-          context->device, context->descriptor_pool, NULL);
+          context->vulkan->device, context->descriptor_pool, NULL);
     if (context->fir_pipeline)
       vkDestroyPipeline(
-          context->device, context->fir_pipeline, NULL);
+          context->vulkan->device, context->fir_pipeline, NULL);
     if (context->mash_pipeline)
       vkDestroyPipeline(
-          context->device, context->mash_pipeline, NULL);
+          context->vulkan->device, context->mash_pipeline, NULL);
     if (context->fir_pipeline_layout)
       vkDestroyPipelineLayout(
-          context->device, context->fir_pipeline_layout, NULL);
+          context->vulkan->device, context->fir_pipeline_layout, NULL);
     if (context->mash_pipeline_layout)
       vkDestroyPipelineLayout(
-          context->device, context->mash_pipeline_layout, NULL);
+          context->vulkan->device, context->mash_pipeline_layout, NULL);
     if (context->fir_descriptor_layout)
       vkDestroyDescriptorSetLayout(
-          context->device, context->fir_descriptor_layout, NULL);
+          context->vulkan->device, context->fir_descriptor_layout, NULL);
     if (context->mash_descriptor_layout)
       vkDestroyDescriptorSetLayout(
-          context->device, context->mash_descriptor_layout, NULL);
-    vkDestroyDevice(context->device, NULL);
+          context->vulkan->device, context->mash_descriptor_layout, NULL);
   }
-  if (context->instance)
-    vkDestroyInstance(context->instance, NULL);
   free(context->history);
   free(context);
 }

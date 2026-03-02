@@ -17,6 +17,9 @@
 
 #define LSX_EFF_ALIAS
 #include "sox_i.h"
+#if HAVE_VULKAN
+#include "vulkan_engine.h"
+#endif
 #include <assert.h>
 #include <string.h>
 #ifdef HAVE_STRINGS_H
@@ -93,6 +96,7 @@ sox_effects_chain_t * sox_create_effects_chain(
 {
   sox_effects_chain_t * result = lsx_calloc(1, sizeof(sox_effects_chain_t));
   result->global_info = *sox_get_effects_globals();
+  result->global_info.vulkan_context = NULL;
   result->in_enc = in_enc;
   result->out_enc = out_enc;
   return result;
@@ -102,6 +106,10 @@ void sox_delete_effects_chain(sox_effects_chain_t *ecp)
 {
     if (ecp && ecp->length)
         sox_delete_effects(ecp);
+#if HAVE_VULKAN
+    if (ecp)
+        lsx_vulkan_context_destroy(ecp->global_info.vulkan_context);
+#endif
     free(ecp->effects);
     free(ecp);
 } /* sox_delete_effects_chain */

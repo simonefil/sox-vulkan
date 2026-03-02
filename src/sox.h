@@ -1623,6 +1623,7 @@ Global parameters for effects.
 typedef struct sox_effects_globals_t {
   sox_plot_t plot;         /**< To help the user choose effect & options */
   sox_globals_t * global_info; /**< Pointer to associated SoX globals */
+  void * vulkan_context;   /**< Private: chain-owned shared Vulkan context */
 } sox_effects_globals_t;
 
 /**

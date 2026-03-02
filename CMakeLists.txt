@@ -65,7 +65,7 @@ endif()
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(BUILD_STATIC_EXECUTABLE "Build executable with static dependencies" OFF)
 option(SOX_REQUIRE_STATIC_DEPENDENCIES
-    "Reject shared third-party libraries and require static codec dependencies"
+    "Reject shared codec libraries and require static codec dependencies"
     OFF)
 option(WITH_OPENMP "Enable OpenMP support" ON)
 option(SOX_REQUIRE_OPENMP
@@ -235,10 +235,17 @@ endif()
 if(WITH_VULKAN)
     if(NOT IS_WINDOWS)
         message(FATAL_ERROR
-            "The Vulkan DSD backend currently supports Windows only")
+            "The Vulkan FIR and DSD backends currently support Windows only")
     endif()
     find_package(Vulkan REQUIRED)
     find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
+    find_file(GLSLANG_RUNTIME_DLL NAMES glslang.dll
+        PATHS "$ENV{VULKAN_SDK}/Bin"
+        NO_DEFAULT_PATH REQUIRED)
+    find_path(VKFFT_INCLUDE_DIR NAMES vkFFT.h
+        HINTS "${STATIC_LIBS_DIR}"
+        PATH_SUFFIXES include/vkFFT vkFFT
+        REQUIRED)
     set(HAVE_VULKAN TRUE)
 endif()
 
@@ -944,7 +951,7 @@ message(STATUS "  PNG (spectrogram):     ${HAVE_PNG}")
 message(STATUS "  libmagic:              ${HAVE_MAGIC}")
 message(STATUS "  LADSPA:                ${HAVE_LADSPA_H}")
 message(STATUS "  OpenMP:                ${HAVE_OPENMP}")
-message(STATUS "  Vulkan DSD:            ${HAVE_VULKAN}")
+message(STATUS "  Vulkan FIR/DSD:        ${HAVE_VULKAN}")
 message(STATUS "")
 
 # pkg-config file

@@ -635,6 +635,23 @@ endif()
 
 target_link_libraries(sox_exe PRIVATE libsox)
 
+option(
+    SOX_BUILD_VULKAN_QUALITY_PROBES
+    "Build test-only Vulkan numerical quality probes"
+    OFF
+)
+
+if(SOX_BUILD_VULKAN_QUALITY_PROBES AND HAVE_VULKAN)
+    add_executable(
+        vulkan_prequant_probe
+        ../tools/effects/vulkan_prequant_probe.c
+    )
+    target_include_directories(
+        vulkan_prequant_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(vulkan_prequant_probe PRIVATE libsox)
+endif()
+
 if(HAVE_VULKAN)
     add_custom_command(TARGET sox_exe POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different

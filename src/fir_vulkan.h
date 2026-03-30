@@ -18,8 +18,17 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create(
     size_t taps, uint32_t channels);
 void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context);
 size_t lsx_fir_vulkan_block_frames(void);
+size_t lsx_fir_vulkan_prepared_stride(void);
+lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *context);
 int lsx_fir_vulkan_process(
     lsx_fir_vulkan_t *context, double const *input,
     double const **output);
+int lsx_fir_vulkan_process_resident(
+    lsx_fir_vulkan_t *context, double const *input,
+    sox_rate_t rate, uint64_t frame_offset,
+    lsx_vulkan_resident_state_t state,
+    lsx_vulkan_resident_buffer_t *resident);
+int lsx_fir_vulkan_process_prepared_resident(lsx_fir_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident);
+int lsx_fir_vulkan_flush_resident(lsx_fir_vulkan_t *context);
 
 #endif

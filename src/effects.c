@@ -19,6 +19,7 @@
 #include "sox_i.h"
 #if HAVE_VULKAN
 #include "vulkan_engine.h"
+#include "vulkan_effect_chain.h"
 #endif
 #include <assert.h>
 #include <string.h>
@@ -245,6 +246,301 @@ static void interleave(size_t flows, size_t length, sox_sample_t *from,
 static void deinterleave(size_t flows, size_t length, sox_sample_t *from,
     sox_sample_t *to, size_t bufsiz, size_t offset);
 
+#if HAVE_VULKAN
+static lsx_vulkan_effect_endpoint_t const *vulkan_endpoint(sox_effect_t const *effp)
+{
+  return effp ? (lsx_vulkan_effect_endpoint_t const *)
+      effp->internal_chain_endpoint : NULL;
+}
+
+static sox_bool vulkan_resident_pair(sox_effects_chain_t const *chain, size_t producer)
+{
+  lsx_vulkan_effect_endpoint_t const *producer_endpoint;
+  lsx_vulkan_effect_endpoint_t const *consumer_endpoint;
+
+  if (!chain || producer + 1u >= chain->length)
+    return sox_false;
+  producer_endpoint = vulkan_endpoint(chain->effects[producer]);
+  consumer_endpoint = vulkan_endpoint(chain->effects[producer + 1u]);
+  return producer_endpoint && producer_endpoint->flow_producer && producer_endpoint->drain_producer && consumer_endpoint && consumer_endpoint->consume && chain->effects[producer]->flows == 1u && chain->effects[producer + 1u]->flows == 1u;
+}
+
+static size_t vulkan_resident_segment_end(sox_effects_chain_t const *chain, size_t producer)
+{
+  lsx_vulkan_effect_endpoint_t const *producer_endpoint;
+  size_t effect;
+  size_t end = SOX_SIZE_MAX;
+
+  if (!chain || producer + 1u >= chain->length || chain->effects[producer]->flows != 1u)
+    return SOX_SIZE_MAX;
+  producer_endpoint = vulkan_endpoint(chain->effects[producer]);
+  if (!producer_endpoint || !producer_endpoint->flow_producer || !producer_endpoint->drain_producer)
+    return SOX_SIZE_MAX;
+  for (effect = producer + 1u; effect < chain->length; ++effect) {
+    lsx_vulkan_effect_endpoint_t const *endpoint = vulkan_endpoint(chain->effects[effect]);
+
+    if (!endpoint)
+      break;
+    if (endpoint->consume &&
+        chain->effects[effect]->flows == 1u)
+      end = effect;
+    if (!endpoint->transform || !endpoint->drain_transform)
+      break;
+  }
+  return end;
+}
+
+typedef struct {
+  lsx_vulkan_resident_buffer_t *outputs;
+  sox_bool *pending;
+  sox_bool *active;
+  sox_bool *draining;
+  sox_bool *done;
+  size_t length;
+  size_t first;
+  size_t last;
+  sox_bool enabled;
+  sox_bool consumer_final_received;
+  uint64_t boundary_input_slices;
+  uint64_t transform_calls;
+  uint64_t transform_output_slices;
+  uint64_t boundary_output_slices;
+  size_t maximum_pending_edges;
+  sox_bool input_format_reported;
+  sox_bool output_format_reported;
+} vulkan_resident_segment_state_t;
+
+static void vulkan_resident_segment_state_init(vulkan_resident_segment_state_t *state, size_t length)
+{
+  memset(state, 0, sizeof(*state));
+  state->outputs = lsx_calloc(length, sizeof(*state->outputs));
+  state->pending = lsx_calloc(length, sizeof(*state->pending));
+  state->active = lsx_calloc(length, sizeof(*state->active));
+  state->draining = lsx_calloc(length, sizeof(*state->draining));
+  state->done = lsx_calloc(length, sizeof(*state->done));
+  state->length = length;
+  state->first = state->last = SOX_SIZE_MAX;
+}
+
+static int vulkan_resident_segment_state_begin(
+    sox_effects_chain_t *chain,
+    vulkan_resident_segment_state_t *state,
+    size_t first, size_t last)
+{
+  (void)chain;
+  memset(state->outputs, 0, state->length * sizeof(*state->outputs));
+  memset(state->pending, 0, state->length * sizeof(*state->pending));
+  memset(state->active, 0, state->length * sizeof(*state->active));
+  memset(state->draining, 0, state->length * sizeof(*state->draining));
+  memset(state->done, 0, state->length * sizeof(*state->done));
+  state->first = first;
+  state->last = last;
+  state->enabled = sox_true;
+  state->consumer_final_received = sox_false;
+  state->boundary_input_slices = 0;
+  state->transform_calls = 0;
+  state->transform_output_slices = 0;
+  state->boundary_output_slices = 0;
+  state->maximum_pending_edges = 0;
+  state->input_format_reported = sox_false;
+  state->output_format_reported = sox_false;
+  return SOX_SUCCESS;
+}
+
+static void vulkan_resident_segment_state_destroy(vulkan_resident_segment_state_t *state)
+{
+  free(state->outputs);
+  free(state->pending);
+  free(state->active);
+  free(state->draining);
+  free(state->done);
+  memset(state, 0, sizeof(*state));
+}
+
+static size_t vulkan_resident_pending_edges(
+    vulkan_resident_segment_state_t const *state)
+{
+  size_t pending = 0;
+  size_t effect;
+
+  for (effect = state->first; effect < state->last; ++effect)
+    pending += state->pending[effect] != sox_false;
+  return pending;
+}
+
+static void report_vulkan_resident_format(
+    sox_effect_t const *effect,
+    char const *boundary,
+    lsx_vulkan_resident_buffer_t const *resident)
+{
+  sox_effect_t const *effp = effect;
+  static char const *formats[] = {"f32", "f64", "dsd_u32"};
+  static char const *domains[] = {
+    "sox_sample", "normalized", "dsd"
+  };
+  static char const *layouts[] = {"interleaved", "planar"};
+
+  lsx_report(
+      "Vulkan resident %s format: %s/%s/%s, %u channels, "
+      "%.9g Hz, frame-stride=%" PRIuPTR
+      ", channel-stride=%" PRIuPTR,
+      boundary,
+      formats[resident->format],
+      domains[resident->domain],
+      layouts[resident->layout],
+      resident->channels, resident->rate,
+      resident->frame_stride_elements,
+      resident->channel_stride_elements);
+}
+
+static void report_vulkan_resident_segment(
+    sox_effects_chain_t const *chain,
+    vulkan_resident_segment_state_t const *state)
+{
+  sox_effect_t const *effp = chain->effects[state->first];
+
+  lsx_report(
+      "Vulkan resident segment telemetry: %s -> %s, "
+      "boundary-input-slices=%llu, transform-calls=%llu, "
+      "transform-output-slices=%llu, boundary-output-slices=%llu, "
+      "maximum-pending-edges=%" PRIuPTR
+      ", intermediate-host-roundtrips=0",
+      chain->effects[state->first]->handler.name,
+      chain->effects[state->last]->handler.name,
+      (unsigned long long)state->boundary_input_slices,
+      (unsigned long long)state->transform_calls,
+      (unsigned long long)state->transform_output_slices,
+      (unsigned long long)state->boundary_output_slices,
+      state->maximum_pending_edges);
+}
+
+static void consume_effect_input(sox_effect_t *input, sox_effect_t const *effect, size_t count)
+{
+  ptrdiff_t flow;
+
+  input->obeg += count;
+  if (input->obeg == input->oend)
+    input->obeg = input->oend = 0;
+  else if (input->oend - input->obeg < effect->imin) {
+    size_t flow_offset = sox_globals.bufsiz / effect->flows;
+
+    for (flow = 0; flow < (ptrdiff_t)effect->flows; ++flow)
+      memcpy(input->obuf + flow * flow_offset, input->obuf + flow * flow_offset + input->obeg / effect->flows, (input->oend - input->obeg) / effect->flows * sizeof(*input->obuf));
+    input->oend -= input->obeg;
+    input->obeg = 0;
+  }
+}
+
+static int flow_vulkan_resident_producer(sox_effects_chain_t *chain, size_t n, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *progress)
+{
+  sox_effect_t *input = chain->effects[n - 1u];
+  sox_effect_t *effect = chain->effects[n];
+  lsx_vulkan_effect_endpoint_t const *endpoint = vulkan_endpoint(effect);
+  size_t consumed = input->oend - input->obeg;
+  int status = endpoint->flow_producer(effect, input->obuf + input->obeg, &consumed, resident, produced);
+
+  consume_effect_input(input, effect, consumed);
+  *progress = consumed || *produced;
+  return status;
+}
+
+static int drain_vulkan_resident_producer(sox_effects_chain_t *chain, size_t n, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done, sox_bool *progress)
+{
+  lsx_vulkan_effect_endpoint_t const *endpoint = vulkan_endpoint(chain->effects[n]);
+  int status = endpoint->drain_producer(chain->effects[n], resident, produced, done);
+
+  *progress = *produced || *done;
+  return status;
+}
+
+static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, lsx_vulkan_resident_buffer_t const *resident, sox_bool *input_consumed, sox_bool *active, sox_bool *progress)
+{
+  sox_effect_t *effp = chain->effects[n];
+  lsx_vulkan_effect_endpoint_t const *endpoint = vulkan_endpoint(effp);
+  size_t produced = sox_globals.bufsiz - effp->oend;
+  uint64_t input_clips;
+  int status;
+
+  status = endpoint->consume(
+      effp, resident, input_consumed, &input_clips,
+      effp->obuf + effp->oend, &produced, active);
+
+  if (produced % effp->out_signal.channels) {
+    lsx_fail("resident multi-channel effect flowed asymmetrically");
+    return SOX_EOF;
+  }
+  chain->effects[n - 1u]->clips += input_clips;
+  effp->oend += produced;
+  *progress = produced || *input_consumed;
+  return status;
+}
+
+static int flow_vulkan_resident_transform(sox_effects_chain_t *chain, size_t n, vulkan_resident_segment_state_t *state, sox_bool *progress)
+{
+  sox_effect_t *effp = chain->effects[n];
+  lsx_vulkan_effect_endpoint_t const *endpoint = vulkan_endpoint(effp);
+  lsx_vulkan_resident_buffer_t const *input = state->pending[n - 1u] ? &state->outputs[n - 1u] : NULL;
+  sox_bool input_final = input && input->state == lsx_vulkan_resident_final;
+  sox_bool input_consumed = sox_false;
+  sox_bool output_produced = sox_false;
+  sox_bool active = state->active[n];
+  sox_bool done = sox_false;
+  uint64_t input_clips = 0;
+  int status;
+
+  memset(&state->outputs[n], 0, sizeof(state->outputs[n]));
+  if (!state->draining[n] && input_final &&
+      !input->valid_elements) {
+    if (lsx_vulkan_resident_buffer_validate(input) !=
+        SOX_SUCCESS)
+      return SOX_EOF;
+    input_consumed = sox_true;
+    active = sox_false;
+    status = SOX_SUCCESS;
+  }
+  else if (state->draining[n])
+    status = endpoint->drain_transform(effp, &input_clips, &state->outputs[n], &output_produced, &done);
+  else
+    status = endpoint->transform(effp, input, &input_consumed, &input_clips, &state->outputs[n], &output_produced, &active);
+  if (status != SOX_SUCCESS)
+    return status;
+  if (!input && input_consumed) {
+    lsx_fail("resident Vulkan transform consumed a missing input");
+    return SOX_EOF;
+  }
+  if (input_consumed) {
+    state->pending[n - 1u] = sox_false;
+    if (input_final)
+      state->draining[n] = sox_true;
+  }
+  if (output_produced) {
+    if (lsx_vulkan_resident_buffer_validate(&state->outputs[n]) != SOX_SUCCESS)
+      return SOX_EOF;
+    if (!state->draining[n] && state->outputs[n].state == lsx_vulkan_resident_final) {
+      lsx_fail("resident Vulkan transform produced a final output before drain");
+      return SOX_EOF;
+    }
+    if (state->draining[n] && !done && state->outputs[n].state == lsx_vulkan_resident_final)
+      state->outputs[n].state = lsx_vulkan_resident_draining;
+    if (done && state->outputs[n].state != lsx_vulkan_resident_final) {
+      lsx_fail("resident Vulkan transform completed without a final output");
+      return SOX_EOF;
+    }
+    state->pending[n] = sox_true;
+  }
+  else if (done) {
+    lsx_fail("resident Vulkan transform completed without producing a final slice");
+    return SOX_EOF;
+  }
+  chain->effects[n - 1u]->clips += input_clips;
+  state->active[n] = state->draining[n] ? sox_false : active;
+  state->done[n] = done;
+  *progress = input_consumed || output_produced || input_clips || done;
+  lsx_debug_more("resident segment transform %" PRIuPTR ": input=%d consumed=%d produced=%d active=%d draining=%d done=%d state=%d", n, input != NULL, input_consumed, output_produced, state->active[n], state->draining[n], done, output_produced ? state->outputs[n].state : lsx_vulkan_resident_empty);
+  return SOX_SUCCESS;
+}
+#endif
+
 static int flow_effect(sox_effects_chain_t * chain, size_t n)
 {
   sox_effect_t *effp1 = chain->effects[n - 1];
@@ -422,6 +718,16 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
   size_t e, source_e = 0;               /* effect indices */
   size_t max_flows = 0;
   sox_bool draining = sox_true;
+#if HAVE_VULKAN
+  lsx_vulkan_resident_buffer_t resident;
+  size_t resident_producer = SOX_SIZE_MAX;
+  size_t resident_consumer = SOX_SIZE_MAX;
+  sox_bool resident_pending = sox_false;
+  sox_bool resident_consumer_active = sox_false;
+  vulkan_resident_segment_state_t resident_segment;
+
+  vulkan_resident_segment_state_init(&resident_segment, chain->length);
+#endif
 
   for (e = 0; e < chain->length; ++e) {
     sox_effect_t *effp = chain->effects[e];
@@ -451,12 +757,246 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       deinterleave(chain->effects[e+1]->flows, effp->oend - effp->obeg,
           chain->il_buf, effp->obuf, sox_globals.bufsiz, effp->obeg);
     }
+#if HAVE_VULKAN
+    {
+      size_t segment_end = vulkan_resident_segment_end(chain, e);
+
+      if (segment_end == e + 1u)
+        lsx_report("Vulkan resident effect boundary: %s -> %s", chain->effects[e]->handler.name, chain->effects[segment_end]->handler.name);
+      else if (segment_end != SOX_SIZE_MAX)
+        lsx_report("Vulkan resident effect segment: %s -> ... -> %s (%" PRIuPTR " effects)", chain->effects[e]->handler.name, chain->effects[segment_end]->handler.name, segment_end - e + 1u);
+    }
+#endif
   }
 
   e = chain->length - 1;
   while (source_e < chain->length) {
 #define have_imin (e > 0 && e < chain->length && chain->effects[e - 1]->oend - chain->effects[e - 1]->obeg >= chain->effects[e]->imin)
     size_t osize = chain->effects[e]->oend - chain->effects[e]->obeg;
+#if HAVE_VULKAN
+    sox_bool resident_handled = sox_false;
+    sox_bool resident_progress = sox_false;
+    sox_bool resident_segment_handled = sox_false;
+
+    if (!resident_segment.enabled && !resident_pending && !resident_consumer_active && e > 0 && e < chain->length) {
+      size_t segment_end = vulkan_resident_segment_end(chain, e);
+      size_t available = chain->effects[e - 1u]->oend - chain->effects[e - 1u]->obeg;
+      sox_bool can_flow = e != source_e && available && available >= chain->effects[e]->imin;
+      sox_bool can_drain = e == source_e;
+
+      if (segment_end > e + 1u &&
+          segment_end != SOX_SIZE_MAX &&
+          (can_flow || can_drain) &&
+          vulkan_resident_segment_state_begin(
+              chain, &resident_segment,
+              e, segment_end) != SOX_SUCCESS) {
+        flow_status = SOX_EOF;
+        break;
+      }
+    }
+
+    if (resident_segment.enabled && e == resident_segment.last) {
+      size_t input_index = e - 1u;
+
+      resident_segment_handled = sox_true;
+      if (resident_segment.pending[input_index] || resident_segment.active[e]) {
+        lsx_vulkan_resident_buffer_t const *input = resident_segment.pending[input_index] ? &resident_segment.outputs[input_index] : NULL;
+        sox_bool input_final = input && input->state == lsx_vulkan_resident_final;
+        sox_bool input_consumed;
+        int status = flow_vulkan_resident_consumer(chain, e, input, &input_consumed, &resident_segment.active[e], &resident_progress);
+
+        if (status != SOX_SUCCESS) {
+          flow_status = status;
+          break;
+        }
+        if (input_consumed) {
+          resident_segment.pending[input_index] = sox_false;
+          ++resident_segment.boundary_output_slices;
+          if (!resident_segment.output_format_reported && input) {
+            report_vulkan_resident_format(
+                chain->effects[e], "output", input);
+            resident_segment.output_format_reported = sox_true;
+          }
+          if (input_final)
+            resident_segment.consumer_final_received = sox_true;
+        }
+        lsx_debug_more("resident segment consumer %" PRIuPTR ": input=%d consumed=%d active=%d final=%d output=%" PRIuPTR, e, input != NULL, input_consumed, resident_segment.active[e], resident_segment.consumer_final_received, chain->effects[e]->oend - chain->effects[e]->obeg - osize);
+      }
+      if (chain->effects[e]->oend - chain->effects[e]->obeg > osize)
+        ++e;
+      else if (resident_segment.pending[input_index] || resident_segment.active[resident_segment.last])
+        e = resident_segment.last;
+      else if (resident_segment.consumer_final_received) {
+        report_vulkan_resident_segment(chain, &resident_segment);
+        resident_segment.enabled = sox_false;
+        e = resident_segment.last;
+      }
+      else
+        --e;
+    }
+    else if (resident_segment.enabled && e > resident_segment.first && e < resident_segment.last) {
+      resident_segment_handled = sox_true;
+      if (resident_segment.pending[e])
+        ++e;
+      else if (resident_segment.pending[e - 1u] || resident_segment.active[e] || resident_segment.draining[e]) {
+        int status = flow_vulkan_resident_transform(chain, e, &resident_segment, &resident_progress);
+
+        if (status != SOX_SUCCESS) {
+          flow_status = status;
+          break;
+        }
+        ++resident_segment.transform_calls;
+        if (resident_segment.pending[e])
+          ++resident_segment.transform_output_slices;
+        if (resident_segment.done[e] && source_e == e) {
+          ++source_e;
+          draining = sox_false;
+        }
+        if (resident_segment.pending[e])
+          ++e;
+        else if (resident_segment.active[e] || resident_segment.draining[e])
+          e = resident_segment.done[e] ? e + 1u : e;
+        else
+          --e;
+      }
+      else
+        --e;
+    }
+    else if (resident_segment.enabled && e == resident_segment.first) {
+      resident_segment_handled = sox_true;
+      if (resident_segment.pending[e])
+        ++e;
+      else if (e != source_e && chain->effects[e - 1u]->oend - chain->effects[e - 1u]->obeg && chain->effects[e - 1u]->oend - chain->effects[e - 1u]->obeg >= chain->effects[e]->imin) {
+        int status = flow_vulkan_resident_producer(chain, e, &resident_segment.outputs[e], &resident_segment.pending[e], &resident_progress);
+
+        if (status != SOX_SUCCESS) {
+          flow_status = status;
+          break;
+        }
+        if (resident_segment.pending[e]) {
+          ++resident_segment.boundary_input_slices;
+          if (!resident_segment.input_format_reported) {
+            report_vulkan_resident_format(
+                chain->effects[e], "input",
+                &resident_segment.outputs[e]);
+            resident_segment.input_format_reported = sox_true;
+          }
+        }
+        if (resident_segment.pending[e])
+          ++e;
+        else
+          --e;
+      }
+      else if (e == source_e) {
+        sox_bool done;
+        int status = drain_vulkan_resident_producer(chain, e, &resident_segment.outputs[e], &resident_segment.pending[e], &done, &resident_progress);
+
+        if (status != SOX_SUCCESS) {
+          flow_status = status;
+          break;
+        }
+        if (resident_segment.pending[e]) {
+          ++resident_segment.boundary_input_slices;
+          if (!resident_segment.input_format_reported) {
+            report_vulkan_resident_format(
+                chain->effects[e], "input",
+                &resident_segment.outputs[e]);
+            resident_segment.input_format_reported = sox_true;
+          }
+        }
+        resident_segment.done[e] = done;
+        if (done) {
+          ++source_e;
+          draining = sox_false;
+        }
+        if (resident_segment.pending[e])
+          ++e;
+        else if (!done)
+          e = resident_segment.first;
+      }
+      else
+        --e;
+    }
+    if (resident_segment_handled) {
+      resident_segment.maximum_pending_edges = max(
+          resident_segment.maximum_pending_edges,
+          vulkan_resident_pending_edges(&resident_segment));
+      if (callback && callback(source_e == chain->length, client_data) != SOX_SUCCESS) {
+        sox_effect_t const *effp =
+            chain->effects[resident_segment.first];
+
+        lsx_report(
+            "resident segment callback requested exit: "
+            "source=%" PRIuPTR ", cursor=%" PRIuPTR,
+            source_e, e);
+        flow_status = SOX_EOF;
+        break;
+      }
+      continue;
+    }
+
+    if (e < chain->length && vulkan_endpoint(chain->effects[e]) && vulkan_endpoint(chain->effects[e])->consume && ((resident_pending && resident_producer + 1u == e) || (resident_consumer_active && resident_consumer == e))) {
+      sox_bool input_consumed;
+      int status = flow_vulkan_resident_consumer(chain, e, resident_pending ? &resident : NULL, &input_consumed, &resident_consumer_active, &resident_progress);
+
+      resident_handled = sox_true;
+      resident_consumer = e;
+      if (input_consumed) {
+        resident_pending = sox_false;
+        resident_producer = SOX_SIZE_MAX;
+      }
+      if (status != SOX_SUCCESS) {
+        flow_status = status;
+        break;
+      }
+    }
+    else if (e > 0 && e < chain->length && e != source_e && vulkan_resident_pair(chain, e) && !resident_pending && chain->effects[e - 1u]->oend - chain->effects[e - 1u]->obeg >= chain->effects[e]->imin) {
+      int status = flow_vulkan_resident_producer(chain, e, &resident, &resident_pending, &resident_progress);
+
+      resident_handled = sox_true;
+      if (resident_pending)
+        resident_producer = e;
+      if (status != SOX_SUCCESS) {
+        flow_status = status;
+        break;
+      }
+    }
+    else if (e == source_e && vulkan_resident_pair(chain, e) && !resident_pending && (draining || !have_imin)) {
+      sox_bool done;
+      int status = drain_vulkan_resident_producer(chain, e, &resident, &resident_pending, &done, &resident_progress);
+
+      resident_handled = sox_true;
+      if (resident_pending)
+        resident_producer = e;
+      if (status != SOX_SUCCESS) {
+        flow_status = status;
+        break;
+      }
+      if (done) {
+        ++source_e;
+        draining = sox_false;
+      }
+    }
+    if (resident_handled) {
+      if (resident_pending && resident_producer == e)
+        ++e;
+      else if (e < chain->length && chain->effects[e]->oend - chain->effects[e]->obeg > osize)
+        ++e;
+      else if (resident_consumer_active && resident_consumer == e)
+        resident_progress = sox_true;
+      else if (e == source_e)
+        draining = sox_true;
+      else if (e < source_e)
+        e = source_e;
+      else
+        --e;
+      if (callback && callback(source_e == chain->length, client_data) != SOX_SUCCESS) {
+        flow_status = SOX_EOF;
+        break;
+      }
+      continue;
+    }
+#endif
     if (e == source_e && (draining || !have_imin)) {
       int status = drain_effect(chain, e);
       if (status != SOX_SUCCESS && status != SOX_EOF) {
@@ -470,6 +1010,12 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
     } else if (have_imin) {
       int status = flow_effect(chain, e);
       if (status != SOX_SUCCESS) {
+        sox_effect_t const *effp = chain->effects[e];
+
+        lsx_report(
+            "effect scheduler flow exit: effect=%" PRIuPTR
+            " (%s), status=%d",
+            e, effp->handler.name, status);
         flow_status = status;
         if (status != SOX_EOF || e == chain->length - 1)
           break;
@@ -487,6 +1033,11 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       --e;
 
     if (callback && callback(source_e == chain->length, client_data) != SOX_SUCCESS) {
+      sox_effect_t const *effp = chain->effects[e];
+
+      lsx_report(
+          "effect scheduler callback requested exit: "
+          "cursor=%" PRIuPTR, e);
       flow_status = SOX_EOF; /* Client has requested to stop the flow. */
       break;
     }
@@ -505,6 +1056,23 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
   }
 
   free(chain->il_buf);
+#if HAVE_VULKAN
+  if (resident_segment.enabled)
+    report_vulkan_resident_segment(
+        chain, &resident_segment);
+  if (resident_segment.enabled) {
+    sox_effect_t const *effp =
+        chain->effects[resident_segment.first];
+
+    lsx_report(
+        "Vulkan resident segment exit: status=%d, "
+        "source=%" PRIuPTR ", cursor=%" PRIuPTR
+        ", consumer-final=%d",
+        flow_status, source_e, e,
+        resident_segment.consumer_final_received);
+  }
+  vulkan_resident_segment_state_destroy(&resident_segment);
+#endif
   return flow_status;
 }
 

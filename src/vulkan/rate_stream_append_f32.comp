@@ -1,0 +1,54 @@
+/*
+ * Gather resident FP32 PCM into the interleaved Vulkan rate stream.
+ */
+
+#version 450
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer InputSamples {
+  float input_samples[];
+};
+
+layout(std430, binding = 1) writeonly buffer StreamSamples {
+  float stream_samples[];
+};
+
+layout(std430, binding = 2) buffer ClipCounter {
+  uint clipped_samples[];
+};
+
+layout(push_constant) uniform Parameters {
+  uint input_base_element;
+  uint output_first_frame;
+  uint frames;
+  uint input_frame_stride;
+  uint input_channel_stride;
+  uint channels;
+  uint quantize_sox_sample;
+  uint clip_index;
+} parameters;
+
+void main()
+{
+  uint frame = gl_GlobalInvocationID.x;
+  uint channel = gl_GlobalInvocationID.y;
+  if (frame >= parameters.frames || channel >= parameters.channels)
+    return;
+
+  uint input_index =
+      parameters.input_base_element +
+      frame * parameters.input_frame_stride +
+      channel * parameters.input_channel_stride;
+  uint output_index =
+      (parameters.output_first_frame + frame) *
+      parameters.channels + channel;
+  float value = input_samples[input_index];
+  if (parameters.quantize_sox_sample != 0u) {
+    value = roundEven(value);
+    if (value < -2147483648.0 || value > 2147483647.0)
+      atomicAdd(clipped_samples[parameters.clip_index], 1u);
+    value = clamp(value, -2147483648.0, 2147483647.0);
+  }
+  stream_samples[output_index] = value;
+}

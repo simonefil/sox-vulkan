@@ -13,6 +13,8 @@
 #include <string.h>
 
 #include "rate_polyphase_f64_spv.inc"
+#include "rate_polyphase_f32_spv.inc"
+#include "rate_polyphase_normalized_f32_spv.inc"
 
 #define RATE_POLYPHASE_BLOCK_FRAMES 16384u
 #define RATE_POLYPHASE_BINDINGS 3u
@@ -25,23 +27,40 @@ typedef struct {
   uint32_t phase_start;
   uint32_t taps;
   uint32_t channels;
+  uint32_t normalize;
+  uint32_t padding;
 } parameters_t;
+
+lsx_static_assert(
+    sizeof(parameters_t) == 32,
+    vulkan_rate_polyphase_push_layout);
 
 struct lsx_rate_polyphase_vulkan {
   lsx_vulkan_context_t *vulkan;
   lsx_vulkan_buffer_t coefficients;
   lsx_vulkan_buffer_t input;
   lsx_vulkan_buffer_t output;
+  lsx_vulkan_buffer_t normalized_output;
+  lsx_vulkan_buffer_t resident_upload[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
+  lsx_vulkan_buffer_t resident_input[2];
+  double *host_output;
   VkDescriptorSetLayout descriptor_layout;
   VkDescriptorPool descriptor_pool;
-  VkDescriptorSet descriptor_set;
+  VkDescriptorSet descriptor_sets[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkPipelineLayout pipeline_layout;
   VkPipeline pipeline;
-  VkCommandBuffer command_buffer;
+  VkPipeline normalized_pipeline;
+  VkCommandBuffer command_buffers[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkFence fence;
   parameters_t parameters;
   uint32_t phase_start;
   uint32_t max_output_frames;
+  uint32_t valid_output_frames;
+  uint32_t resident_input_index;
+  uint32_t resident_bank_index;
+  uint32_t resident_occupancy_frames;
+  sox_bool resident_initialized;
+  sox_bool double_precision;
 };
 
 static int vk_result(VkResult result, char const *operation)
@@ -49,16 +68,83 @@ static int vk_result(VkResult result, char const *operation)
   return lsx_vulkan_result(result, operation);
 }
 
+static uint32_t dispatch_items(
+    lsx_rate_polyphase_vulkan_t const *context,
+    uint32_t output_frames)
+{
+  (void)context;
+  return output_frames;
+}
+
+static size_t sample_size(
+    lsx_rate_polyphase_vulkan_t const *context)
+{
+  return context->double_precision ? sizeof(double) : sizeof(float);
+}
+
+static void upload_samples(
+    lsx_rate_polyphase_vulkan_t const *context, void *target,
+    double const *source, size_t count)
+{
+  size_t index;
+
+  if (context->double_precision) {
+    memcpy(target, source, count * sizeof(*source));
+    return;
+  }
+  for (index = 0; index < count; ++index)
+    ((float *)target)[index] = (float)source[index];
+}
+
+static double const *host_samples(
+    lsx_rate_polyphase_vulkan_t *context, size_t count)
+{
+  size_t index;
+
+  if (context->double_precision)
+    return context->output.mapped;
+  for (index = 0; index < count; ++index)
+    context->host_output[index] =
+        (double)((float const *)context->output.mapped)[index];
+  return context->host_output;
+}
+
 static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *coefficients)
 {
   VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-  VkDeviceSize coefficient_size = (VkDeviceSize)context->parameters.phase_count * context->parameters.taps * sizeof(double);
-  VkDeviceSize input_size = (VkDeviceSize)(RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u) * context->parameters.channels * sizeof(double);
-  VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sizeof(double);
+  VkDeviceSize sample_size = context->double_precision ? sizeof(double) : sizeof(float);
+  VkDeviceSize coefficient_size = (VkDeviceSize)context->parameters.phase_count * context->parameters.taps * sample_size;
+  VkDeviceSize input_size = (VkDeviceSize)(RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u) * context->parameters.channels * sample_size;
+  VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_size;
+  VkDeviceSize normalized_output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sizeof(float);
+  VkDeviceSize resident_input_size = input_size;
+  uint32_t phase;
+  uint32_t tap;
+  uint32_t index;
 
-  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->input, input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS)
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->input, input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->normalized_output, normalized_output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[0], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[1], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
-  memcpy(context->coefficients.mapped, coefficients, (size_t)coefficient_size);
+  for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index) {
+    if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_upload[index], input_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS)
+      return SOX_EOF;
+  }
+  if (!context->double_precision)
+    context->host_output = lsx_malloc(
+        (size_t)context->max_output_frames *
+        context->parameters.channels * sizeof(*context->host_output));
+  for (tap = 0; tap < context->parameters.taps; ++tap)
+    for (phase = 0;
+         phase < context->parameters.phase_count; ++phase) {
+      size_t target =
+          (size_t)tap * context->parameters.phase_count + phase;
+      double value = coefficients[
+          (size_t)phase * context->parameters.taps + tap];
+
+      if (context->double_precision)
+        ((double *)context->coefficients.mapped)[target] = value;
+      else
+        ((float *)context->coefficients.mapped)[target] = (float)value;
+    }
   return SOX_SUCCESS;
 }
 
@@ -71,6 +157,7 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   VkDescriptorPoolSize pool_size = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RATE_POLYPHASE_BINDINGS};
   VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   VkDescriptorSetAllocateInfo allocation = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  VkDescriptorSetLayout layouts[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkDescriptorBufferInfo buffer_info[RATE_POLYPHASE_BINDINGS];
   VkWriteDescriptorSet writes[RATE_POLYPHASE_BINDINGS];
   lsx_vulkan_buffer_t *buffers[RATE_POLYPHASE_BINDINGS] = {&context->coefficients, &context->input, &context->output};
@@ -92,30 +179,42 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   layout_info.pSetLayouts = &context->descriptor_layout;
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_range;
-  if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS || lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f64_spv, sizeof(rate_polyphase_f64_spv), context->pipeline_layout, &context->pipeline) != SOX_SUCCESS)
+  if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS ||
+      (context->double_precision ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f64_spv, sizeof(rate_polyphase_f64_spv), context->pipeline_layout, &context->pipeline) :
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->pipeline)) != SOX_SUCCESS ||
+      (context->double_precision ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_normalized_f32_spv, sizeof(rate_polyphase_normalized_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->normalized_pipeline)) != SOX_SUCCESS)
     return SOX_EOF;
-  pool_info.maxSets = 1;
+  pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.poolSizeCount = 1;
   pool_info.pPoolSizes = &pool_size;
   if (vk_result(vkCreateDescriptorPool(context->vulkan->device, &pool_info, NULL, &context->descriptor_pool), "vkCreateDescriptorPool rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
+  for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
+    layouts[index] = context->descriptor_layout;
   allocation.descriptorPool = context->descriptor_pool;
-  allocation.descriptorSetCount = 1;
-  allocation.pSetLayouts = &context->descriptor_layout;
-  if (vk_result(vkAllocateDescriptorSets(context->vulkan->device, &allocation, &context->descriptor_set), "vkAllocateDescriptorSets rate polyphase") != SOX_SUCCESS)
+  allocation.descriptorSetCount = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  allocation.pSetLayouts = layouts;
+  if (vk_result(vkAllocateDescriptorSets(context->vulkan->device, &allocation, context->descriptor_sets), "vkAllocateDescriptorSets rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   for (index = 0; index < RATE_POLYPHASE_BINDINGS; ++index) {
+    uint32_t slot;
     buffer_info[index].buffer = buffers[index]->buffer;
     buffer_info[index].offset = 0;
     buffer_info[index].range = buffers[index]->size;
-    writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[index].dstSet = context->descriptor_set;
-    writes[index].dstBinding = index;
-    writes[index].descriptorCount = 1;
-    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[index].pBufferInfo = &buffer_info[index];
+    for (slot = 0; slot < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++slot) {
+      writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      writes[index].dstSet = context->descriptor_sets[slot];
+      writes[index].dstBinding = index;
+      writes[index].descriptorCount = 1;
+      writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      writes[index].pBufferInfo = &buffer_info[index];
+      vkUpdateDescriptorSets(context->vulkan->device, 1, &writes[index], 0, NULL);
+    }
   }
-  vkUpdateDescriptorSets(context->vulkan->device, RATE_POLYPHASE_BINDINGS, writes, 0, NULL);
   return SOX_SUCCESS;
 }
 
@@ -126,33 +225,44 @@ static int create_commands(lsx_rate_polyphase_vulkan_t *context)
 
   allocation.commandPool = context->vulkan->command_pool;
   allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  allocation.commandBufferCount = 1;
-  if (vk_result(vkAllocateCommandBuffers(context->vulkan->device, &allocation, &context->command_buffer), "vkAllocateCommandBuffers rate polyphase") != SOX_SUCCESS || vk_result(vkCreateFence(context->vulkan->device, &fence_info, NULL, &context->fence), "vkCreateFence rate polyphase") != SOX_SUCCESS)
+  allocation.commandBufferCount = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  if (vk_result(vkAllocateCommandBuffers(context->vulkan->device, &allocation, context->command_buffers), "vkAllocateCommandBuffers rate polyphase") != SOX_SUCCESS || vk_result(vkCreateFence(context->vulkan->device, &fence_info, NULL, &context->fence), "vkCreateFence rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   return SOX_SUCCESS;
 }
 
-lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels)
+lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames)
 {
   lsx_rate_polyphase_vulkan_t *context;
   uint64_t max_output_frames;
 
-  if (!vulkan || !vulkan->shader_float64 || !coefficients || !taps || !phase_count || !phase_step || phase_start >= phase_count || !channels)
+  if (!vulkan || (!vulkan->shader_float64 &&
+      vulkan->profile != sox_vulkan_profile_fast) ||
+      !coefficients || !taps || !phase_count || !phase_step ||
+      phase_start >= phase_count || !channels ||
+      resident_preload_frames > taps - 1u)
     return NULL;
   max_output_frames = ((uint64_t)RATE_POLYPHASE_BLOCK_FRAMES * phase_count + phase_step - 1u) / phase_step + 1u;
   if (max_output_frames > UINT32_MAX)
     return NULL;
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
+  context->double_precision = vulkan->shader_float64;
   context->parameters.phase_count = phase_count;
   context->parameters.phase_step = phase_step;
   context->parameters.taps = taps;
   context->parameters.channels = channels;
   context->phase_start = phase_start;
   context->max_output_frames = (uint32_t)max_output_frames;
+  context->resident_occupancy_frames = resident_preload_frames;
   if (create_buffers(context, coefficients) != SOX_SUCCESS || create_pipeline(context) != SOX_SUCCESS || create_commands(context) != SOX_SUCCESS)
     goto error;
-  lsx_report("Vulkan rate polyphase: %u/%u, %u taps/phase, %u channel%s", phase_count, phase_step, taps, channels, channels == 1u ? "" : "s");
+  lsx_report(
+      "Vulkan rate polyphase: %u/%u, %u taps/phase, "
+      "%u channel%s, %s",
+      phase_count, phase_step, taps, channels,
+      channels == 1u ? "" : "s",
+      context->double_precision ? "FP64" : "FP32");
   return context;
 
 error:
@@ -168,19 +278,31 @@ void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context)
     vkDeviceWaitIdle(context->vulkan->device);
   if (context->fence)
     vkDestroyFence(context->vulkan->device, context->fence, NULL);
-  if (context->command_buffer)
-    vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, 1, &context->command_buffer);
+  if (context->command_buffers[0])
+    vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, LSX_VULKAN_RESIDENT_BATCH_DEPTH, context->command_buffers);
   if (context->pipeline)
     vkDestroyPipeline(context->vulkan->device, context->pipeline, NULL);
+  if (context->normalized_pipeline)
+    vkDestroyPipeline(context->vulkan->device, context->normalized_pipeline, NULL);
   if (context->pipeline_layout)
     vkDestroyPipelineLayout(context->vulkan->device, context->pipeline_layout, NULL);
   if (context->descriptor_pool)
     vkDestroyDescriptorPool(context->vulkan->device, context->descriptor_pool, NULL);
   if (context->descriptor_layout)
     vkDestroyDescriptorSetLayout(context->vulkan->device, context->descriptor_layout, NULL);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_input[1]);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_input[0]);
+  {
+    uint32_t index;
+
+    for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
+      lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_upload[index]);
+  }
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->normalized_output);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->output);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->input);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->coefficients);
+  free(context->host_output);
   free(context);
 }
 
@@ -194,8 +316,21 @@ uint32_t lsx_rate_polyphase_vulkan_taps(lsx_rate_polyphase_vulkan_t const *conte
   return context ? context->parameters.taps : 0;
 }
 
+size_t lsx_rate_polyphase_vulkan_output_block_frames(
+    lsx_rate_polyphase_vulkan_t const *context)
+{
+  if (!context)
+    return 0;
+  return (size_t)(
+      ((uint64_t)RATE_POLYPHASE_BLOCK_FRAMES *
+       context->parameters.phase_count +
+       context->parameters.phase_step - 1u) /
+      context->parameters.phase_step);
+}
+
 int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, double const **output, size_t *output_frames, size_t *consumed_frames)
 {
+  VkCommandBuffer command_buffer;
   VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
   VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
   uint64_t limit;
@@ -205,27 +340,363 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
 
   if (!context || !input || !output || !output_frames || !consumed_frames || !processable_frames || processable_frames > RATE_POLYPHASE_BLOCK_FRAMES)
     return SOX_EOF;
+  command_buffer = context->command_buffers[0];
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
   if (!count || count > context->max_output_frames)
     return SOX_EOF;
   end_position = context->phase_start + count * context->parameters.phase_step;
   input_frames = processable_frames + context->parameters.taps - 1u;
-  memcpy(context->input.mapped, input, input_frames * context->parameters.channels * sizeof(double));
+  upload_samples(
+      context, context->input.mapped, input,
+      input_frames * context->parameters.channels);
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_start = context->phase_start;
-  if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(context->command_buffer, 0), "vkResetCommandBuffer rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(context->command_buffer, &begin), "vkBeginCommandBuffer rate polyphase") != SOX_SUCCESS)
+  context->parameters.normalize = 0;
+  if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
-  vkCmdBindPipeline(context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
-  vkCmdBindDescriptorSets(context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline_layout, 0, 1, &context->descriptor_set, 0, NULL);
-  vkCmdPushConstants(context->command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
-  vkCmdDispatch(context->command_buffer, ((uint32_t)count + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
-  vkCmdPipelineBarrier(context->command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
-  if (vk_result(vkEndCommandBuffer(context->command_buffer), "vkEndCommandBuffer rate polyphase") != SOX_SUCCESS || lsx_vulkan_submit_and_wait(context->vulkan, context->command_buffer, context->fence) != SOX_SUCCESS)
+  lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate polyphase");
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline_layout, 0, 1, &context->descriptor_sets[0], 0, NULL);
+  vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
+  vkCmdDispatch(command_buffer, (dispatch_items(context, (uint32_t)count) + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_end(context->vulkan, command_buffer);
+  if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer rate polyphase") != SOX_SUCCESS || lsx_vulkan_submit_and_wait(context->vulkan, command_buffer, context->fence, lsx_vulkan_wait_rate_synchronous) != SOX_SUCCESS)
     return SOX_EOF;
-  *output = context->output.mapped;
+  *output = host_samples(
+      context, (size_t)count * context->parameters.channels);
   *output_frames = (size_t)count;
   *consumed_frames = (size_t)(end_position / context->parameters.phase_count);
+  context->valid_output_frames = (uint32_t)count;
   context->phase_start = (uint32_t)(end_position % context->parameters.phase_count);
   return SOX_SUCCESS;
+}
+
+int lsx_rate_polyphase_vulkan_process_block(
+    lsx_rate_polyphase_vulkan_t *context, double const *input,
+    size_t input_frames, uint32_t output_frame_count,
+    uint32_t phase_start, double const **output)
+{
+  VkCommandBuffer command_buffer;
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkMemoryBarrier barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT
+  };
+
+  if (!context || !input || !output || !input_frames ||
+      input_frames > RATE_POLYPHASE_BLOCK_FRAMES ||
+      !output_frame_count ||
+      output_frame_count > context->max_output_frames ||
+      phase_start >= context->parameters.phase_count)
+    return SOX_EOF;
+  command_buffer = context->command_buffers[0];
+  upload_samples(
+      context, context->input.mapped, input,
+      input_frames * context->parameters.channels);
+  context->parameters.output_frames = output_frame_count;
+  context->parameters.phase_start = phase_start;
+  context->parameters.normalize = 0;
+  if (vk_result(
+          vkResetFences(
+              context->vulkan->device, 1, &context->fence),
+          "vkResetFences rate block polyphase") != SOX_SUCCESS ||
+      vk_result(
+          vkResetCommandBuffer(command_buffer, 0),
+          "vkResetCommandBuffer rate block polyphase") !=
+          SOX_SUCCESS ||
+      vk_result(
+          vkBeginCommandBuffer(command_buffer, &begin),
+          "vkBeginCommandBuffer rate block polyphase") !=
+          SOX_SUCCESS)
+    return SOX_EOF;
+  lsx_vulkan_label_begin(
+      context->vulkan, command_buffer,
+      "Rate block polyphase");
+  vkCmdBindPipeline(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->pipeline);
+  vkCmdBindDescriptorSets(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->pipeline_layout, 0, 1,
+      &context->descriptor_sets[0], 0, NULL);
+  vkCmdPushConstants(
+      command_buffer, context->pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(context->parameters), &context->parameters);
+  vkCmdDispatch(
+      command_buffer,
+      (output_frame_count + RATE_POLYPHASE_LOCAL_SIZE - 1u) /
+      RATE_POLYPHASE_LOCAL_SIZE,
+      context->parameters.channels, 1);
+  vkCmdPipelineBarrier(
+      command_buffer,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_HOST_BIT, 0,
+      1, &barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_end(context->vulkan, command_buffer);
+  if (vk_result(
+          vkEndCommandBuffer(command_buffer),
+          "vkEndCommandBuffer rate block polyphase") !=
+          SOX_SUCCESS ||
+      lsx_vulkan_submit_and_wait(
+          context->vulkan, command_buffer, context->fence,
+          lsx_vulkan_wait_rate_synchronous) != SOX_SUCCESS)
+    return SOX_EOF;
+  *output = host_samples(
+      context,
+      (size_t)output_frame_count *
+      context->parameters.channels);
+  return SOX_SUCCESS;
+}
+
+int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
+{
+  lsx_vulkan_resident_buffer_t upload;
+  uint64_t limit;
+  uint64_t count;
+  uint64_t end_position;
+  size_t available_frames;
+  size_t append_frames;
+  size_t append_offset;
+  uint32_t bank_index;
+
+  if (!context || !input || !processable_frames || processable_frames > RATE_POLYPHASE_BLOCK_FRAMES || !output_frames || !consumed_frames || rate <= 0 || !resident)
+    return SOX_EOF;
+  available_frames = processable_frames + context->parameters.taps - 1u;
+  if (available_frames <= context->resident_occupancy_frames)
+    return SOX_EOF;
+  append_offset = context->resident_occupancy_frames;
+  append_frames = available_frames - append_offset;
+  limit = (uint64_t)processable_frames * context->parameters.phase_count;
+  count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
+  if (!count || count > context->max_output_frames)
+    return SOX_EOF;
+  end_position = context->phase_start + count * context->parameters.phase_step;
+  bank_index = context->resident_bank_index;
+  upload_samples(
+      context, context->resident_upload[bank_index].mapped,
+      input + append_offset * context->parameters.channels,
+      append_frames * context->parameters.channels);
+  memset(&upload, 0, sizeof(upload));
+  upload.buffer = &context->resident_upload[bank_index];
+  upload.owner = context;
+  upload.producer_stage = VK_PIPELINE_STAGE_HOST_BIT;
+  upload.producer_access = VK_ACCESS_HOST_WRITE_BIT;
+  upload.capacity_elements =
+      context->resident_upload[bank_index].size /
+      (context->parameters.channels * sample_size(context));
+  upload.valid_elements = append_frames;
+  upload.frame_stride_elements = context->parameters.channels;
+  upload.channel_stride_elements = 1u;
+  upload.rate = rate;
+  upload.channels = context->parameters.channels;
+  upload.frames_per_element = 1u;
+  upload.format = context->double_precision ?
+      lsx_vulkan_resident_format_f64 :
+      lsx_vulkan_resident_format_f32;
+  upload.domain = lsx_vulkan_resident_domain_sox_sample;
+  upload.layout = lsx_vulkan_resident_layout_interleaved;
+  upload.state = state;
+  if (lsx_rate_polyphase_vulkan_process_resident_input_normalized(context, &upload, NULL, output_frames, rate, state, normalize, resident) != SOX_SUCCESS)
+    return SOX_EOF;
+  *consumed_frames = (size_t)(end_position / context->parameters.phase_count);
+  return SOX_SUCCESS;
+}
+
+int lsx_rate_polyphase_vulkan_process_resident(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
+{
+  return lsx_rate_polyphase_vulkan_process_resident_normalized(context, input, processable_frames, output_frames, consumed_frames, rate, state, sox_false, resident);
+}
+
+int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
+{
+  VkCommandBuffer command_buffer;
+  VkDescriptorSet descriptor_set;
+  VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
+  VkMemoryBarrier input_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
+  VkMemoryBarrier output_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
+  VkBufferMemoryBarrier source_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, 0, VK_ACCESS_TRANSFER_READ_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
+  VkDescriptorBufferInfo buffer_info[RATE_POLYPHASE_BINDINGS];
+  VkWriteDescriptorSet writes[RATE_POLYPHASE_BINDINGS];
+  lsx_vulkan_buffer_t *output_buffer;
+  lsx_vulkan_buffer_t *current;
+  lsx_vulkan_buffer_t *next;
+  VkDeviceSize frame_size;
+  VkBufferCopy append;
+  VkBufferCopy retain;
+  uint64_t limit;
+  uint64_t count;
+  uint64_t end_position;
+  size_t processable_frames;
+  size_t consumed_frames;
+  size_t remaining_frames;
+  size_t available_frames;
+  uint32_t index;
+
+  if (!context || !input || !output_frames ||
+      (!output && !resident) || (resident && rate <= 0) ||
+      lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS ||
+      input->format != (context->double_precision ?
+          lsx_vulkan_resident_format_f64 :
+          lsx_vulkan_resident_format_f32) ||
+      input->domain != lsx_vulkan_resident_domain_sox_sample ||
+      input->layout != lsx_vulkan_resident_layout_interleaved ||
+      input->frames_per_element != 1u ||
+      input->channels != context->parameters.channels ||
+      input->frame_stride_elements != context->parameters.channels ||
+      input->channel_stride_elements != 1u ||
+      input->state == lsx_vulkan_resident_empty ||
+      !input->valid_elements)
+    return SOX_EOF;
+  command_buffer = context->command_buffers[context->resident_bank_index];
+  descriptor_set = context->descriptor_sets[context->resident_bank_index];
+  if (context->resident_occupancy_frames + input->valid_elements > RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u)
+    return SOX_EOF;
+  available_frames = context->resident_occupancy_frames + input->valid_elements;
+  if (available_frames <= context->parameters.taps - 1u)
+    return SOX_EOF;
+  frame_size =
+      (VkDeviceSize)context->parameters.channels *
+      sample_size(context);
+  current = &context->resident_input[context->resident_input_index];
+  next = &context->resident_input[context->resident_input_index ^ 1u];
+  processable_frames = min((size_t)RATE_POLYPHASE_BLOCK_FRAMES, available_frames - (context->parameters.taps - 1u));
+  limit = (uint64_t)processable_frames * context->parameters.phase_count;
+  count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
+  if (!processable_frames || !count || count > context->max_output_frames)
+    return SOX_EOF;
+  end_position = context->phase_start + count * context->parameters.phase_step;
+  consumed_frames = (size_t)(end_position / context->parameters.phase_count);
+  remaining_frames = available_frames - consumed_frames;
+  append.srcOffset = input->offset;
+  append.dstOffset = (VkDeviceSize)context->resident_occupancy_frames * frame_size;
+  append.size = (VkDeviceSize)input->valid_elements * frame_size;
+  retain.srcOffset = (VkDeviceSize)consumed_frames * frame_size;
+  retain.dstOffset = 0;
+  retain.size = (VkDeviceSize)remaining_frames * frame_size;
+  source_barrier.srcAccessMask = input->producer_access;
+  source_barrier.buffer = input->buffer->buffer;
+  source_barrier.offset = input->offset;
+  source_barrier.size = append.size;
+  context->parameters.output_frames = (uint32_t)count;
+  context->parameters.phase_start = context->phase_start;
+  context->parameters.normalize = normalize ? 1u : 0u;
+  output_buffer = normalize ?
+      &context->normalized_output : &context->output;
+  buffer_info[0].buffer = context->coefficients.buffer;
+  buffer_info[0].offset = 0;
+  buffer_info[0].range = context->coefficients.size;
+  buffer_info[1].buffer = current->buffer;
+  buffer_info[1].offset = 0;
+  buffer_info[1].range = current->size;
+  buffer_info[2].buffer = output_buffer->buffer;
+  buffer_info[2].offset = 0;
+  buffer_info[2].range = output_buffer->size;
+  memset(writes, 0, sizeof(writes));
+  for (index = 0; index < RATE_POLYPHASE_BINDINGS; ++index) {
+    writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[index].dstSet = descriptor_set;
+    writes[index].dstBinding = index;
+    writes[index].descriptorCount = 1;
+    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[index].pBufferInfo = &buffer_info[index];
+  }
+  vkUpdateDescriptorSets(context->vulkan->device, RATE_POLYPHASE_BINDINGS, writes, 0, NULL);
+  if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences resident rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer resident rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer resident rate polyphase") != SOX_SUCCESS)
+    return SOX_EOF;
+  lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate resident polyphase");
+  if (!context->resident_initialized) {
+    if (context->resident_occupancy_frames)
+      vkCmdFillBuffer(command_buffer, current->buffer, 0, (VkDeviceSize)context->resident_occupancy_frames * frame_size, 0);
+    context->resident_initialized = sox_true;
+  }
+  vkCmdPipelineBarrier(command_buffer, input->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &source_barrier, 0, NULL);
+  vkCmdCopyBuffer(command_buffer, input->buffer->buffer, current->buffer, 1, &append);
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &input_barrier, 0, NULL, 0, NULL);
+  vkCmdBindPipeline(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      normalize ? context->normalized_pipeline : context->pipeline);
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
+  vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
+  vkCmdDispatch(command_buffer, (dispatch_items(context, (uint32_t)count) + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &output_barrier, 0, NULL, 0, NULL);
+  if (remaining_frames)
+    vkCmdCopyBuffer(command_buffer, current->buffer, next->buffer, 1, &retain);
+  lsx_vulkan_label_end(context->vulkan, command_buffer);
+  if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer resident rate polyphase") != SOX_SUCCESS)
+    return SOX_EOF;
+  context->phase_start = (uint32_t)(end_position % context->parameters.phase_count);
+  context->resident_occupancy_frames = (uint32_t)remaining_frames;
+  context->resident_input_index ^= 1u;
+  context->valid_output_frames = (uint32_t)count;
+  *output_frames = (size_t)count;
+  if (resident) {
+    memset(resident, 0, sizeof(*resident));
+    resident->buffer = output_buffer;
+    resident->owner = context;
+    resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
+    resident->capacity_elements = context->max_output_frames;
+    resident->valid_elements = (size_t)count;
+    resident->frame_stride_elements = context->parameters.channels;
+    resident->channel_stride_elements = 1u;
+    resident->rate = rate;
+    resident->channels = context->parameters.channels;
+    resident->frames_per_element = 1u;
+    resident->format =
+        normalize || !context->double_precision ?
+        lsx_vulkan_resident_format_f32 :
+        lsx_vulkan_resident_format_f64;
+    resident->domain = normalize ?
+        lsx_vulkan_resident_domain_normalized :
+        lsx_vulkan_resident_domain_sox_sample;
+    resident->layout = lsx_vulkan_resident_layout_interleaved;
+    resident->state = state;
+    if (lsx_vulkan_resident_buffer_validate(resident) != SOX_SUCCESS || lsx_vulkan_enqueue(context->vulkan, command_buffer) != SOX_SUCCESS)
+      return SOX_EOF;
+    context->resident_bank_index = (context->resident_bank_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
+  }
+  else {
+    if (lsx_vulkan_submit_and_wait(context->vulkan, command_buffer, context->fence, lsx_vulkan_wait_rate_synchronous) != SOX_SUCCESS)
+      return SOX_EOF;
+    *output = host_samples(
+        context, (size_t)count * context->parameters.channels);
+  }
+  return SOX_SUCCESS;
+}
+
+int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
+{
+  return lsx_rate_polyphase_vulkan_process_resident_input_normalized(context, input, output, output_frames, rate, state, sox_false, resident);
+}
+
+int lsx_rate_polyphase_vulkan_resident_output(lsx_rate_polyphase_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
+{
+  if (!context || !resident)
+    return SOX_EOF;
+  memset(resident, 0, sizeof(*resident));
+  resident->buffer = &context->output;
+  resident->owner = context;
+  resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+  resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
+  resident->capacity_elements = context->max_output_frames;
+  resident->valid_elements = context->valid_output_frames;
+  resident->frame_stride_elements = context->parameters.channels;
+  resident->channel_stride_elements = 1u;
+  resident->frame_offset = frame_offset;
+  resident->rate = rate;
+  resident->channels = context->parameters.channels;
+  resident->frames_per_element = 1u;
+  resident->format = context->double_precision ?
+      lsx_vulkan_resident_format_f64 :
+      lsx_vulkan_resident_format_f32;
+  resident->domain = lsx_vulkan_resident_domain_sox_sample;
+  resident->layout = lsx_vulkan_resident_layout_interleaved;
+  resident->state = state;
+  return lsx_vulkan_resident_buffer_validate(resident);
 }

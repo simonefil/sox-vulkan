@@ -43,7 +43,9 @@
 #include "sox_i.h"
 #include "sdm.h"
 #if HAVE_VULKAN
+#include "rate_vulkan.h"
 #include "sdm_vulkan.h"
+#include "vulkan_effect_chain.h"
 #endif
 #include <assert.h>
 
@@ -1794,6 +1796,7 @@ typedef struct sdm_effect {
   uint32_t      trellis_lat;
 #if HAVE_VULKAN
   lsx_sdm_vulkan_t *vulkan;
+  sox_effect_t  *vulkan_rate;
   float         *vulkan_input;
   size_t        vulkan_input_frames;
   size_t        vulkan_input_capacity;
@@ -1803,6 +1806,18 @@ typedef struct sdm_effect {
   size_t        vulkan_output_pos;
 #endif
 } sdm_effect_t;
+
+#if HAVE_VULKAN
+static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active);
+
+static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
+  NULL,
+  NULL,
+  consume_vulkan_resident_effect,
+  NULL,
+  NULL
+};
+#endif
 
 static void destroy_rate_effect(sox_effect_t *rate)
 {
@@ -1820,8 +1835,10 @@ static void sdm_effect_cleanup(sdm_effect_t *p)
 
 #if HAVE_VULKAN
   lsx_sdm_vulkan_destroy(p->vulkan);
+  destroy_rate_effect(p->vulkan_rate);
   free(p->vulkan_input);
   p->vulkan = NULL;
+  p->vulkan_rate = NULL;
   p->vulkan_input = NULL;
 #endif
   if (p->rate)
@@ -1879,6 +1896,36 @@ static int getopts(sox_effect_t *effp, int argc, char **argv)
   return argc != optstate.ind ? lsx_usage(effp) : SOX_SUCCESS;
 }
 
+#if HAVE_VULKAN
+static sox_effect_t *create_vulkan_rate_effect(
+    sox_effect_t *effp, sox_rate_t output_rate)
+{
+  char rate_arg[32];
+  char *args[2] = { "-v", rate_arg };
+  sox_effect_t *rate =
+      sox_create_effect(lsx_rate_effect_fn());
+  int result;
+
+  rate->global_info = effp->global_info;
+  rate->in_signal = effp->in_signal;
+  rate->in_signal.mult = NULL;
+  rate->out_signal = rate->in_signal;
+  rate->out_signal.rate = output_rate;
+  snprintf(rate_arg, sizeof(rate_arg), "%.17g", output_rate);
+  result = sox_effect_options(rate, 2, args);
+  if (result == SOX_SUCCESS) {
+    lsx_rate_effect_use_dft_polyphase(rate);
+    result = rate->handler.start(rate);
+  }
+  if (result != SOX_SUCCESS) {
+    free(rate->priv);
+    free(rate);
+    return NULL;
+  }
+  return rate;
+}
+#endif
+
 static int start(sox_effect_t *effp)
 {
   sdm_effect_t *p = effp->priv;
@@ -1887,10 +1934,12 @@ static int start(sox_effect_t *effp)
 
   p->channels = effp->in_signal.channels;
 #if HAVE_VULKAN
-  if (sox_globals.use_vulkan) {
+  if (sox_globals.vulkan_profile != sox_vulkan_profile_none) {
     size_t core_frames;
     size_t lookahead = lsx_sdm_vulkan_lookahead();
     lsx_vulkan_context_t *vulkan;
+    unsigned dsd_factor;
+    sox_bool use_fused_resampler;
 
     if (!p->out_rate || p->out_rate == effp->in_signal.rate) {
       lsx_fail("Vulkan SDM requires -r with a DSD64..DSD1024 output rate");
@@ -1910,19 +1959,66 @@ static int start(sox_effect_t *effp)
       lsx_warn("Vulkan SDM uses the conservative MASH-2/FSM; -f is ignored");
     if (p->threads)
       lsx_warn("Vulkan SDM schedules channels on the GPU; -j is ignored");
+    dsd_factor = (unsigned)p->out_rate / 44100u;
+    use_fused_resampler =
+        !getenv("SOX_VULKAN_USE_RESIDENT_RATE") &&
+        (dsd_factor < 512u ||
+         (effp->in_signal.rate != 44100. &&
+          effp->in_signal.rate != 48000.));
     vulkan = lsx_vulkan_context_get(effp->global_info);
     if (!vulkan)
       return SOX_EOF;
-    p->vulkan = lsx_sdm_vulkan_create(vulkan,
-        (unsigned)effp->in_signal.rate,
-        (unsigned)p->out_rate, p->channels);
-    if (!p->vulkan)
-      return SOX_EOF;
-    core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
-    p->vulkan_input_capacity = core_frames + lookahead;
-    p->vulkan_input = lsx_calloc(
-        p->vulkan_input_capacity * p->channels,
-        sizeof(*p->vulkan_input));
+    if (!use_fused_resampler) {
+      p->vulkan_rate =
+          create_vulkan_rate_effect(effp, p->out_rate);
+      if (!p->vulkan_rate)
+        return SOX_EOF;
+      if (lsx_vulkan_configure_resident_batch_depth(
+          vulkan, effp->in_signal.rate, p->out_rate, p->channels,
+          effp->in_signal.length,
+          lsx_rate_effect_resident_topology(p->vulkan_rate)) !=
+          SOX_SUCCESS)
+        return SOX_EOF;
+    }
+    if (p->vulkan_rate &&
+        lsx_rate_effect_resident_supported(p->vulkan_rate)) {
+      p->vulkan = lsx_sdm_vulkan_create_resident(
+          vulkan, (unsigned)p->out_rate, p->channels,
+          lsx_rate_effect_resident_output_block_frames(
+              p->vulkan_rate));
+      if (!p->vulkan) {
+        destroy_rate_effect(p->vulkan_rate);
+        p->vulkan_rate = NULL;
+        return SOX_EOF;
+      }
+      lsx_report(
+          "Vulkan resident segment: rate -> SDM -> DSD packing");
+      if (lsx_rate_effect_resident_input_supported(p->vulkan_rate) && !getenv("SOX_VULKAN_DISABLE_RESIDENT_EFFECT_BOUNDARY"))
+        effp->internal_chain_endpoint = &vulkan_resident_endpoint;
+    }
+    else {
+      destroy_rate_effect(p->vulkan_rate);
+      p->vulkan_rate = NULL;
+      p->vulkan = lsx_sdm_vulkan_create(vulkan,
+          (unsigned)effp->in_signal.rate,
+          (unsigned)p->out_rate, p->channels);
+      if (!p->vulkan)
+        return SOX_EOF;
+      core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
+      p->vulkan_input_capacity = core_frames + lookahead;
+      p->vulkan_input = lsx_calloc(
+          p->vulkan_input_capacity * p->channels,
+          sizeof(*p->vulkan_input));
+      lsx_report(
+          use_fused_resampler ?
+          "Vulkan fused SDM resampler selected" :
+          "Vulkan resident rate segment unsupported; "
+          "using fused SDM resampler");
+      if (!getenv(
+          "SOX_VULKAN_DISABLE_RESIDENT_EFFECT_BOUNDARY"))
+        effp->internal_chain_endpoint =
+            &vulkan_resident_endpoint;
+    }
     effp->out_signal.precision = 1;
     effp->out_signal.rate = p->out_rate;
     effp->out_signal.packing = SOX_DSD_PACKING_WORD;
@@ -2336,6 +2432,202 @@ static int process_vulkan_input(sdm_effect_t *p, size_t frames,
   return SOX_SUCCESS;
 }
 
+static int accept_vulkan_resident_input(
+    sdm_effect_t *p,
+    lsx_vulkan_resident_buffer_t const *input,
+    sox_bool *output_ready)
+{
+  if (lsx_sdm_vulkan_process_resident(
+      p->vulkan, input, output_ready,
+      &p->vulkan_output, &p->vulkan_output_bytes,
+      &p->vulkan_output_stride) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (*output_ready &&
+      (p->vulkan_output_bytes % 4u ||
+      p->vulkan_output_stride % 4u)) {
+    lsx_fail("resident Vulkan DSD output is not word aligned");
+    return SOX_EOF;
+  }
+  p->vulkan_output_pos = 0;
+  return SOX_SUCCESS;
+}
+
+static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active)
+{
+  sdm_effect_t *p = effp->priv;
+  lsx_vulkan_resident_buffer_t rate_output;
+  lsx_vulkan_resident_buffer_t const *current = input;
+  sox_bool consumed;
+  sox_bool produced;
+  sox_bool output_ready;
+
+  *input_consumed = sox_false;
+  *input_clips = 0;
+  if (p->vulkan_output) {
+    emit_vulkan_output(p, obuf, osamp);
+    *active = p->vulkan_output ||
+        (p->vulkan_rate ?
+        lsx_rate_effect_resident_input_ready(p->vulkan_rate) :
+        lsx_sdm_vulkan_specialized_resident_active(p->vulkan));
+    *input_clips = p->vulkan_rate ?
+        lsx_rate_effect_external_input_clips(p->vulkan_rate) :
+        lsx_sdm_vulkan_specialized_resident_clips(p->vulkan);
+    return SOX_SUCCESS;
+  }
+  if (!p->vulkan_rate) {
+    if (lsx_sdm_vulkan_process_specialized_resident(
+        p->vulkan, input, input_consumed, &output_ready,
+        &p->vulkan_output, &p->vulkan_output_bytes,
+        &p->vulkan_output_stride) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    p->vulkan_output_pos = 0;
+    if (output_ready &&
+        (p->vulkan_output_bytes % 4u ||
+        p->vulkan_output_stride % 4u)) {
+      lsx_fail(
+          "specialized resident Vulkan DSD output is not word aligned");
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    if (p->vulkan_output)
+      emit_vulkan_output(p, obuf, osamp);
+    else
+      *osamp = 0;
+    *active = p->vulkan_output ||
+        lsx_sdm_vulkan_specialized_resident_active(p->vulkan);
+    *input_clips =
+        lsx_sdm_vulkan_specialized_resident_clips(p->vulkan);
+    return SOX_SUCCESS;
+  }
+  for (;;) {
+    if (lsx_rate_effect_flow_resident_input(p->vulkan_rate, current, &consumed, &rate_output, &produced) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    if (consumed) {
+      *input_consumed = sox_true;
+      current = NULL;
+    }
+    if (!produced)
+      break;
+    if (accept_vulkan_resident_input(p, &rate_output, &output_ready) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    if (output_ready) {
+      *input_clips += lsx_rate_effect_external_input_clips_completed(p->vulkan_rate);
+      break;
+    }
+  }
+  if (p->vulkan_output)
+    emit_vulkan_output(p, obuf, osamp);
+  else
+    *osamp = 0;
+  *active = p->vulkan_output || lsx_rate_effect_resident_input_ready(p->vulkan_rate);
+  *input_clips += lsx_rate_effect_external_input_clips(p->vulkan_rate);
+  return SOX_SUCCESS;
+}
+
+static int flow_vulkan_resident(
+    sdm_effect_t *p, sox_sample_t const *ibuf,
+    sox_sample_t *obuf, size_t *isamp, size_t *osamp)
+{
+  lsx_vulkan_resident_buffer_t resident;
+  sox_bool produced;
+  sox_bool output_ready;
+  size_t available = *isamp;
+  size_t consumed = 0;
+
+  if (p->vulkan_output) {
+    *isamp = 0;
+    emit_vulkan_output(p, obuf, osamp);
+    return SOX_SUCCESS;
+  }
+  for (;;) {
+    size_t current = available;
+
+    if (lsx_rate_effect_flow_resident(p->vulkan_rate, ibuf, &current, &resident, &produced) != SOX_SUCCESS) {
+      *isamp = consumed;
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    if (current) {
+      consumed = current;
+      available = 0;
+    }
+    if (!produced) {
+      *isamp = consumed;
+      *osamp = 0;
+      return SOX_SUCCESS;
+    }
+    if (accept_vulkan_resident_input(p, &resident, &output_ready) != SOX_SUCCESS) {
+      *isamp = consumed;
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    if (output_ready)
+      break;
+    available = 0;
+  }
+  *isamp = consumed;
+  emit_vulkan_output(p, obuf, osamp);
+  return SOX_SUCCESS;
+}
+
+static int drain_vulkan_resident(
+    sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
+{
+  lsx_vulkan_resident_buffer_t resident;
+  sox_bool produced;
+  sox_bool rate_done;
+  sox_bool output_ready;
+
+  if (p->vulkan_output) {
+    emit_vulkan_output(p, obuf, osamp);
+    return SOX_SUCCESS;
+  }
+  for (;;) {
+    if (lsx_rate_effect_drain_resident(p->vulkan_rate, &resident, &produced, &rate_done) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    if (produced) {
+      if (accept_vulkan_resident_input(p, &resident, &output_ready) != SOX_SUCCESS) {
+        *osamp = 0;
+        return SOX_EOF;
+      }
+      if (output_ready) {
+        emit_vulkan_output(p, obuf, osamp);
+        return SOX_SUCCESS;
+      }
+      continue;
+    }
+    if (!rate_done) {
+      *osamp = 0;
+      return SOX_SUCCESS;
+    }
+    if (lsx_sdm_vulkan_drain_resident(p->vulkan, &output_ready, &p->vulkan_output, &p->vulkan_output_bytes, &p->vulkan_output_stride) != SOX_SUCCESS) {
+      *osamp = 0;
+      return SOX_EOF;
+    }
+    p->vulkan_output_pos = 0;
+    if (output_ready) {
+      if (p->vulkan_output_bytes % 4u ||
+          p->vulkan_output_stride % 4u) {
+        lsx_fail("resident Vulkan DSD output is not word aligned");
+        *osamp = 0;
+        return SOX_EOF;
+      }
+      emit_vulkan_output(p, obuf, osamp);
+      return SOX_SUCCESS;
+    }
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
+}
+
 static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
     sox_sample_t const *ibuf, sox_sample_t *obuf,
     size_t *isamp, size_t *osamp)
@@ -2348,6 +2640,9 @@ static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
   size_t core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
   size_t lookahead = lsx_sdm_vulkan_lookahead();
 
+  if (p->vulkan_rate)
+    return flow_vulkan_resident(
+        p, ibuf, obuf, isamp, osamp);
   if (p->vulkan_output) {
     *isamp = 0;
     emit_vulkan_output(p, obuf, osamp);
@@ -2385,6 +2680,8 @@ static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
 
 static int drain_vulkan(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
 {
+  if (p->vulkan_rate)
+    return drain_vulkan_resident(p, obuf, osamp);
   if (p->vulkan_output) {
     emit_vulkan_output(p, obuf, osamp);
     return SOX_SUCCESS;
@@ -2625,6 +2922,7 @@ static int stop(sox_effect_t *effp)
 {
   sdm_effect_t *p = effp->priv;
 
+  effp->internal_chain_endpoint = NULL;
   sdm_effect_cleanup(p);
   return SOX_SUCCESS;
 }

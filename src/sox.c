@@ -2003,7 +2003,10 @@ static void usage(char const * message)
   };
 #if HAVE_VULKAN
   static char const * const linesVulkan[] = {
-"--vulkan                Enable the Vulkan FIR and DSD modulation backend"
+"--vulkan-fast           Enable Vulkan with the fast numerical profile",
+"--vulkan-accurate       Enable Vulkan with the accurate numerical profile",
+"--vulkan-strict         Enable Vulkan with the strict numerical profile",
+"--vulkan-reference      Enable Vulkan with the reference numerical profile"
   };
 #endif
   static char const * const lines3[] = {
@@ -2262,7 +2265,10 @@ static struct lsx_option_t const long_options[] = {
   {"dft-min"         , lsx_option_arg_required, NULL, 0},
   {"ffmpeg-opts"     , lsx_option_arg_required, NULL, 0},
   {"channel-layout"  , lsx_option_arg_required, NULL, 0},
-  {"vulkan"          , lsx_option_arg_none    , NULL, 0},
+  {"vulkan-fast"     , lsx_option_arg_none    , NULL, 0},
+  {"vulkan-accurate" , lsx_option_arg_none    , NULL, 0},
+  {"vulkan-strict"   , lsx_option_arg_none    , NULL, 0},
+  {"vulkan-reference", lsx_option_arg_none    , NULL, 0},
 
   {"bits"            , lsx_option_arg_required, NULL, 'b'},
   {"channels"        , lsx_option_arg_required, NULL, 'c'},
@@ -2352,6 +2358,19 @@ static int enum_option(char const * arg, int option_index, lsx_enum_item const *
     exit(1);
   }
   return p->value;
+}
+
+static void set_vulkan_profile(sox_vulkan_profile_t profile)
+{
+#if HAVE_VULKAN
+  if (sox_globals.vulkan_profile != sox_vulkan_profile_none)
+    usage("only one Vulkan quality profile may be specified");
+  sox_globals.vulkan_profile = profile;
+#else
+  (void)profile;
+  lsx_fail("this build of SoX does not include Vulkan support");
+  exit(1);
+#endif
 }
 
 static char parse_gopts_and_fopts(file_t * f)
@@ -2468,13 +2487,13 @@ static char parse_gopts_and_fopts(file_t * f)
         f->channel_layout = lsx_strdup(optstate.arg);
         break;
       case 28:
-#if HAVE_VULKAN
-        sox_globals.use_vulkan = sox_true;
-#else
-        lsx_fail("this build of SoX does not include Vulkan support");
-        exit(1);
-#endif
-        break;
+        set_vulkan_profile(sox_vulkan_profile_fast); break;
+      case 29:
+        set_vulkan_profile(sox_vulkan_profile_accurate); break;
+      case 30:
+        set_vulkan_profile(sox_vulkan_profile_strict); break;
+      case 31:
+        set_vulkan_profile(sox_vulkan_profile_reference); break;
       }
       break;
 

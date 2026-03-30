@@ -18,6 +18,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <time.h>
 #endif
 
 /*
@@ -39,12 +41,16 @@
 #define SDM_VULKAN_FIR_LOCAL_SIZE 128u
 #define SDM_VULKAN_BLOCK_SAMPLES 256u
 #define SDM_VULKAN_INPUT_FRAMES 16384u
+#define SDM_VULKAN_RESIDENT_BATCH_SAMPLES \
+  (128u * SDM_VULKAN_INPUT_FRAMES)
 #define SDM_VULKAN_TAPS_PER_PHASE 257u
 #define SDM_VULKAN_INPUT_PADDING 128u
 #define SDM_VULKAN_STATE_COUNT 69u
 #define SDM_VULKAN_LOOKUP_COUNT 297u
 #define SDM_VULKAN_MASH_BINDINGS 11u
 #define SDM_VULKAN_FIR_BINDINGS 3u
+#define SDM_VULKAN_RESIDENT_BINDINGS 2u
+#define SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS 6u
 #define SDM_VULKAN_INPUT_GAIN 0.7079457844f
 #define SDM_VULKAN_PASSBAND_HZ 20000.0
 #define SDM_VULKAN_KAISER_BETA 17.5
@@ -64,6 +70,8 @@
 
 #include "sdm_polyphase_spv.inc"
 #include "sdm_mash2_fsm_spv.inc"
+#include "sdm_resident_f32_spv.inc"
+#include "sdm_specialized_stream_f64_spv.inc"
 
 enum {
   BUFFER_FIR_OUTPUT,
@@ -117,9 +125,37 @@ typedef struct {
   uint32_t phase_start;
 } fir_parameters_t;
 
+typedef struct {
+  uint32_t input_frames;
+  uint32_t output_frames;
+  uint32_t channels;
+  uint32_t padding;
+} resident_parameters_t;
+
+typedef struct {
+  uint32_t mode;
+  uint32_t input_base_element;
+  uint32_t output_first_frame;
+  uint32_t frames;
+  uint32_t input_frame_stride;
+  uint32_t input_channel_stride;
+  uint32_t channels;
+  uint32_t core_frames;
+  uint32_t available_frames;
+  uint32_t remaining_frames;
+  uint32_t padded_frames;
+  uint32_t padding_frames;
+  uint32_t clip_index;
+  uint32_t padding[3];
+} specialized_stream_parameters_t;
+
 lsx_static_assert(sizeof(state_t) == 8, vulkan_state_layout);
 lsx_static_assert(sizeof(mash_parameters_t) == 64, vulkan_mash_push_layout);
 lsx_static_assert(sizeof(fir_parameters_t) == 32, vulkan_fir_push_layout);
+lsx_static_assert(sizeof(resident_parameters_t) == 16, vulkan_resident_push_layout);
+lsx_static_assert(
+    sizeof(specialized_stream_parameters_t) == 64,
+    vulkan_specialized_stream_push_layout);
 
 typedef lsx_vulkan_buffer_t buffer_t;
 
@@ -127,25 +163,51 @@ struct lsx_sdm_vulkan {
   lsx_vulkan_context_t *vulkan;
   VkDescriptorSetLayout mash_descriptor_layout;
   VkDescriptorSetLayout fir_descriptor_layout;
+  VkDescriptorSetLayout resident_descriptor_layout;
+  VkDescriptorSetLayout specialized_stream_descriptor_layout;
   VkPipelineLayout mash_pipeline_layout;
   VkPipelineLayout fir_pipeline_layout;
+  VkPipelineLayout resident_pipeline_layout;
+  VkPipelineLayout specialized_stream_pipeline_layout;
   VkPipeline mash_pipeline;
   VkPipeline fir_pipeline;
+  VkPipeline resident_pipeline;
+  VkPipeline specialized_stream_pipeline;
   VkDescriptorPool descriptor_pool;
+  VkDescriptorPool resident_descriptor_pool;
+  VkDescriptorPool specialized_stream_descriptor_pool;
   VkDescriptorSet mash_descriptor_set;
   VkDescriptorSet fir_descriptor_set;
+  VkDescriptorSet resident_descriptor_set;
+  VkDescriptorSet specialized_stream_descriptor_sets[
+      LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkCommandBuffer command_buffer;
+  VkCommandBuffer resident_append_commands[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkFence fence;
   VkQueryPool query_pool;
   buffer_t buffers[BUFFER_COUNT];
   buffer_t upload;
   buffer_t download;
+  buffer_t resident_input;
+  buffer_t specialized_stream[2];
+  buffer_t specialized_history;
+  buffer_t specialized_clips;
   uint32_t dsd_factor;
+  uint32_t input_rate;
   uint32_t up_factor;
   uint32_t down_factor;
   uint32_t channels;
   uint32_t input_frames;
   uint32_t output_frames;
+  uint32_t valid_output_words;
+  uint32_t resident_pending_frames;
+  uint32_t resident_append_bank_index;
+  uint32_t resident_append_pending;
+  uint32_t specialized_pending_frames;
+  uint32_t specialized_stream_index;
+  sox_bool specialized_final;
+  uint32_t specialized_clip_pending_mask;
+  uint64_t specialized_completed_clips;
   uint32_t padded_input_frames;
   uint32_t block_count;
   uint32_t scan_count;
@@ -157,12 +219,18 @@ struct lsx_sdm_vulkan {
   float *history;
   double process_seconds;
   double fir_gpu_seconds;
+  double resident_gpu_seconds;
   double mash_gpu_seconds;
   uint64_t process_calls;
 };
 
+static int submit_and_wait(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_wait_reason_t reason);
+
 static double monotonic_seconds(void)
 {
+#ifdef _WIN32
   LARGE_INTEGER frequency;
   LARGE_INTEGER counter;
 
@@ -170,6 +238,13 @@ static double monotonic_seconds(void)
       !QueryPerformanceCounter(&counter))
     return 0.0;
   return (double)counter.QuadPart / (double)frequency.QuadPart;
+#else
+  struct timespec value;
+
+  if (clock_gettime(CLOCK_MONOTONIC, &value))
+    return 0.0;
+  return (double)value.tv_sec + (double)value.tv_nsec * 1e-9;
+#endif
 }
 
 static int vk_result(VkResult result, char const *operation)
@@ -545,6 +620,243 @@ static int create_descriptors_and_pipelines(
   return SOX_SUCCESS;
 }
 
+static int create_resident_pipeline(lsx_sdm_vulkan_t *context)
+{
+  VkDescriptorSetLayoutBinding bindings[SDM_VULKAN_RESIDENT_BINDINGS];
+  VkDescriptorSetLayoutCreateInfo descriptor_info = {
+    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
+  };
+  VkPushConstantRange push_range = {
+    VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(resident_parameters_t)
+  };
+  VkPipelineLayoutCreateInfo layout_info = {
+    VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
+  };
+  VkDescriptorPoolSize pool_size = {
+    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    SDM_VULKAN_RESIDENT_BINDINGS
+  };
+  VkDescriptorPoolCreateInfo pool_info = {
+    VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO
+  };
+  VkDescriptorSetAllocateInfo allocation = {
+    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO
+  };
+  uint32_t index;
+
+  if (context->resident_pipeline)
+    return SOX_SUCCESS;
+  if (lsx_vulkan_buffer_create(
+      context->vulkan, &context->resident_input,
+      (VkDeviceSize)context->input_frames *
+      context->channels * sizeof(float),
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  memset(bindings, 0, sizeof(bindings));
+  for (index = 0; index < SDM_VULKAN_RESIDENT_BINDINGS; ++index) {
+    bindings[index].binding = index;
+    bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[index].descriptorCount = 1;
+    bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  }
+  descriptor_info.bindingCount = SDM_VULKAN_RESIDENT_BINDINGS;
+  descriptor_info.pBindings = bindings;
+  if (vk_result(vkCreateDescriptorSetLayout(
+      context->vulkan->device, &descriptor_info, NULL,
+      &context->resident_descriptor_layout),
+      "vkCreateDescriptorSetLayout resident DSD") != SOX_SUCCESS)
+    return SOX_EOF;
+  layout_info.setLayoutCount = 1;
+  layout_info.pSetLayouts = &context->resident_descriptor_layout;
+  layout_info.pushConstantRangeCount = 1;
+  layout_info.pPushConstantRanges = &push_range;
+  if (vk_result(vkCreatePipelineLayout(
+      context->vulkan->device, &layout_info, NULL,
+      &context->resident_pipeline_layout),
+      "vkCreatePipelineLayout resident DSD") != SOX_SUCCESS ||
+      create_pipeline(
+      context, sdm_vulkan_resident_spv,
+      sdm_vulkan_resident_spv_size,
+      context->resident_pipeline_layout,
+      &context->resident_pipeline) != SOX_SUCCESS)
+    return SOX_EOF;
+  pool_info.maxSets = 1;
+  pool_info.poolSizeCount = 1;
+  pool_info.pPoolSizes = &pool_size;
+  if (vk_result(vkCreateDescriptorPool(
+      context->vulkan->device, &pool_info, NULL,
+      &context->resident_descriptor_pool),
+      "vkCreateDescriptorPool resident DSD") != SOX_SUCCESS)
+    return SOX_EOF;
+  allocation.descriptorPool = context->resident_descriptor_pool;
+  allocation.descriptorSetCount = 1;
+  allocation.pSetLayouts = &context->resident_descriptor_layout;
+  return vk_result(vkAllocateDescriptorSets(
+      context->vulkan->device, &allocation,
+      &context->resident_descriptor_set),
+      "vkAllocateDescriptorSets resident DSD");
+}
+
+static int create_specialized_stream_pipeline(
+    lsx_sdm_vulkan_t *context)
+{
+  VkDescriptorSetLayoutBinding bindings[
+      SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS];
+  VkDescriptorSetLayoutCreateInfo descriptor_info = {
+    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
+  };
+  VkPushConstantRange push_range = {
+    VK_SHADER_STAGE_COMPUTE_BIT, 0,
+    sizeof(specialized_stream_parameters_t)
+  };
+  VkPipelineLayoutCreateInfo layout_info = {
+    VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
+  };
+  VkDescriptorPoolSize pool_size = {
+    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS *
+    LSX_VULKAN_RESIDENT_BATCH_DEPTH
+  };
+  VkDescriptorPoolCreateInfo pool_info = {
+    VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO
+  };
+  VkDescriptorSetAllocateInfo allocation = {
+    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO
+  };
+  VkDescriptorSetLayout layouts[
+      LSX_VULKAN_RESIDENT_BATCH_DEPTH];
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkMemoryBarrier barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT,
+    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+  };
+  VkDeviceSize stream_size;
+  uint32_t index;
+
+  if (context->specialized_stream_pipeline)
+    return SOX_SUCCESS;
+  if (!context->vulkan->shader_float64) {
+    lsx_fail(
+        "specialized resident Vulkan SDM input requires shaderFloat64");
+    return SOX_EOF;
+  }
+  stream_size = (VkDeviceSize)3u * context->input_frames *
+      context->channels * sizeof(float);
+  if (lsx_vulkan_buffer_create(
+      context->vulkan, &context->specialized_stream[0],
+      stream_size,
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(
+      context->vulkan, &context->specialized_stream[1],
+      stream_size,
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(
+      context->vulkan, &context->specialized_history,
+      (VkDeviceSize)SDM_VULKAN_INPUT_PADDING *
+      context->channels * sizeof(float),
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(
+      context->vulkan, &context->specialized_clips,
+      LSX_VULKAN_RESIDENT_BATCH_DEPTH * sizeof(uint32_t),
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  memset(bindings, 0, sizeof(bindings));
+  for (index = 0;
+       index < SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS;
+       ++index) {
+    bindings[index].binding = index;
+    bindings[index].descriptorType =
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[index].descriptorCount = 1;
+    bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  }
+  descriptor_info.bindingCount =
+      SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS;
+  descriptor_info.pBindings = bindings;
+  if (vk_result(vkCreateDescriptorSetLayout(
+      context->vulkan->device, &descriptor_info, NULL,
+      &context->specialized_stream_descriptor_layout),
+      "vkCreateDescriptorSetLayout specialized SDM stream") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  layout_info.setLayoutCount = 1;
+  layout_info.pSetLayouts =
+      &context->specialized_stream_descriptor_layout;
+  layout_info.pushConstantRangeCount = 1;
+  layout_info.pPushConstantRanges = &push_range;
+  if (vk_result(vkCreatePipelineLayout(
+      context->vulkan->device, &layout_info, NULL,
+      &context->specialized_stream_pipeline_layout),
+      "vkCreatePipelineLayout specialized SDM stream") !=
+      SOX_SUCCESS ||
+      create_pipeline(
+      context, sdm_specialized_stream_f64_spv,
+      sizeof(sdm_specialized_stream_f64_spv),
+      context->specialized_stream_pipeline_layout,
+      &context->specialized_stream_pipeline) != SOX_SUCCESS)
+    return SOX_EOF;
+  pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  pool_info.poolSizeCount = 1;
+  pool_info.pPoolSizes = &pool_size;
+  if (vk_result(vkCreateDescriptorPool(
+      context->vulkan->device, &pool_info, NULL,
+      &context->specialized_stream_descriptor_pool),
+      "vkCreateDescriptorPool specialized SDM stream") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  allocation.descriptorPool =
+      context->specialized_stream_descriptor_pool;
+  allocation.descriptorSetCount =
+      LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
+    layouts[index] =
+        context->specialized_stream_descriptor_layout;
+  allocation.pSetLayouts = layouts;
+  if (vk_result(vkAllocateDescriptorSets(
+      context->vulkan->device, &allocation,
+      context->specialized_stream_descriptor_sets),
+      "vkAllocateDescriptorSets specialized SDM stream") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  if (vk_result(vkResetCommandBuffer(
+      context->command_buffer, 0),
+      "vkResetCommandBuffer specialized SDM history") !=
+      SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(
+      context->command_buffer, &begin),
+      "vkBeginCommandBuffer specialized SDM history") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  vkCmdFillBuffer(
+      context->command_buffer,
+      context->specialized_history.buffer, 0,
+      context->specialized_history.size, 0);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0, 1, &barrier, 0, NULL, 0, NULL);
+  if (vk_result(vkEndCommandBuffer(
+      context->command_buffer),
+      "vkEndCommandBuffer specialized SDM history") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  return submit_and_wait(context, lsx_vulkan_wait_sdm_setup);
+}
+
 static int initialize_vulkan(lsx_sdm_vulkan_t *context)
 {
   VkCommandBufferAllocateInfo command_info = {
@@ -638,6 +950,9 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
       context->vulkan->device, &fence_info, NULL, &context->fence),
       "vkCreateFence") != SOX_SUCCESS)
     return SOX_EOF;
+  command_info.commandBufferCount = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  if (vk_result(vkAllocateCommandBuffers(context->vulkan->device, &command_info, context->resident_append_commands), "vkAllocateCommandBuffers resident DSD append") != SOX_SUCCESS)
+    return SOX_EOF;
   if (context->vulkan->timestamp_valid_bits &&
       vk_result(vkCreateQueryPool(
       context->vulkan->device, &query_info, NULL, &context->query_pool),
@@ -646,10 +961,10 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-static int submit_and_wait(lsx_sdm_vulkan_t *context)
+static int submit_and_wait(lsx_sdm_vulkan_t *context, lsx_vulkan_wait_reason_t reason)
 {
   return lsx_vulkan_submit_and_wait(
-      context->vulkan, context->command_buffer, context->fence);
+      context->vulkan, context->command_buffer, context->fence, reason);
 }
 
 static int upload_buffer(
@@ -693,7 +1008,7 @@ static int upload_buffer(
       context->command_buffer),
       "vkEndCommandBuffer") != SOX_SUCCESS)
     return SOX_EOF;
-  return submit_and_wait(context);
+  return submit_and_wait(context, lsx_vulkan_wait_sdm_setup);
 }
 
 static void shader_barrier(VkCommandBuffer command_buffer)
@@ -730,6 +1045,7 @@ static void record_scan(
 {
   uint32_t level;
 
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH prefix scan");
   parameters->mode = MODE_SCAN;
   /* Up-sweep: scan each 256-element workgroup and recursively scan its sums. */
   for (level = 0; level < context->level_count; ++level) {
@@ -753,6 +1069,7 @@ static void record_scan(
         divide_up(context->counts[level - 1u],
                   SDM_VULKAN_LOCAL_SIZE));
   }
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
 }
 
 static void record_mash(lsx_sdm_vulkan_t *context)
@@ -775,6 +1092,7 @@ static void record_mash(lsx_sdm_vulkan_t *context)
    * Both MASH accumulators are modular prefix sums.  Their carries form the
    * small integer stream consumed by the finite-state reducer.
    */
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH stage 1");
   parameters->mode = MODE_INPUT;
   mash_dispatch(context, parameters,
       divide_up(parameters->sample_count,
@@ -793,6 +1111,8 @@ static void record_mash(lsx_sdm_vulkan_t *context)
   parameters->mode = MODE_UPDATE_MASH_STATE;
   parameters->stage_index = 0;
   mash_dispatch(context, parameters, 1);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH stage 2");
   parameters->mode = MODE_STAGE2_INPUT;
   mash_dispatch(context, parameters,
       divide_up(parameters->sample_count,
@@ -811,15 +1131,19 @@ static void record_mash(lsx_sdm_vulkan_t *context)
   parameters->mode = MODE_UPDATE_MASH_STATE;
   parameters->stage_index = 1;
   mash_dispatch(context, parameters, 1);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
 
   /*
    * A table entry maps one of 69 reducer states across one 256-sample block.
    * Parallel prefix composition finds the true seed of every block; replay
    * then emits all blocks concurrently without breaking causal equivalence.
    */
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH reducer tables");
   parameters->mode = MODE_TABLES;
   mash_dispatch(context, parameters,
       divide_up(table_items, SDM_VULKAN_LOCAL_SIZE));
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH reducer compose");
   parameters->mode = MODE_COMPOSE;
   for (compose_offset = 1;
        compose_offset < parameters->block_count;
@@ -830,6 +1154,8 @@ static void record_mash(lsx_sdm_vulkan_t *context)
         divide_up(table_items, SDM_VULKAN_LOCAL_SIZE));
     table_source ^= 1u;
   }
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH reducer seeds and replay");
   parameters->table_source = table_source;
   parameters->mode = MODE_SEEDS;
   mash_dispatch(context, parameters,
@@ -839,6 +1165,7 @@ static void record_mash(lsx_sdm_vulkan_t *context)
   mash_dispatch(context, parameters,
       divide_up(parameters->block_count,
                 SDM_VULKAN_LOCAL_SIZE));
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
 }
 
 static int record_and_run(lsx_sdm_vulkan_t *context)
@@ -895,6 +1222,7 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
         context->command_buffer,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         context->query_pool, 0);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "SDM FIR");
   vkCmdBindPipeline(
       context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
       context->fir_pipeline);
@@ -911,6 +1239,7 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
       context->command_buffer, fir_groups,
       context->channels, 1);
   shader_barrier(context->command_buffer);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
   if (context->query_pool)
     vkCmdWriteTimestamp(
         context->command_buffer,
@@ -927,9 +1256,11 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
       1, &output_barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "Packed DSD download");
   vkCmdCopyBuffer(
       context->command_buffer, context->buffers[BUFFER_OUTPUT_WORDS].buffer,
       context->download.buffer, 1, &output_copy);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
   vkCmdPipelineBarrier(
       context->command_buffer,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -939,7 +1270,7 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
       context->command_buffer),
       "vkEndCommandBuffer") != SOX_SUCCESS)
     return SOX_EOF;
-  if (submit_and_wait(context) != SOX_SUCCESS)
+  if (submit_and_wait(context, lsx_vulkan_wait_sdm_synchronous) != SOX_SUCCESS)
     return SOX_EOF;
   if (context->query_pool) {
     if (vk_result(vkGetQueryPoolResults(
@@ -956,9 +1287,627 @@ static int record_and_run(lsx_sdm_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
+static int update_resident_descriptors(lsx_sdm_vulkan_t *context)
+{
+  VkDescriptorBufferInfo infos[SDM_VULKAN_RESIDENT_BINDINGS];
+  VkWriteDescriptorSet writes[SDM_VULKAN_RESIDENT_BINDINGS];
+  uint32_t index;
+
+  if (context->resident_input.size >
+      context->vulkan->properties.limits.maxStorageBufferRange) {
+    lsx_fail("resident Vulkan DSD input exceeds device storage range");
+    return SOX_EOF;
+  }
+  infos[0].buffer = context->resident_input.buffer;
+  infos[0].offset = 0;
+  infos[0].range = context->resident_input.size;
+  infos[1].buffer = context->buffers[BUFFER_FIR_OUTPUT].buffer;
+  infos[1].offset = 0;
+  infos[1].range = context->buffers[BUFFER_FIR_OUTPUT].size;
+  memset(writes, 0, sizeof(writes));
+  for (index = 0; index < SDM_VULKAN_RESIDENT_BINDINGS; ++index) {
+    writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[index].dstSet = context->resident_descriptor_set;
+    writes[index].dstBinding = index;
+    writes[index].descriptorCount = 1;
+    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[index].pBufferInfo = &infos[index];
+  }
+  vkUpdateDescriptorSets(
+      context->vulkan->device, SDM_VULKAN_RESIDENT_BINDINGS,
+      writes, 0, NULL);
+  return SOX_SUCCESS;
+}
+
+static int update_specialized_stream_descriptors(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_resident_buffer_t const *input,
+    uint32_t bank)
+{
+  VkDescriptorBufferInfo infos[
+      SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS];
+  VkWriteDescriptorSet writes[
+      SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS];
+  uint32_t write_count = 0;
+  uint32_t index;
+
+  if (input) {
+    infos[0].buffer = input->buffer->buffer;
+    infos[0].offset = 0;
+    infos[0].range = input->buffer->size;
+  }
+  infos[1].buffer =
+      context->specialized_stream[
+      context->specialized_stream_index].buffer;
+  infos[1].offset = 0;
+  infos[1].range =
+      context->specialized_stream[
+      context->specialized_stream_index].size;
+  infos[2].buffer = context->buffers[BUFFER_PCM_INPUT].buffer;
+  infos[2].offset = 0;
+  infos[2].range = context->buffers[BUFFER_PCM_INPUT].size;
+  infos[3].buffer = context->specialized_history.buffer;
+  infos[3].offset = 0;
+  infos[3].range = context->specialized_history.size;
+  infos[4].buffer = context->specialized_clips.buffer;
+  infos[4].offset = 0;
+  infos[4].range = context->specialized_clips.size;
+  infos[5].buffer =
+      context->specialized_stream[
+      context->specialized_stream_index ^ 1u].buffer;
+  infos[5].offset = 0;
+  infos[5].range =
+      context->specialized_stream[
+      context->specialized_stream_index ^ 1u].size;
+  memset(writes, 0, sizeof(writes));
+  for (index = 0;
+       index < SDM_VULKAN_SPECIALIZED_STREAM_BINDINGS;
+       ++index) {
+    if (!input && !index)
+      continue;
+    writes[write_count].sType =
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[write_count].dstSet =
+        context->specialized_stream_descriptor_sets[bank];
+    writes[write_count].dstBinding = index;
+    writes[write_count].descriptorCount = 1;
+    writes[write_count].descriptorType =
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[write_count].pBufferInfo = &infos[index];
+    ++write_count;
+  }
+  vkUpdateDescriptorSets(
+      context->vulkan->device,
+      write_count,
+      writes, 0, NULL);
+  return SOX_SUCCESS;
+}
+
+static int append_specialized_stream(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_resident_buffer_t const *input)
+{
+  uint32_t bank = context->resident_append_bank_index;
+  VkCommandBuffer command_buffer =
+      context->resident_append_commands[bank];
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkMemoryBarrier source_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    0, VK_ACCESS_SHADER_READ_BIT
+  };
+  specialized_stream_parameters_t parameters;
+
+  memset(&parameters, 0, sizeof(parameters));
+  parameters.input_base_element =
+      (uint32_t)(input->offset / sizeof(double));
+  parameters.output_first_frame =
+      context->specialized_pending_frames;
+  parameters.frames = (uint32_t)input->valid_elements;
+  parameters.input_frame_stride =
+      (uint32_t)input->frame_stride_elements;
+  parameters.input_channel_stride =
+      (uint32_t)input->channel_stride_elements;
+  parameters.channels = context->channels;
+  parameters.clip_index = bank;
+  if (update_specialized_stream_descriptors(
+      context, input, bank) != SOX_SUCCESS ||
+      vk_result(vkResetCommandBuffer(
+      command_buffer, 0),
+      "vkResetCommandBuffer specialized SDM append") !=
+      SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(
+      command_buffer, &begin),
+      "vkBeginCommandBuffer specialized SDM append") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  source_barrier.srcAccessMask =
+      input->producer_access | VK_ACCESS_TRANSFER_WRITE_BIT;
+  lsx_vulkan_label_begin(
+      context->vulkan, command_buffer,
+      "Specialized resident PCM append");
+  vkCmdFillBuffer(
+      command_buffer, context->specialized_clips.buffer,
+      (VkDeviceSize)bank * sizeof(uint32_t),
+      sizeof(uint32_t), 0);
+  vkCmdPipelineBarrier(
+      command_buffer,
+      input->producer_stage | VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0, 1, &source_barrier, 0, NULL, 0, NULL);
+  vkCmdBindPipeline(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->specialized_stream_pipeline);
+  vkCmdBindDescriptorSets(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->specialized_stream_pipeline_layout,
+      0, 1,
+      &context->specialized_stream_descriptor_sets[bank],
+      0, NULL);
+  vkCmdPushConstants(
+      command_buffer,
+      context->specialized_stream_pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(parameters), &parameters);
+  vkCmdDispatch(
+      command_buffer,
+      divide_up(parameters.frames,
+      SDM_VULKAN_FIR_LOCAL_SIZE),
+      context->channels, 1);
+  lsx_vulkan_label_end(context->vulkan, command_buffer);
+  if (vk_result(vkEndCommandBuffer(
+      command_buffer),
+      "vkEndCommandBuffer specialized SDM append") !=
+      SOX_SUCCESS ||
+      lsx_vulkan_enqueue(
+      context->vulkan, command_buffer) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->specialized_pending_frames += parameters.frames;
+  context->specialized_clip_pending_mask |= 1u << bank;
+  context->resident_append_bank_index =
+      (bank + 1u) %
+      lsx_vulkan_resident_batch_depth(context->vulkan);
+  ++context->resident_append_pending;
+  return SOX_SUCCESS;
+}
+
+static int append_resident_input(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_resident_buffer_t const *input,
+    uint32_t source_frame, uint32_t frames)
+{
+  VkCommandBuffer command_buffer = context->resident_append_commands[context->resident_append_bank_index];
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkMemoryBarrier source_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    0, VK_ACCESS_TRANSFER_READ_BIT
+  };
+  VkDeviceSize frame_size =
+      (VkDeviceSize)context->channels * sizeof(float);
+  VkBufferCopy copy = {
+    input->offset + (VkDeviceSize)source_frame * frame_size,
+    (VkDeviceSize)context->resident_pending_frames * frame_size,
+    (VkDeviceSize)frames * frame_size
+  };
+
+  if (!frames)
+    return SOX_SUCCESS;
+  if (!(input->buffer->usage & VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) {
+    lsx_fail("resident Vulkan DSD input is not transferable");
+    return SOX_EOF;
+  }
+  source_barrier.srcAccessMask = input->producer_access;
+  if (vk_result(vkResetCommandBuffer(
+      command_buffer, 0),
+      "vkResetCommandBuffer resident DSD append") != SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(
+      command_buffer, &begin),
+      "vkBeginCommandBuffer resident DSD append") != SOX_SUCCESS)
+    return SOX_EOF;
+  lsx_vulkan_label_begin(context->vulkan, command_buffer, "Resident PCM append");
+  vkCmdPipelineBarrier(
+      command_buffer, input->producer_stage,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+      1, &source_barrier, 0, NULL, 0, NULL);
+  vkCmdCopyBuffer(
+      command_buffer, input->buffer->buffer,
+      context->resident_input.buffer, 1, &copy);
+  lsx_vulkan_label_end(context->vulkan, command_buffer);
+  if (vk_result(vkEndCommandBuffer(
+      command_buffer),
+      "vkEndCommandBuffer resident DSD append") != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_enqueue(context->vulkan, command_buffer) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->resident_append_bank_index = (context->resident_append_bank_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
+  ++context->resident_append_pending;
+  return SOX_SUCCESS;
+}
+
+static int retire_resident_appends(lsx_sdm_vulkan_t *context)
+{
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+
+  if (context->resident_append_pending <
+      lsx_vulkan_resident_batch_depth(context->vulkan))
+    return SOX_SUCCESS;
+  if (vk_result(vkResetCommandBuffer(
+      context->command_buffer, 0),
+      "vkResetCommandBuffer resident DSD flush") != SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(
+      context->command_buffer, &begin),
+      "vkBeginCommandBuffer resident DSD flush") != SOX_SUCCESS ||
+      vk_result(vkEndCommandBuffer(context->command_buffer),
+      "vkEndCommandBuffer resident DSD flush") != SOX_SUCCESS ||
+      submit_and_wait(
+      context, lsx_vulkan_wait_sdm_resident_flush) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->resident_append_pending = 0;
+  return SOX_SUCCESS;
+}
+
+static int record_specialized_resident_and_run(
+    lsx_sdm_vulkan_t *context, uint32_t frames)
+{
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkMemoryBarrier shader_read_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_SHADER_WRITE_BIT,
+    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+  };
+  VkMemoryBarrier output_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT
+  };
+  VkMemoryBarrier download_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT
+  };
+  VkBufferCopy output_copy = {
+    0, 0, context->download.size
+  };
+  specialized_stream_parameters_t parameters;
+  uint64_t rational_output_frames;
+  uint32_t valid_output_words;
+  uint32_t available_frames = min(
+      context->specialized_pending_frames,
+      frames + SDM_VULKAN_INPUT_PADDING);
+  uint32_t remaining_frames =
+      context->specialized_pending_frames - frames;
+  uint32_t fir_groups;
+  uint32_t clip_index;
+  uint32_t *clips;
+  uint64_t timestamps[3];
+  double period =
+      (double)context->vulkan->properties.limits.timestampPeriod *
+      1e-9;
+
+  rational_output_frames =
+      ((uint64_t)frames * context->up_factor +
+       context->down_factor - 1u) /
+      context->down_factor;
+  context->output_frames = divide_up(
+      (uint32_t)rational_output_frames,
+      SDM_VULKAN_BLOCK_SAMPLES) *
+      SDM_VULKAN_BLOCK_SAMPLES;
+  context->block_count =
+      context->output_frames / SDM_VULKAN_BLOCK_SAMPLES;
+  context->scan_count = scan_storage_count(
+      context->output_frames, context->offsets,
+      context->counts, &context->level_count);
+  context->fir_parameters.output_frames =
+      context->output_frames;
+  context->mash_parameters.sample_count =
+      context->output_frames;
+  context->mash_parameters.block_count =
+      context->block_count;
+  context->mash_parameters.scan_storage_count =
+      context->scan_count;
+  if (!context->scan_count)
+    return SOX_EOF;
+  fir_groups = divide_up(
+      context->output_frames / 4u,
+      SDM_VULKAN_FIR_LOCAL_SIZE);
+  memset(&parameters, 0, sizeof(parameters));
+  parameters.mode = 1u;
+  parameters.channels = context->channels;
+  parameters.core_frames = frames;
+  parameters.available_frames = available_frames;
+  parameters.remaining_frames = remaining_frames;
+  parameters.padded_frames = context->padded_input_frames;
+  parameters.padding_frames = SDM_VULKAN_INPUT_PADDING;
+  if (update_specialized_stream_descriptors(
+      context, NULL, 0) != SOX_SUCCESS ||
+      vk_result(vkResetCommandBuffer(
+      context->command_buffer, 0),
+      "vkResetCommandBuffer specialized resident SDM") !=
+      SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(
+      context->command_buffer, &begin),
+      "vkBeginCommandBuffer specialized resident SDM") !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  if (context->query_pool)
+    vkCmdResetQueryPool(
+        context->command_buffer, context->query_pool, 0, 3);
+  lsx_vulkan_label_begin(
+      context->vulkan, context->command_buffer,
+      "Specialized resident PCM prepare");
+  vkCmdBindPipeline(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->specialized_stream_pipeline);
+  vkCmdBindDescriptorSets(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->specialized_stream_pipeline_layout,
+      0, 1,
+      &context->specialized_stream_descriptor_sets[0],
+      0, NULL);
+  vkCmdPushConstants(
+      context->command_buffer,
+      context->specialized_stream_pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(parameters), &parameters);
+  vkCmdDispatch(
+      context->command_buffer,
+      divide_up(context->padded_input_frames,
+      SDM_VULKAN_FIR_LOCAL_SIZE),
+      context->channels, 1);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0, 1, &shader_read_barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_end(
+      context->vulkan, context->command_buffer);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 0);
+  lsx_vulkan_label_begin(
+      context->vulkan, context->command_buffer,
+      "SDM FIR");
+  vkCmdBindPipeline(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->fir_pipeline);
+  vkCmdBindDescriptorSets(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->fir_pipeline_layout, 0, 1,
+      &context->fir_descriptor_set, 0, NULL);
+  vkCmdPushConstants(
+      context->command_buffer, context->fir_pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(context->fir_parameters),
+      &context->fir_parameters);
+  vkCmdDispatch(
+      context->command_buffer, fir_groups,
+      context->channels, 1);
+  shader_barrier(context->command_buffer);
+  lsx_vulkan_label_end(
+      context->vulkan, context->command_buffer);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 1);
+  record_mash(context);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 2);
+  parameters.mode = 2u;
+  vkCmdBindPipeline(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->specialized_stream_pipeline);
+  vkCmdBindDescriptorSets(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->specialized_stream_pipeline_layout,
+      0, 1,
+      &context->specialized_stream_descriptor_sets[0],
+      0, NULL);
+  vkCmdPushConstants(
+      context->command_buffer,
+      context->specialized_stream_pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(parameters), &parameters);
+  vkCmdDispatch(
+      context->command_buffer,
+      divide_up(max(
+      SDM_VULKAN_INPUT_PADDING, remaining_frames),
+      SDM_VULKAN_FIR_LOCAL_SIZE),
+      context->channels, 1);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      0, 1, &output_barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_begin(
+      context->vulkan, context->command_buffer,
+      "Packed DSD download");
+  vkCmdCopyBuffer(
+      context->command_buffer,
+      context->buffers[BUFFER_OUTPUT_WORDS].buffer,
+      context->download.buffer, 1, &output_copy);
+  lsx_vulkan_label_end(
+      context->vulkan, context->command_buffer);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_HOST_BIT,
+      0, 1, &download_barrier, 0, NULL, 0, NULL);
+  if (vk_result(vkEndCommandBuffer(
+      context->command_buffer),
+      "vkEndCommandBuffer specialized resident SDM") !=
+      SOX_SUCCESS ||
+      submit_and_wait(
+      context, lsx_vulkan_wait_packed_output) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->resident_append_pending = 0;
+  context->specialized_pending_frames = remaining_frames;
+  context->specialized_stream_index ^= 1u;
+  clips = context->specialized_clips.mapped;
+  for (clip_index = 0;
+       clip_index < LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+       ++clip_index)
+    if (context->specialized_clip_pending_mask &
+        (1u << clip_index))
+      context->specialized_completed_clips +=
+          clips[clip_index];
+  context->specialized_clip_pending_mask = 0;
+  if (context->query_pool) {
+    if (vk_result(vkGetQueryPoolResults(
+        context->vulkan->device, context->query_pool, 0, 3,
+        sizeof(timestamps), timestamps, sizeof(timestamps[0]),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+        "vkGetQueryPoolResults") != SOX_SUCCESS)
+      return SOX_EOF;
+    context->fir_gpu_seconds +=
+        (double)(timestamps[1] - timestamps[0]) * period;
+    context->mash_gpu_seconds +=
+        (double)(timestamps[2] - timestamps[1]) * period;
+  }
+  valid_output_words = divide_up(
+      (uint32_t)rational_output_frames, 32u);
+  context->valid_output_words = valid_output_words;
+  return SOX_SUCCESS;
+}
+
+static int record_resident_and_run(
+    lsx_sdm_vulkan_t *context, uint32_t input_frames)
+{
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkMemoryBarrier input_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT
+  };
+  VkMemoryBarrier output_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT
+  };
+  VkMemoryBarrier download_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT
+  };
+  VkBufferCopy output_copy = {
+    0, 0, context->download.size
+  };
+  resident_parameters_t parameters = {
+    input_frames,
+    context->output_frames,
+    context->channels,
+    0
+  };
+  uint64_t timestamps[3];
+  double period =
+      (double)context->vulkan->properties.limits.timestampPeriod * 1e-9;
+
+  if (update_resident_descriptors(context) != SOX_SUCCESS ||
+      vk_result(vkResetCommandBuffer(
+      context->command_buffer, 0),
+      "vkResetCommandBuffer") != SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(
+      context->command_buffer, &begin),
+      "vkBeginCommandBuffer") != SOX_SUCCESS)
+    return SOX_EOF;
+  if (context->query_pool)
+    vkCmdResetQueryPool(
+        context->command_buffer, context->query_pool, 0, 3);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+      1, &input_barrier, 0, NULL, 0, NULL);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 0);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "Resident PCM to SDM input");
+  vkCmdBindPipeline(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->resident_pipeline);
+  vkCmdBindDescriptorSets(
+      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->resident_pipeline_layout, 0, 1,
+      &context->resident_descriptor_set, 0, NULL);
+  vkCmdPushConstants(
+      context->command_buffer, context->resident_pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(parameters), &parameters);
+  vkCmdDispatch(
+      context->command_buffer,
+      divide_up(context->output_frames,
+      SDM_VULKAN_FIR_LOCAL_SIZE),
+      context->channels, 1);
+  shader_barrier(context->command_buffer);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 1);
+  record_mash(context);
+  if (context->query_pool)
+    vkCmdWriteTimestamp(
+        context->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        context->query_pool, 2);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+      1, &output_barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "Packed DSD download");
+  vkCmdCopyBuffer(
+      context->command_buffer,
+      context->buffers[BUFFER_OUTPUT_WORDS].buffer,
+      context->download.buffer, 1, &output_copy);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
+  vkCmdPipelineBarrier(
+      context->command_buffer,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_HOST_BIT, 0,
+      1, &download_barrier, 0, NULL, 0, NULL);
+  if (vk_result(vkEndCommandBuffer(
+      context->command_buffer),
+      "vkEndCommandBuffer") != SOX_SUCCESS ||
+      submit_and_wait(context, lsx_vulkan_wait_packed_output) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->resident_append_pending = 0;
+  if (context->query_pool) {
+    if (vk_result(vkGetQueryPoolResults(
+        context->vulkan->device, context->query_pool, 0, 3,
+        sizeof(timestamps), timestamps, sizeof(timestamps[0]),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+        "vkGetQueryPoolResults") != SOX_SUCCESS)
+      return SOX_EOF;
+    context->resident_gpu_seconds +=
+        (double)(timestamps[1] - timestamps[0]) * period;
+    context->mash_gpu_seconds +=
+        (double)(timestamps[2] - timestamps[1]) * period;
+  }
+  return SOX_SUCCESS;
+}
+
+static lsx_sdm_vulkan_t *create_with_input_target(
     lsx_vulkan_context_t *vulkan, unsigned input_rate,
-    unsigned output_rate, unsigned channels)
+    unsigned output_rate, unsigned channels,
+    uint32_t input_target_frames)
 {
   lsx_sdm_vulkan_t *context;
   state_t states[SDM_VULKAN_STATE_COUNT];
@@ -974,7 +1923,7 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
   uint64_t output_frames_wide;
   unsigned channel;
 
-  if (!vulkan) {
+  if (!vulkan || !input_target_frames) {
     lsx_fail("Vulkan DSD requires a shared Vulkan context");
     return NULL;
   }
@@ -994,6 +1943,7 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
   }
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
+  context->input_rate = input_rate;
   if (!output_rate || output_rate % 44100u) {
     lsx_fail("Vulkan DSD requires a standard DSD output rate");
     free(context);
@@ -1025,8 +1975,8 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
     return NULL;
   }
   input_alignment = (uint32_t)input_alignment_wide;
-  context->input_frames = input_alignment <= SDM_VULKAN_INPUT_FRAMES ?
-      SDM_VULKAN_INPUT_FRAMES / input_alignment * input_alignment :
+  context->input_frames = input_alignment <= input_target_frames ?
+      input_target_frames / input_alignment * input_alignment :
       input_alignment;
   context->channels = channels;
   output_frames_wide =
@@ -1127,6 +2077,42 @@ error:
   return NULL;
 }
 
+lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
+    lsx_vulkan_context_t *vulkan, unsigned input_rate,
+    unsigned output_rate, unsigned channels)
+{
+  return create_with_input_target(
+      vulkan, input_rate, output_rate, channels,
+      SDM_VULKAN_INPUT_FRAMES);
+}
+
+lsx_sdm_vulkan_t *lsx_sdm_vulkan_create_resident(
+    lsx_vulkan_context_t *vulkan, unsigned output_rate,
+    unsigned channels, size_t producer_block_frames)
+{
+  size_t input_budget_frames;
+  size_t input_target_frames;
+
+  if (!channels || producer_block_frames > UINT32_MAX)
+    return NULL;
+  input_budget_frames =
+      SDM_VULKAN_RESIDENT_BATCH_SAMPLES / channels;
+  if (producer_block_frames) {
+    size_t blocks = max(
+        (size_t)1,
+        input_budget_frames / producer_block_frames);
+
+    input_target_frames = blocks * producer_block_frames;
+  }
+  else
+    input_target_frames = input_budget_frames;
+  if (input_target_frames > UINT32_MAX)
+    return NULL;
+  return create_with_input_target(
+      vulkan, output_rate, output_rate, channels,
+      (uint32_t)input_target_frames);
+}
+
 void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
 {
   uint32_t index;
@@ -1136,10 +2122,12 @@ void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
   if (context->process_calls)
     lsx_debug(
         "Vulkan DSD process: %.6f seconds in %llu calls; "
-        "FIR GPU %.6f, MASH GPU %.6f seconds",
+        "FIR GPU %.6f, resident conversion GPU %.6f, "
+        "MASH GPU %.6f seconds",
         context->process_seconds,
         (unsigned long long)context->process_calls,
-        context->fir_gpu_seconds, context->mash_gpu_seconds);
+        context->fir_gpu_seconds, context->resident_gpu_seconds,
+        context->mash_gpu_seconds);
   if (context->vulkan->device)
     vkDeviceWaitIdle(context->vulkan->device);
   if (context->vulkan->device) {
@@ -1147,6 +2135,11 @@ void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
       destroy_buffer(context, &context->buffers[index]);
     destroy_buffer(context, &context->upload);
     destroy_buffer(context, &context->download);
+    destroy_buffer(context, &context->resident_input);
+    destroy_buffer(context, &context->specialized_stream[0]);
+    destroy_buffer(context, &context->specialized_stream[1]);
+    destroy_buffer(context, &context->specialized_history);
+    destroy_buffer(context, &context->specialized_clips);
     if (context->query_pool)
       vkDestroyQueryPool(
           context->vulkan->device, context->query_pool, NULL);
@@ -1156,9 +2149,27 @@ void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
       vkFreeCommandBuffers(
           context->vulkan->device, context->vulkan->command_pool, 1,
           &context->command_buffer);
+    if (context->resident_append_commands[0])
+      vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, LSX_VULKAN_RESIDENT_BATCH_DEPTH, context->resident_append_commands);
     if (context->descriptor_pool)
       vkDestroyDescriptorPool(
           context->vulkan->device, context->descriptor_pool, NULL);
+    if (context->resident_descriptor_pool)
+      vkDestroyDescriptorPool(
+          context->vulkan->device,
+          context->resident_descriptor_pool, NULL);
+    if (context->specialized_stream_descriptor_pool)
+      vkDestroyDescriptorPool(
+          context->vulkan->device,
+          context->specialized_stream_descriptor_pool, NULL);
+    if (context->resident_pipeline)
+      vkDestroyPipeline(
+          context->vulkan->device,
+          context->resident_pipeline, NULL);
+    if (context->specialized_stream_pipeline)
+      vkDestroyPipeline(
+          context->vulkan->device,
+          context->specialized_stream_pipeline, NULL);
     if (context->fir_pipeline)
       vkDestroyPipeline(
           context->vulkan->device, context->fir_pipeline, NULL);
@@ -1168,12 +2179,28 @@ void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
     if (context->fir_pipeline_layout)
       vkDestroyPipelineLayout(
           context->vulkan->device, context->fir_pipeline_layout, NULL);
+    if (context->resident_pipeline_layout)
+      vkDestroyPipelineLayout(
+          context->vulkan->device,
+          context->resident_pipeline_layout, NULL);
+    if (context->specialized_stream_pipeline_layout)
+      vkDestroyPipelineLayout(
+          context->vulkan->device,
+          context->specialized_stream_pipeline_layout, NULL);
     if (context->mash_pipeline_layout)
       vkDestroyPipelineLayout(
           context->vulkan->device, context->mash_pipeline_layout, NULL);
     if (context->fir_descriptor_layout)
       vkDestroyDescriptorSetLayout(
           context->vulkan->device, context->fir_descriptor_layout, NULL);
+    if (context->resident_descriptor_layout)
+      vkDestroyDescriptorSetLayout(
+          context->vulkan->device,
+          context->resident_descriptor_layout, NULL);
+    if (context->specialized_stream_descriptor_layout)
+      vkDestroyDescriptorSetLayout(
+          context->vulkan->device,
+          context->specialized_stream_descriptor_layout, NULL);
     if (context->mash_descriptor_layout)
       vkDestroyDescriptorSetLayout(
           context->vulkan->device, context->mash_descriptor_layout, NULL);
@@ -1273,10 +2300,293 @@ int lsx_sdm_vulkan_process(
   if (!context->scan_count || record_and_run(context) != SOX_SUCCESS)
     return SOX_EOF;
   valid_output_words = divide_up((uint32_t)rational_output_frames, 32u);
+  context->valid_output_words = valid_output_words;
   *channel_bytes = context->download.mapped;
   *bytes_per_channel = (size_t)valid_output_words * sizeof(uint32_t);
   *channel_stride = context->output_frames / 8u;
   context->process_seconds += monotonic_seconds() - started;
   ++context->process_calls;
   return SOX_SUCCESS;
+}
+
+int lsx_sdm_vulkan_process_specialized_resident(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_resident_buffer_t const *input,
+    sox_bool *input_consumed, sox_bool *output_ready,
+    uint8_t const **channel_bytes,
+    size_t *bytes_per_channel, size_t *channel_stride)
+{
+  uint32_t frames;
+  double started;
+
+  if (!context || !input_consumed || !output_ready ||
+      !channel_bytes || !bytes_per_channel || !channel_stride)
+    return SOX_EOF;
+  *input_consumed = sox_false;
+  *output_ready = sox_false;
+  *channel_bytes = NULL;
+  *bytes_per_channel = 0;
+  *channel_stride = 0;
+  started = monotonic_seconds();
+  if (input) {
+    if (lsx_vulkan_resident_buffer_validate(input) !=
+        SOX_SUCCESS)
+      return SOX_EOF;
+    if (input->format != lsx_vulkan_resident_format_f64 ||
+        input->domain !=
+        lsx_vulkan_resident_domain_sox_sample ||
+        input->frames_per_element != 1u ||
+        input->channels != context->channels ||
+        input->rate != context->input_rate ||
+        input->state == lsx_vulkan_resident_empty ||
+        input->offset % sizeof(double) ||
+        input->offset / sizeof(double) > UINT32_MAX ||
+        input->frame_stride_elements > UINT32_MAX ||
+        input->channel_stride_elements > UINT32_MAX ||
+        input->valid_elements +
+        context->specialized_pending_frames >
+        3u * context->input_frames) {
+      lsx_fail(
+          "unsupported specialized resident Vulkan SDM input");
+      return SOX_EOF;
+    }
+    if (input->valid_elements) {
+      if (create_specialized_stream_pipeline(context) !=
+          SOX_SUCCESS ||
+          append_specialized_stream(context, input) !=
+          SOX_SUCCESS)
+        return SOX_EOF;
+    }
+    else if (input->state != lsx_vulkan_resident_final) {
+      lsx_fail(
+          "empty specialized resident Vulkan SDM input is "
+          "not final");
+      return SOX_EOF;
+    }
+    *input_consumed = sox_true;
+    if (input->state == lsx_vulkan_resident_final)
+      context->specialized_final = sox_true;
+  }
+  if (context->specialized_pending_frames >=
+      context->input_frames + SDM_VULKAN_INPUT_PADDING)
+    frames = context->input_frames;
+  else if (context->specialized_final &&
+      context->specialized_pending_frames)
+    frames = min(
+        context->specialized_pending_frames,
+        context->input_frames);
+  else {
+    if (retire_resident_appends(context) != SOX_SUCCESS)
+      return SOX_EOF;
+    context->process_seconds +=
+        monotonic_seconds() - started;
+    return SOX_SUCCESS;
+  }
+  if (record_specialized_resident_and_run(
+      context, frames) != SOX_SUCCESS)
+    return SOX_EOF;
+  *channel_bytes = context->download.mapped;
+  *bytes_per_channel =
+      (size_t)context->valid_output_words * sizeof(uint32_t);
+  *channel_stride = context->output_frames / 8u;
+  *output_ready = sox_true;
+  ++context->process_calls;
+  context->process_seconds += monotonic_seconds() - started;
+  return SOX_SUCCESS;
+}
+
+sox_bool lsx_sdm_vulkan_specialized_resident_active(
+    lsx_sdm_vulkan_t const *context)
+{
+  return context &&
+      (context->specialized_pending_frames >=
+       context->input_frames + SDM_VULKAN_INPUT_PADDING ||
+       (context->specialized_final &&
+        context->specialized_pending_frames));
+}
+
+uint64_t lsx_sdm_vulkan_specialized_resident_clips(
+    lsx_sdm_vulkan_t *context)
+{
+  uint64_t clips;
+
+  if (!context)
+    return 0;
+  clips = context->specialized_completed_clips;
+  context->specialized_completed_clips = 0;
+  return clips;
+}
+
+static int process_resident_pending(
+    lsx_sdm_vulkan_t *context, uint32_t input_frames,
+    uint8_t const **channel_bytes,
+    size_t *bytes_per_channel, size_t *channel_stride)
+{
+  VkDeviceSize output_capacity_frames;
+
+  context->output_frames = divide_up(
+      input_frames, SDM_VULKAN_BLOCK_SAMPLES) *
+      SDM_VULKAN_BLOCK_SAMPLES;
+  output_capacity_frames =
+      context->buffers[BUFFER_FIR_OUTPUT].size /
+      (context->channels * sizeof(float));
+  if (context->output_frames > output_capacity_frames) {
+    lsx_fail("resident Vulkan DSD input exceeds modulator capacity");
+    return SOX_EOF;
+  }
+  context->block_count =
+      context->output_frames / SDM_VULKAN_BLOCK_SAMPLES;
+  context->scan_count = scan_storage_count(
+      context->output_frames, context->offsets,
+      context->counts, &context->level_count);
+  context->mash_parameters.sample_count = context->output_frames;
+  context->mash_parameters.block_count = context->block_count;
+  context->mash_parameters.scan_storage_count = context->scan_count;
+  if (!context->scan_count ||
+      create_resident_pipeline(context) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (record_resident_and_run(context, input_frames) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->valid_output_words = divide_up(input_frames, 32u);
+  *channel_bytes = context->download.mapped;
+  *bytes_per_channel =
+      (size_t)context->valid_output_words * sizeof(uint32_t);
+  *channel_stride = context->output_frames / 8u;
+  return SOX_SUCCESS;
+}
+
+int lsx_sdm_vulkan_process_resident(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_resident_buffer_t const *input,
+    sox_bool *output_ready,
+    uint8_t const **channel_bytes,
+    size_t *bytes_per_channel, size_t *channel_stride)
+{
+  sox_rate_t output_rate;
+  uint32_t input_frames;
+  uint32_t capacity;
+  uint32_t first;
+  uint32_t remaining;
+  double started;
+
+  if (!context || !input || !output_ready ||
+      !channel_bytes || !bytes_per_channel || !channel_stride ||
+      lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS)
+    return SOX_EOF;
+  output_rate = (sox_rate_t)context->dsd_factor * 44100.;
+  if (input->format != lsx_vulkan_resident_format_f32 ||
+      input->domain != lsx_vulkan_resident_domain_normalized ||
+      input->layout != lsx_vulkan_resident_layout_interleaved ||
+      input->frames_per_element != 1u ||
+      input->channels != context->channels ||
+      input->frame_stride_elements != context->channels ||
+      input->channel_stride_elements != 1u ||
+      input->rate != output_rate ||
+      input->state == lsx_vulkan_resident_empty ||
+      !input->valid_elements ||
+      input->valid_elements > UINT32_MAX ||
+      input->valid_elements > context->input_frames) {
+    lsx_fail("unsupported resident Vulkan DSD input");
+    return SOX_EOF;
+  }
+  if (create_resident_pipeline(context) != SOX_SUCCESS)
+    return SOX_EOF;
+  started = monotonic_seconds();
+  *output_ready = sox_false;
+  *channel_bytes = NULL;
+  *bytes_per_channel = 0;
+  *channel_stride = 0;
+  input_frames = (uint32_t)input->valid_elements;
+  capacity = context->input_frames;
+  first = min(
+      input_frames,
+      capacity - context->resident_pending_frames);
+  if (append_resident_input(
+      context, input, 0, first) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->resident_pending_frames += first;
+  remaining = input_frames - first;
+  if (context->resident_pending_frames == capacity) {
+    if (process_resident_pending(
+        context, capacity, channel_bytes,
+        bytes_per_channel, channel_stride) != SOX_SUCCESS)
+      return SOX_EOF;
+    context->resident_pending_frames = 0;
+    *output_ready = sox_true;
+    ++context->process_calls;
+  }
+  if (remaining) {
+    if (append_resident_input(
+        context, input, first, remaining) != SOX_SUCCESS)
+      return SOX_EOF;
+    context->resident_pending_frames = remaining;
+  }
+  if (input->state == lsx_vulkan_resident_final &&
+      !*output_ready && context->resident_pending_frames) {
+    if (process_resident_pending(
+        context, context->resident_pending_frames,
+        channel_bytes, bytes_per_channel,
+        channel_stride) != SOX_SUCCESS)
+      return SOX_EOF;
+    context->resident_pending_frames = 0;
+    *output_ready = sox_true;
+    ++context->process_calls;
+  }
+  if (retire_resident_appends(context) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->process_seconds += monotonic_seconds() - started;
+  return SOX_SUCCESS;
+}
+
+int lsx_sdm_vulkan_drain_resident(
+    lsx_sdm_vulkan_t *context, sox_bool *output_ready,
+    uint8_t const **channel_bytes,
+    size_t *bytes_per_channel, size_t *channel_stride)
+{
+  double started;
+
+  if (!context || !output_ready || !channel_bytes ||
+      !bytes_per_channel || !channel_stride)
+    return SOX_EOF;
+  *output_ready = sox_false;
+  *channel_bytes = NULL;
+  *bytes_per_channel = 0;
+  *channel_stride = 0;
+  if (!context->resident_pending_frames)
+    return SOX_SUCCESS;
+  started = monotonic_seconds();
+  if (process_resident_pending(
+      context, context->resident_pending_frames,
+      channel_bytes, bytes_per_channel,
+      channel_stride) != SOX_SUCCESS)
+    return SOX_EOF;
+  context->resident_pending_frames = 0;
+  *output_ready = sox_true;
+  context->process_seconds += monotonic_seconds() - started;
+  ++context->process_calls;
+  return SOX_SUCCESS;
+}
+
+int lsx_sdm_vulkan_resident_output(lsx_sdm_vulkan_t *context, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
+{
+  if (!context || !resident)
+    return SOX_EOF;
+  memset(resident, 0, sizeof(*resident));
+  resident->buffer = &context->buffers[BUFFER_OUTPUT_WORDS];
+  resident->owner = context;
+  resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+  resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
+  resident->capacity_elements = context->buffers[BUFFER_OUTPUT_WORDS].size / (context->channels * sizeof(uint32_t));
+  resident->valid_elements = context->valid_output_words;
+  resident->frame_stride_elements = 1u;
+  resident->channel_stride_elements = resident->capacity_elements;
+  resident->frame_offset = frame_offset;
+  resident->rate = (sox_rate_t)context->dsd_factor * 44100.;
+  resident->channels = context->channels;
+  resident->frames_per_element = 32u;
+  resident->format = lsx_vulkan_resident_format_dsd_u32;
+  resident->domain = lsx_vulkan_resident_domain_dsd;
+  resident->layout = lsx_vulkan_resident_layout_planar;
+  resident->state = state;
+  return lsx_vulkan_resident_buffer_validate(resident);
 }

@@ -72,7 +72,7 @@ option(SOX_REQUIRE_OPENMP
     "Fail configuration when OpenMP support is unavailable"
     OFF)
 option(WITH_VULKAN
-    "Enable the Windows Vulkan backend for FIR and DSD modulation"
+    "Enable the Vulkan backend for FIR and DSD modulation"
     OFF)
 
 if(BUILD_STATIC_EXECUTABLE)
@@ -233,15 +233,22 @@ if(WITH_OPENMP)
 endif()
 
 if(WITH_VULKAN)
-    if(NOT IS_WINDOWS)
+    if(NOT IS_WINDOWS AND NOT IS_MACOS)
         message(FATAL_ERROR
-            "The Vulkan FIR and DSD backends currently support Windows only")
+            "The Vulkan FIR and DSD backends support Windows and macOS")
     endif()
     find_package(Vulkan REQUIRED)
     find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
-    find_file(GLSLANG_RUNTIME_DLL NAMES glslang.dll
-        PATHS "$ENV{VULKAN_SDK}/Bin"
-        NO_DEFAULT_PATH REQUIRED)
+    if(IS_WINDOWS)
+        find_file(GLSLANG_RUNTIME_DLL NAMES glslang.dll
+            PATHS "$ENV{VULKAN_SDK}/Bin"
+            NO_DEFAULT_PATH REQUIRED)
+    else()
+        find_path(GLSLANG_INCLUDE_DIR
+            NAMES glslang/Include/glslang_c_interface.h
+            REQUIRED)
+        find_library(GLSLANG_LIBRARY NAMES glslang REQUIRED)
+    endif()
     find_path(VKFFT_INCLUDE_DIR NAMES vkFFT.h
         HINTS "${STATIC_LIBS_DIR}"
         PATH_SUFFIXES include/vkFFT vkFFT

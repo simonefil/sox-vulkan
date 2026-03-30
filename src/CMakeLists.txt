@@ -186,26 +186,104 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_polyphase.comp")
     set(SDM_VULKAN_MASH_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_mash2_fsm.comp")
-    set(FIR_VULKAN_PARTITION_SOURCE
+    set(SDM_VULKAN_RESIDENT_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_f32.comp")
+    set(SDM_VULKAN_SPECIALIZED_STREAM_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_specialized_stream_f64.comp")
+    set(FIR_VULKAN_PARTITION_F64_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f64.comp")
+    set(FIR_VULKAN_PARTITION_F32_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f32.comp")
     set(RATE_VULKAN_POLYPHASE_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f64.comp")
+    set(RATE_VULKAN_POLYPHASE_F32_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f32.comp")
+    set(RATE_VULKAN_CUBIC_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f64.comp")
+    set(RATE_VULKAN_CUBIC_F32_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f32.comp")
+    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_normalized_f32.comp")
+    set(RATE_VULKAN_SELECT_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f64.comp")
+    set(RATE_VULKAN_SELECT_F32_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f32.comp")
+    set(RATE_VULKAN_PREPARE_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f64.comp")
+    set(RATE_VULKAN_PREPARE_F32_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f32.comp")
+    set(RATE_VULKAN_STREAM_APPEND_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f64.comp")
+    set(RATE_VULKAN_STREAM_APPEND_F32_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f32.comp")
     set(SDM_VULKAN_FIR_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase.comp.spv")
     set(SDM_VULKAN_MASH_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm.comp.spv")
-    set(FIR_VULKAN_PARTITION_SPV
+    set(SDM_VULKAN_RESIDENT_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f32.comp.spv")
+    set(SDM_VULKAN_SPECIALIZED_STREAM_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_specialized_stream_f64.comp.spv")
+    set(FIR_VULKAN_PARTITION_F64_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64.comp.spv")
+    set(FIR_VULKAN_PARTITION_F32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32.comp.spv")
     set(RATE_VULKAN_POLYPHASE_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_F32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32.comp.spv")
+    set(RATE_VULKAN_CUBIC_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f64.comp.spv")
+    set(RATE_VULKAN_CUBIC_F32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32.comp.spv")
+    set(RATE_VULKAN_SELECT_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64.comp.spv")
+    set(RATE_VULKAN_SELECT_F32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32.comp.spv")
+    set(RATE_VULKAN_PREPARE_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64.comp.spv")
+    set(RATE_VULKAN_PREPARE_F32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32.comp.spv")
+    set(RATE_VULKAN_STREAM_APPEND_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64.comp.spv")
+    set(RATE_VULKAN_STREAM_APPEND_F32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32.comp.spv")
     set(SDM_VULKAN_FIR_INC
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase_spv.inc")
     set(SDM_VULKAN_MASH_INC
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm_spv.inc")
-    set(FIR_VULKAN_PARTITION_INC
+    set(SDM_VULKAN_RESIDENT_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f32_spv.inc")
+    set(SDM_VULKAN_SPECIALIZED_STREAM_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/sdm_specialized_stream_f64_spv.inc")
+    set(FIR_VULKAN_PARTITION_F64_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64_spv.inc")
+    set(FIR_VULKAN_PARTITION_F32_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32_spv.inc")
     set(RATE_VULKAN_POLYPHASE_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_F32_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32_spv.inc")
+    set(RATE_VULKAN_CUBIC_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f64_spv.inc")
+    set(RATE_VULKAN_CUBIC_F32_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_NORMALIZED_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32_spv.inc")
+    set(RATE_VULKAN_SELECT_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64_spv.inc")
+    set(RATE_VULKAN_SELECT_F32_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32_spv.inc")
+    set(RATE_VULKAN_PREPARE_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64_spv.inc")
+    set(RATE_VULKAN_PREPARE_F32_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32_spv.inc")
+    set(RATE_VULKAN_STREAM_APPEND_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64_spv.inc")
+    set(RATE_VULKAN_STREAM_APPEND_F32_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32_spv.inc")
 
     add_executable(sox_embed_binary
         "${CMAKE_CURRENT_SOURCE_DIR}/embed_binary.c")
@@ -228,17 +306,97 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
-        OUTPUT "${FIR_VULKAN_PARTITION_SPV}"
+        OUTPUT "${SDM_VULKAN_RESIDENT_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${SDM_VULKAN_RESIDENT_SPV}" "${SDM_VULKAN_RESIDENT_SOURCE}"
+        DEPENDS "${SDM_VULKAN_RESIDENT_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${SDM_VULKAN_SPECIALIZED_STREAM_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${SDM_VULKAN_SPECIALIZED_STREAM_SPV}" "${SDM_VULKAN_SPECIALIZED_STREAM_SOURCE}"
+        DEPENDS "${SDM_VULKAN_SPECIALIZED_STREAM_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_F64_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${FIR_VULKAN_PARTITION_SPV}"
-                "${FIR_VULKAN_PARTITION_SOURCE}"
-        DEPENDS "${FIR_VULKAN_PARTITION_SOURCE}"
+                -o "${FIR_VULKAN_PARTITION_F64_SPV}"
+                "${FIR_VULKAN_PARTITION_F64_SOURCE}"
+        DEPENDS "${FIR_VULKAN_PARTITION_F64_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_F32_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${FIR_VULKAN_PARTITION_F32_SPV}"
+                "${FIR_VULKAN_PARTITION_F32_SOURCE}"
+        DEPENDS "${FIR_VULKAN_PARTITION_F32_SOURCE}"
         VERBATIM
     )
     add_custom_command(
         OUTPUT "${RATE_VULKAN_POLYPHASE_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_POLYPHASE_SPV}" "${RATE_VULKAN_POLYPHASE_SOURCE}"
         DEPENDS "${RATE_VULKAN_POLYPHASE_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_POLYPHASE_F32_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_POLYPHASE_F32_SPV}" "${RATE_VULKAN_POLYPHASE_F32_SOURCE}"
+        DEPENDS "${RATE_VULKAN_POLYPHASE_F32_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_CUBIC_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_CUBIC_SPV}" "${RATE_VULKAN_CUBIC_SOURCE}"
+        DEPENDS "${RATE_VULKAN_CUBIC_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_CUBIC_F32_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_CUBIC_F32_SPV}" "${RATE_VULKAN_CUBIC_F32_SOURCE}"
+        DEPENDS "${RATE_VULKAN_CUBIC_F32_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}" "${RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE}"
+        DEPENDS "${RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_SELECT_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_SELECT_SPV}" "${RATE_VULKAN_SELECT_SOURCE}"
+        DEPENDS "${RATE_VULKAN_SELECT_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_SELECT_F32_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_SELECT_F32_SPV}" "${RATE_VULKAN_SELECT_F32_SOURCE}"
+        DEPENDS "${RATE_VULKAN_SELECT_F32_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_PREPARE_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_PREPARE_SPV}" "${RATE_VULKAN_PREPARE_SOURCE}"
+        DEPENDS "${RATE_VULKAN_PREPARE_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_PREPARE_F32_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_PREPARE_F32_SPV}" "${RATE_VULKAN_PREPARE_F32_SOURCE}"
+        DEPENDS "${RATE_VULKAN_PREPARE_F32_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_STREAM_APPEND_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_STREAM_APPEND_SPV}" "${RATE_VULKAN_STREAM_APPEND_SOURCE}"
+        DEPENDS "${RATE_VULKAN_STREAM_APPEND_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_STREAM_APPEND_F32_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_STREAM_APPEND_F32_SPV}" "${RATE_VULKAN_STREAM_APPEND_F32_SOURCE}"
+        DEPENDS "${RATE_VULKAN_STREAM_APPEND_F32_SOURCE}"
         VERBATIM
     )
     add_custom_command(
@@ -258,12 +416,33 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
-        OUTPUT "${FIR_VULKAN_PARTITION_INC}"
+        OUTPUT "${SDM_VULKAN_RESIDENT_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${SDM_VULKAN_RESIDENT_SPV}" "${SDM_VULKAN_RESIDENT_INC}" sdm_vulkan_resident_spv
+        DEPENDS sox_embed_binary "${SDM_VULKAN_RESIDENT_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${SDM_VULKAN_SPECIALIZED_STREAM_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${SDM_VULKAN_SPECIALIZED_STREAM_SPV}" "${SDM_VULKAN_SPECIALIZED_STREAM_INC}" sdm_specialized_stream_f64_spv
+        DEPENDS sox_embed_binary "${SDM_VULKAN_SPECIALIZED_STREAM_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_F64_INC}"
         COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${FIR_VULKAN_PARTITION_SPV}"
-                "${FIR_VULKAN_PARTITION_INC}"
+                "${FIR_VULKAN_PARTITION_F64_SPV}"
+                "${FIR_VULKAN_PARTITION_F64_INC}"
                 fir_partition_f64_spv
-        DEPENDS sox_embed_binary "${FIR_VULKAN_PARTITION_SPV}"
+        DEPENDS sox_embed_binary "${FIR_VULKAN_PARTITION_F64_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_F32_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${FIR_VULKAN_PARTITION_F32_SPV}"
+                "${FIR_VULKAN_PARTITION_F32_INC}"
+                fir_partition_f32_spv
+        DEPENDS sox_embed_binary "${FIR_VULKAN_PARTITION_F32_SPV}"
         VERBATIM
     )
     add_custom_command(
@@ -272,27 +451,107 @@ if(HAVE_VULKAN)
         DEPENDS sox_embed_binary "${RATE_VULKAN_POLYPHASE_SPV}"
         VERBATIM
     )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_POLYPHASE_F32_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_POLYPHASE_F32_SPV}" "${RATE_VULKAN_POLYPHASE_F32_INC}" rate_polyphase_f32_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_POLYPHASE_F32_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_CUBIC_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_CUBIC_SPV}" "${RATE_VULKAN_CUBIC_INC}" rate_cubic_f64_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_CUBIC_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_CUBIC_F32_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_CUBIC_F32_SPV}" "${RATE_VULKAN_CUBIC_F32_INC}" rate_cubic_f32_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_CUBIC_F32_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_POLYPHASE_NORMALIZED_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}" "${RATE_VULKAN_POLYPHASE_NORMALIZED_INC}" rate_polyphase_normalized_f32_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_SELECT_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_SELECT_SPV}" "${RATE_VULKAN_SELECT_INC}" rate_select_f64_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_SELECT_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_SELECT_F32_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_SELECT_F32_SPV}" "${RATE_VULKAN_SELECT_F32_INC}" rate_select_f32_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_SELECT_F32_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_PREPARE_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_PREPARE_SPV}" "${RATE_VULKAN_PREPARE_INC}" rate_prepare_f64_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_PREPARE_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_PREPARE_F32_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_PREPARE_F32_SPV}" "${RATE_VULKAN_PREPARE_F32_INC}" rate_prepare_f32_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_PREPARE_F32_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_STREAM_APPEND_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_STREAM_APPEND_SPV}" "${RATE_VULKAN_STREAM_APPEND_INC}" rate_stream_append_f64_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_STREAM_APPEND_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_STREAM_APPEND_F32_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_STREAM_APPEND_F32_SPV}" "${RATE_VULKAN_STREAM_APPEND_F32_INC}" rate_stream_append_f32_spv
+        DEPENDS sox_embed_binary "${RATE_VULKAN_STREAM_APPEND_F32_SPV}"
+        VERBATIM
+    )
     add_custom_target(
         sdm_vulkan_shaders
         DEPENDS
             "${SDM_VULKAN_FIR_INC}"
             "${SDM_VULKAN_MASH_INC}"
-            "${FIR_VULKAN_PARTITION_INC}"
+            "${SDM_VULKAN_RESIDENT_INC}"
+            "${SDM_VULKAN_SPECIALIZED_STREAM_INC}"
+            "${FIR_VULKAN_PARTITION_F64_INC}"
+            "${FIR_VULKAN_PARTITION_F32_INC}"
+            "${RATE_VULKAN_CUBIC_INC}"
+            "${RATE_VULKAN_CUBIC_F32_INC}"
             "${RATE_VULKAN_POLYPHASE_INC}"
+            "${RATE_VULKAN_POLYPHASE_F32_INC}"
+            "${RATE_VULKAN_POLYPHASE_NORMALIZED_INC}"
+            "${RATE_VULKAN_SELECT_INC}"
+            "${RATE_VULKAN_SELECT_F32_INC}"
+            "${RATE_VULKAN_PREPARE_INC}"
+            "${RATE_VULKAN_PREPARE_F32_INC}"
+            "${RATE_VULKAN_STREAM_APPEND_INC}"
+            "${RATE_VULKAN_STREAM_APPEND_F32_INC}"
     )
     list(APPEND LIBSOX_EFFECTS_SOURCES
         fir_vulkan.c
-        glslang_dynamic.c
+        rate_cubic_vulkan.c
         rate_vulkan.c
         rate_polyphase_vulkan.c
         sdm_vulkan.c
+        vulkan_fft.c
         vulkan_engine.c
     )
+    if(IS_WINDOWS)
+        list(APPEND LIBSOX_EFFECTS_SOURCES glslang_dynamic.c)
+    endif()
     list(APPEND LIBSOX_EFFECTS_HEADERS
         fir_vulkan.h
+        rate_cubic_vulkan.h
         rate_vulkan.h
         rate_polyphase_vulkan.h
         sdm_vulkan.h
+        vulkan_effect_chain.h
+        vulkan_fft.h
         vulkan_engine.h
     )
 endif()
@@ -317,11 +576,21 @@ if(HAVE_VULKAN)
     add_dependencies(libsox sdm_vulkan_shaders)
     target_compile_definitions(libsox PRIVATE VKFFT_BACKEND=0)
     target_link_libraries(libsox PRIVATE Vulkan::Vulkan)
+    if(IS_MACOS)
+        target_link_libraries(libsox PRIVATE "${GLSLANG_LIBRARY}")
+    endif()
     target_include_directories(libsox PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}")
     target_include_directories(libsox SYSTEM PRIVATE
-        "${VKFFT_INCLUDE_DIR}"
-        "$ENV{VULKAN_SDK}/Include/glslang/Include")
+        "${VKFFT_INCLUDE_DIR}")
+    if(IS_WINDOWS)
+        target_include_directories(libsox SYSTEM PRIVATE
+            "$ENV{VULKAN_SDK}/Include/glslang/Include")
+    else()
+        target_include_directories(libsox SYSTEM PRIVATE
+            "${GLSLANG_INCLUDE_DIR}"
+            "${GLSLANG_INCLUDE_DIR}/glslang/Include")
+    endif()
 endif()
 
 # Set output name (produces libsox.so on Linux, libsox.lib on Windows)
@@ -652,7 +921,7 @@ if(SOX_BUILD_VULKAN_QUALITY_PROBES AND HAVE_VULKAN)
     target_link_libraries(vulkan_prequant_probe PRIVATE libsox)
 endif()
 
-if(HAVE_VULKAN)
+if(HAVE_VULKAN AND IS_WINDOWS)
     add_custom_command(TARGET sox_exe POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${GLSLANG_RUNTIME_DLL}" "$<TARGET_FILE_DIR:sox_exe>"
@@ -682,7 +951,7 @@ install(TARGETS sox_exe
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-if(HAVE_VULKAN)
+if(HAVE_VULKAN AND IS_WINDOWS)
     install(FILES "${GLSLANG_RUNTIME_DLL}"
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )

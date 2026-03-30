@@ -1,5 +1,5 @@
 /*
- * FP64 rational polyphase stage for the SoX rate planner.
+ * FP64 rational polyphase accumulation with normalized FP32 resident output.
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -21,7 +21,7 @@ layout(std430, binding = 1) readonly buffer InputSamples {
 };
 
 layout(std430, binding = 2) writeonly buffer OutputSamples {
-  double output_samples[];
+  float output_samples[];
 };
 
 layout(push_constant) uniform Parameters {
@@ -45,11 +45,10 @@ void main()
       channel >= parameters.channels)
     return;
 
-  uint position = parameters.phase_start + output_frame * parameters.phase_step;
+  uint position = parameters.phase_start +
+      output_frame * parameters.phase_step;
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
-  double scale =
-      parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   double sum = 0.0;
   for (uint tap = 0u; tap < parameters.taps; ++tap)
     sum += coefficients[tap * parameters.phase_count + phase] *
@@ -57,5 +56,5 @@ void main()
             (input_base + tap) *
             parameters.channels + channel];
   output_samples[output_frame * parameters.channels + channel] =
-      sum * scale;
+      float(sum * SOX_SAMPLE_SCALE);
 }

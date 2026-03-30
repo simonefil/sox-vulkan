@@ -486,6 +486,18 @@ typedef enum sox_bool {
 
 /**
 Client API:
+Numerical quality requested for Vulkan FFT/FIR offload.
+*/
+typedef enum sox_vulkan_profile_t {
+    sox_vulkan_profile_none,
+    sox_vulkan_profile_fast,
+    sox_vulkan_profile_accurate,
+    sox_vulkan_profile_strict,
+    sox_vulkan_profile_reference
+} sox_vulkan_profile_t;
+
+/**
+Client API:
 no, yes, or default (default usually implies some kind of auto-detect logic).
 */
 typedef enum sox_option_t {
@@ -1388,7 +1400,7 @@ typedef struct sox_globals_t {
   */
   size_t       log2_dft_min_size;
 
-  sox_bool     use_vulkan;      /**< Private: true if the Vulkan backend was requested */
+  sox_vulkan_profile_t vulkan_profile; /**< Private: requested Vulkan numerical quality, or none */
 } sox_globals_t;
 
 /**
@@ -1663,6 +1675,7 @@ struct sox_effect_t {
   size_t                   obeg;      /**< output buffer: start of valid data section */
   size_t                   oend;      /**< output buffer: one past valid data section (oend-obeg is length of current content) */
   size_t               imin;          /**< minimum input buffer content required for calling this effect's flow function; set via lsx_effect_set_imin() */
+  void const               * internal_chain_endpoint; /**< private optional libSoX effect-chain extension */
 };
 
 /**

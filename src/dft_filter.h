@@ -12,9 +12,11 @@ typedef struct {
   dft_filter_t   filter, * filter_ptr;
 #if HAVE_VULKAN
   struct lsx_fir_vulkan * vulkan;
+  struct lsx_rate_vulkan * vulkan_resident;
   fifo_t     vulkan_input_fifo, vulkan_output_fifo;
   double     * vulkan_drain_block;
   size_t     vulkan_skip_samples;
+  uint32_t   vulkan_resident_pending;
 #endif
 } dft_filter_priv_t;
 

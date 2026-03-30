@@ -1,5 +1,5 @@
 /*
- * FP64 rational polyphase stage for the SoX rate planner.
+ * FP32 rational polyphase stage for Vulkan devices without shaderFloat64.
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -8,20 +8,19 @@
  */
 
 #version 450
-#extension GL_ARB_gpu_shader_fp64 : require
 
 layout(local_size_x = 128) in;
 
 layout(std430, binding = 0) readonly buffer Coefficients {
-  double coefficients[];
+  float coefficients[];
 };
 
 layout(std430, binding = 1) readonly buffer InputSamples {
-  double input_samples[];
+  float input_samples[];
 };
 
 layout(std430, binding = 2) writeonly buffer OutputSamples {
-  double output_samples[];
+  float output_samples[];
 };
 
 layout(push_constant) uniform Parameters {
@@ -35,7 +34,7 @@ layout(push_constant) uniform Parameters {
   uint padding;
 } parameters;
 
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -45,17 +44,20 @@ void main()
       channel >= parameters.channels)
     return;
 
-  uint position = parameters.phase_start + output_frame * parameters.phase_step;
+  uint position = parameters.phase_start +
+      output_frame * parameters.phase_step;
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
-  double scale =
+  float scale =
       parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
-  double sum = 0.0;
+  float sum = 0.0;
   for (uint tap = 0u; tap < parameters.taps; ++tap)
-    sum += coefficients[tap * parameters.phase_count + phase] *
+    sum = fma(
+        coefficients[tap * parameters.phase_count + phase],
         input_samples[
             (input_base + tap) *
-            parameters.channels + channel];
+            parameters.channels + channel],
+        sum);
   output_samples[output_frame * parameters.channels + channel] =
       sum * scale;
 }

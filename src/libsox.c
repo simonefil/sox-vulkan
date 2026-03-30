@@ -135,7 +135,7 @@ static sox_globals_t s_sox_globals = {
   sox_false,       /* sox_bool     use_magic */
   sox_false,       /* sox_bool     use_threads */
   10,              /* size_t       log2_dft_min_size */
-  sox_false        /* sox_bool     use_vulkan */
+  sox_vulkan_profile_none /* sox_vulkan_profile_t vulkan_profile */
 };
 
 sox_globals_t * sox_get_globals(void)

@@ -1,0 +1,81 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) buffer Working {
+  vec2 values[];
+} working;
+
+layout(set = 0, binding = 1, std430) buffer History {
+  vec2 values[];
+} history;
+
+layout(set = 0, binding = 2, std430) readonly buffer KernelsHigh {
+  vec2 values[];
+} kernels_high;
+
+layout(set = 0, binding = 3, std430) readonly buffer KernelsLow {
+  vec2 values[];
+} kernels_low;
+
+layout(push_constant) uniform Parameters {
+  uint spectrum_bins;
+  uint partitions;
+  uint channels;
+  uint current_slot;
+} parameters;
+
+vec2 complex_product(vec2 value, vec2 coefficient)
+{
+  float ac = value.x * coefficient.x;
+  float bd = value.y * coefficient.y;
+  float ad = value.x * coefficient.y;
+  float bc = value.y * coefficient.x;
+  float real_high = ac - bd;
+  float imag_high = ad + bc;
+  float real_low =
+      fma(value.x, coefficient.x, -ac) -
+      fma(value.y, coefficient.y, -bd) +
+      ((ac - real_high) - bd);
+  float imag_low =
+      fma(value.x, coefficient.y, -ad) +
+      fma(value.y, coefficient.x, -bc) +
+      ((ad - imag_high) + bc);
+
+  return vec2(real_high + real_low, imag_high + imag_low);
+}
+
+void main()
+{
+  const uint index = gl_GlobalInvocationID.x;
+
+  if (index < parameters.channels * parameters.spectrum_bins) {
+    const uint bin = index % parameters.spectrum_bins;
+    const uint channel = index / parameters.spectrum_bins;
+    vec2 sum = vec2(0.0);
+    vec2 correction = vec2(0.0);
+
+    for (uint part = 0;
+         part < parameters.partitions; ++part) {
+      const uint slot =
+          (parameters.current_slot + parameters.partitions -
+           part) % parameters.partitions;
+      const uint history_index =
+          (channel * parameters.partitions + slot) *
+          parameters.spectrum_bins + bin;
+      const uint kernel_index =
+          (part * parameters.channels + channel) *
+          parameters.spectrum_bins + bin;
+      const vec2 value = history.values[history_index];
+      vec2 product =
+          complex_product(value, kernels_high.values[kernel_index]) +
+          complex_product(value, kernels_low.values[kernel_index]);
+      vec2 adjusted = product - correction;
+      vec2 next = sum + adjusted;
+
+      correction = (next - sum) - adjusted;
+      sum = next;
+    }
+    working.values[index] = sum;
+  }
+}

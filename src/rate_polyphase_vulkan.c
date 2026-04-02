@@ -14,6 +14,7 @@
 
 #include "rate_polyphase_f64_spv.inc"
 #include "rate_polyphase_f32_spv.inc"
+#include "rate_polyphase_accurate_f32_spv.inc"
 #include "rate_polyphase_normalized_f32_spv.inc"
 
 #define RATE_POLYPHASE_BLOCK_FRAMES 16384u
@@ -182,9 +183,13 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS ||
       (context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f64_spv, sizeof(rate_polyphase_f64_spv), context->pipeline_layout, &context->pipeline) :
+       context->vulkan->profile == sox_vulkan_profile_accurate ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_accurate_f32_spv, sizeof(rate_polyphase_accurate_f32_spv), context->pipeline_layout, &context->pipeline) :
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->pipeline)) != SOX_SUCCESS ||
       (context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_normalized_f32_spv, sizeof(rate_polyphase_normalized_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
+       context->vulkan->profile == sox_vulkan_profile_accurate ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_accurate_f32_spv, sizeof(rate_polyphase_accurate_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->normalized_pipeline)) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
@@ -237,7 +242,8 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
   uint64_t max_output_frames;
 
   if (!vulkan || (!vulkan->shader_float64 &&
-      vulkan->profile != sox_vulkan_profile_fast) ||
+      vulkan->profile != sox_vulkan_profile_fast &&
+      vulkan->profile != sox_vulkan_profile_accurate) ||
       !coefficients || !taps || !phase_count || !phase_step ||
       phase_start >= phase_count || !channels ||
       resident_preload_frames > taps - 1u)

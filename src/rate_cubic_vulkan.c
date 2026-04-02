@@ -227,7 +227,8 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
   uint64_t maximum;
 
   if (!vulkan || (!vulkan->shader_float64 &&
-      vulkan->profile != sox_vulkan_profile_fast) || !step ||
+      vulkan->profile != sox_vulkan_profile_fast &&
+      vulkan->profile != sox_vulkan_profile_accurate) || !step ||
       pre_post < 3u || !channels)
     return NULL;
   limit = (uint64_t)RATE_CUBIC_BLOCK_FRAMES << 32;

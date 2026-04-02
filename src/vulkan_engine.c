@@ -605,19 +605,11 @@ static lsx_vulkan_context_t *create_context(void)
     goto error;
   }
   if (!context->shader_float64 &&
-      (context->profile == sox_vulkan_profile_accurate ||
-       context->profile == sox_vulkan_profile_strict)) {
+      context->profile == sox_vulkan_profile_strict) {
     lsx_fail(
         "Vulkan profile %s is not implemented for the FP32 emulated "
         "numerical family",
         lsx_vulkan_profile_name(context->profile));
-    goto error;
-  }
-  if (context->shader_float64 &&
-      context->profile == sox_vulkan_profile_reference) {
-    lsx_fail(
-        "Vulkan profile reference is not implemented for the FP64 "
-        "numerical family");
     goto error;
   }
   device_info.pEnabledFeatures = &enabled_features;

@@ -43,6 +43,7 @@ static void compiler_release(void)
 lsx_vulkan_fft_t *lsx_vulkan_fft_create(
     lsx_vulkan_context_t *vulkan, lsx_vulkan_buffer_t *buffer,
     uint32_t length, uint32_t batches, sox_bool double_precision,
+    sox_bool double_double_precision,
     sox_bool real_to_complex, sox_bool normalize_inverse,
     VkFence *fence)
 {
@@ -62,8 +63,12 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   configuration.FFTdim = 1;
   configuration.size[0] = length;
   configuration.numberBatches = batches;
-  configuration.doublePrecision = double_precision ? 1u : 0u;
-  configuration.useLUT = double_precision ? 0 : 1;
+  configuration.doublePrecision =
+      double_precision && !double_double_precision ? 1u : 0u;
+  configuration.quadDoubleDoublePrecisionDoubleMemory =
+      double_double_precision ? 1u : 0u;
+  configuration.useLUT =
+      !double_precision || double_double_precision ? 1 : 0;
   configuration.performR2C = real_to_complex ? 1u : 0u;
   configuration.normalize = normalize_inverse ? 1u : 0u;
   configuration.device = &vulkan->device;

@@ -13,7 +13,7 @@
 
 typedef struct lsx_rate_polyphase_vulkan lsx_rate_polyphase_vulkan_t;
 
-lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames);
+lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum);
 void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context);
 size_t lsx_rate_polyphase_vulkan_block_frames(void);
 uint32_t lsx_rate_polyphase_vulkan_taps(lsx_rate_polyphase_vulkan_t const *context);

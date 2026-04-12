@@ -908,7 +908,7 @@ static int rate_vulkan_start(sox_effect_t *effp)
                 vulkan, coefficients, taps_per_phase,
                 (uint32_t)stage->L, (uint32_t)stage->M,
                 phase_start, (uint32_t)channels,
-                preload_frames);
+                preload_frames, sox_false);
         free(coefficients);
         if (!executor->polyphase)
           goto error;
@@ -984,7 +984,7 @@ static int rate_vulkan_start(sox_effect_t *effp)
       uint32_t phase_step = half_taps ? 2u : (uint32_t)stage->M;
       uint32_t phase_start = half_taps ? 0u : (uint32_t)stage->at.parts.integer;
 
-      executor->polyphase = lsx_rate_polyphase_vulkan_create(vulkan, coefficients, taps, phase_count, phase_step, phase_start, (uint32_t)channels, (uint32_t)stage->preload);
+      executor->polyphase = lsx_rate_polyphase_vulkan_create(vulkan, coefficients, taps, phase_count, phase_step, phase_start, (uint32_t)channels, (uint32_t)stage->preload, half_taps != NULL);
       free(half_taps);
       if (!executor->polyphase)
         goto error;
@@ -1782,7 +1782,8 @@ static int flow_vulkan_resident_input_mode(sox_effect_t *effp, lsx_vulkan_reside
     if (lsx_vulkan_resident_buffer_validate(input) !=
         SOX_SUCCESS ||
         input->state != lsx_vulkan_resident_final ||
-        input->format != lsx_vulkan_resident_format_f64 ||
+        input->format != lsx_rate_vulkan_resident_format(
+            p->vulkan_stages[0].dft) ||
         input->domain !=
             lsx_vulkan_resident_domain_sox_sample ||
         input->frames_per_element != 1u ||

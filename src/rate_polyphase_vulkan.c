@@ -15,6 +15,7 @@
 #include "rate_polyphase_f64_spv.inc"
 #include "rate_polyphase_f32_spv.inc"
 #include "rate_polyphase_accurate_f32_spv.inc"
+#include "rate_polyphase_strict_f32_spv.inc"
 #include "rate_polyphase_normalized_f32_spv.inc"
 
 #define RATE_POLYPHASE_BLOCK_FRAMES 16384u
@@ -29,7 +30,7 @@ typedef struct {
   uint32_t taps;
   uint32_t channels;
   uint32_t normalize;
-  uint32_t padding;
+  uint32_t symmetric_presum;
 } parameters_t;
 
 lsx_static_assert(
@@ -62,6 +63,7 @@ struct lsx_rate_polyphase_vulkan {
   uint32_t resident_occupancy_frames;
   sox_bool resident_initialized;
   sox_bool double_precision;
+  sox_bool strict_fp32;
 };
 
 static int vk_result(VkResult result, char const *operation)
@@ -80,7 +82,19 @@ static uint32_t dispatch_items(
 static size_t sample_size(
     lsx_rate_polyphase_vulkan_t const *context)
 {
-  return context->double_precision ? sizeof(double) : sizeof(float);
+  return context->strict_fp32 ?
+      2u * sizeof(float) :
+      context->double_precision ? sizeof(double) : sizeof(float);
+}
+
+static lsx_vulkan_resident_format_t sample_format(
+    lsx_rate_polyphase_vulkan_t const *context)
+{
+  return context->strict_fp32 ?
+      lsx_vulkan_resident_format_f32x2 :
+      context->double_precision ?
+      lsx_vulkan_resident_format_f64 :
+      lsx_vulkan_resident_format_f32;
 }
 
 static void upload_samples(
@@ -91,6 +105,16 @@ static void upload_samples(
 
   if (context->double_precision) {
     memcpy(target, source, count * sizeof(*source));
+    return;
+  }
+  if (context->strict_fp32) {
+    for (index = 0; index < count; ++index) {
+      float high = (float)source[index];
+
+      ((float *)target)[2u * index] = high;
+      ((float *)target)[2u * index + 1u] =
+          (float)(source[index] - (double)high);
+    }
     return;
   }
   for (index = 0; index < count; ++index)
@@ -104,6 +128,17 @@ static double const *host_samples(
 
   if (context->double_precision)
     return context->output.mapped;
+  if (context->strict_fp32) {
+    for (index = 0; index < count; ++index) {
+      float const *value =
+          (float const *)context->output.mapped +
+          2u * index;
+
+      context->host_output[index] =
+          (double)value[0] + (double)value[1];
+    }
+    return context->host_output;
+  }
   for (index = 0; index < count; ++index)
     context->host_output[index] =
         (double)((float const *)context->output.mapped)[index];
@@ -113,11 +148,17 @@ static double const *host_samples(
 static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *coefficients)
 {
   VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-  VkDeviceSize sample_size = context->double_precision ? sizeof(double) : sizeof(float);
+  VkDeviceSize sample_size = context->strict_fp32 ?
+      2u * sizeof(float) :
+      context->double_precision ? sizeof(double) : sizeof(float);
   VkDeviceSize coefficient_size = (VkDeviceSize)context->parameters.phase_count * context->parameters.taps * sample_size;
   VkDeviceSize input_size = (VkDeviceSize)(RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u) * context->parameters.channels * sample_size;
   VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_size;
-  VkDeviceSize normalized_output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sizeof(float);
+  VkDeviceSize normalized_output_size =
+      (VkDeviceSize)context->max_output_frames *
+      context->parameters.channels *
+      (context->strict_fp32 ?
+       2u * sizeof(float) : sizeof(float));
   VkDeviceSize resident_input_size = input_size;
   uint32_t phase;
   uint32_t tap;
@@ -141,7 +182,17 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
       double value = coefficients[
           (size_t)phase * context->parameters.taps + tap];
 
-      if (context->double_precision)
+      if (context->strict_fp32) {
+        float high = (float)value;
+        float *target_values =
+            (float *)context->coefficients.mapped +
+            2u * target;
+
+        target_values[0] = high;
+        target_values[1] =
+            (float)(value - (double)high);
+      }
+      else if (context->double_precision)
         ((double *)context->coefficients.mapped)[target] = value;
       else
         ((float *)context->coefficients.mapped)[target] = (float)value;
@@ -183,12 +234,18 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS ||
       (context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f64_spv, sizeof(rate_polyphase_f64_spv), context->pipeline_layout, &context->pipeline) :
-       context->vulkan->profile == sox_vulkan_profile_accurate ?
+       context->strict_fp32 ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_strict_f32_spv, sizeof(rate_polyphase_strict_f32_spv), context->pipeline_layout, &context->pipeline) :
+       (context->vulkan->profile == sox_vulkan_profile_accurate ||
+        context->vulkan->profile == sox_vulkan_profile_strict) ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_accurate_f32_spv, sizeof(rate_polyphase_accurate_f32_spv), context->pipeline_layout, &context->pipeline) :
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->pipeline)) != SOX_SUCCESS ||
       (context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_normalized_f32_spv, sizeof(rate_polyphase_normalized_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
-       context->vulkan->profile == sox_vulkan_profile_accurate ?
+       context->strict_fp32 ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_strict_f32_spv, sizeof(rate_polyphase_strict_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
+       (context->vulkan->profile == sox_vulkan_profile_accurate ||
+        context->vulkan->profile == sox_vulkan_profile_strict) ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_accurate_f32_spv, sizeof(rate_polyphase_accurate_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->normalized_pipeline)) != SOX_SUCCESS)
     return SOX_EOF;
@@ -236,28 +293,36 @@ static int create_commands(lsx_rate_polyphase_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames)
+lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum)
 {
   lsx_rate_polyphase_vulkan_t *context;
   uint64_t max_output_frames;
 
   if (!vulkan || (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
-      vulkan->profile != sox_vulkan_profile_accurate) ||
+      vulkan->profile != sox_vulkan_profile_accurate &&
+      vulkan->profile != sox_vulkan_profile_strict) ||
       !coefficients || !taps || !phase_count || !phase_step ||
       phase_start >= phase_count || !channels ||
-      resident_preload_frames > taps - 1u)
+      resident_preload_frames > taps - 1u ||
+      (symmetric_presum &&
+       (phase_count != 1u || !(taps & 1u))))
     return NULL;
   max_output_frames = ((uint64_t)RATE_POLYPHASE_BLOCK_FRAMES * phase_count + phase_step - 1u) / phase_step + 1u;
   if (max_output_frames > UINT32_MAX)
     return NULL;
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
-  context->double_precision = vulkan->shader_float64;
+  context->double_precision = vulkan->use_float64;
+  context->strict_fp32 =
+      !context->double_precision &&
+      vulkan->profile == sox_vulkan_profile_strict;
   context->parameters.phase_count = phase_count;
   context->parameters.phase_step = phase_step;
   context->parameters.taps = taps;
   context->parameters.channels = channels;
+  context->parameters.symmetric_presum =
+      symmetric_presum ? 1u : 0u;
   context->phase_start = phase_start;
   context->max_output_frames = (uint32_t)max_output_frames;
   context->resident_occupancy_frames = resident_preload_frames;
@@ -265,10 +330,12 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
     goto error;
   lsx_report(
       "Vulkan rate polyphase: %u/%u, %u taps/phase, "
-      "%u channel%s, %s",
+      "%u channel%s, %s%s",
       phase_count, phase_step, taps, channels,
       channels == 1u ? "" : "s",
-      context->double_precision ? "FP64" : "FP32");
+      context->double_precision ? "FP64" :
+      context->strict_fp32 ? "double-single" : "FP32",
+      symmetric_presum ? ", symmetric presumming" : "");
   return context;
 
 error:
@@ -502,9 +569,7 @@ int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vul
   upload.rate = rate;
   upload.channels = context->parameters.channels;
   upload.frames_per_element = 1u;
-  upload.format = context->double_precision ?
-      lsx_vulkan_resident_format_f64 :
-      lsx_vulkan_resident_format_f32;
+  upload.format = sample_format(context);
   upload.domain = lsx_vulkan_resident_domain_sox_sample;
   upload.layout = lsx_vulkan_resident_layout_interleaved;
   upload.state = state;
@@ -547,9 +612,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   if (!context || !input || !output_frames ||
       (!output && !resident) || (resident && rate <= 0) ||
       lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS ||
-      input->format != (context->double_precision ?
-          lsx_vulkan_resident_format_f64 :
-          lsx_vulkan_resident_format_f32) ||
+      input->format != sample_format(context) ||
       input->domain != lsx_vulkan_resident_domain_sox_sample ||
       input->layout != lsx_vulkan_resident_layout_interleaved ||
       input->frames_per_element != 1u ||
@@ -591,7 +654,8 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   source_barrier.size = append.size;
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_start = context->phase_start;
-  context->parameters.normalize = normalize ? 1u : 0u;
+  context->parameters.normalize =
+      normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   output_buffer = normalize ?
       &context->normalized_output : &context->output;
   buffer_info[0].buffer = context->coefficients.buffer;
@@ -654,7 +718,8 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
     resident->rate = rate;
     resident->channels = context->parameters.channels;
     resident->frames_per_element = 1u;
-    resident->format =
+    resident->format = context->strict_fp32 ?
+        lsx_vulkan_resident_format_f32x2 :
         normalize || !context->double_precision ?
         lsx_vulkan_resident_format_f32 :
         lsx_vulkan_resident_format_f64;
@@ -698,9 +763,7 @@ int lsx_rate_polyphase_vulkan_resident_output(lsx_rate_polyphase_vulkan_t *conte
   resident->rate = rate;
   resident->channels = context->parameters.channels;
   resident->frames_per_element = 1u;
-  resident->format = context->double_precision ?
-      lsx_vulkan_resident_format_f64 :
-      lsx_vulkan_resident_format_f32;
+  resident->format = sample_format(context);
   resident->domain = lsx_vulkan_resident_domain_sox_sample;
   resident->layout = lsx_vulkan_resident_layout_interleaved;
   resident->state = state;

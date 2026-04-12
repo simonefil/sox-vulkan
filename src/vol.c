@@ -100,7 +100,6 @@ static int start(sox_effect_t * effp)
 
     vol->limited = 0;
     vol->totalprocessed = 0;
-
     return SOX_SUCCESS;
 }
 

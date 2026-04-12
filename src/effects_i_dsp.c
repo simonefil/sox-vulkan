@@ -644,6 +644,11 @@ void lsx_normalize_samples(double * const dest, double const * const src,
     dest[i] = src[i] * scale;
 }
 
+sox_bool lsx_sample_values_are_normalized(void)
+{
+  return sox_false;
+}
+
 #pragma STDC FENV_ACCESS OFF
 #undef _
 #else
@@ -673,6 +678,11 @@ void lsx_normalize_samples(double * const dest, double const * const src,
 {
   if (dest != src)
     memcpy(dest, src, n * sizeof(*dest));
+}
+
+sox_bool lsx_sample_values_are_normalized(void)
+{
+  return sox_true;
 }
 
 #endif

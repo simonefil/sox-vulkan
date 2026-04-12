@@ -24,6 +24,7 @@ typedef struct {
 
 typedef enum {
   lsx_vulkan_resident_format_f32,
+  lsx_vulkan_resident_format_f32x2,
   lsx_vulkan_resident_format_f64,
   lsx_vulkan_resident_format_dsd_u32
 } lsx_vulkan_resident_format_t;
@@ -55,6 +56,7 @@ typedef enum {
   lsx_vulkan_wait_sdm_synchronous,
   lsx_vulkan_wait_sdm_resident_flush,
   lsx_vulkan_wait_packed_output,
+  lsx_vulkan_wait_resident_output,
   lsx_vulkan_wait_reason_count
 } lsx_vulkan_wait_reason_t;
 
@@ -109,6 +111,7 @@ typedef struct lsx_vulkan_context {
   sox_vulkan_profile_t profile;
   lsx_vulkan_numerical_family_t numerical_family;
   sox_bool shader_float64;
+  sox_bool use_float64;
   sox_bool debug_utils;
   sox_bool graphics_capture;
   sox_bool frame_boundary;
@@ -122,8 +125,11 @@ typedef struct lsx_vulkan_context {
   uint64_t frame_id;
   uint64_t submit_batch_counts[10];
   uint64_t wait_reason_counts[lsx_vulkan_wait_reason_count];
-  VkCommandBuffer pending_command_buffers[64];
+  VkCommandBuffer pending_command_buffers[256];
   uint32_t pending_command_buffer_count;
+  lsx_vulkan_buffer_t resident_download;
+  VkCommandBuffer resident_download_command;
+  VkFence resident_download_fence;
   uint32_t resident_batch_depth;
   sox_bool resident_batch_depth_overridden;
 } lsx_vulkan_context_t;
@@ -150,6 +156,10 @@ VkDeviceSize lsx_vulkan_resident_buffer_size(
     lsx_vulkan_resident_buffer_t const *resident);
 int lsx_vulkan_resident_buffer_validate(
     lsx_vulkan_resident_buffer_t const *resident);
+int lsx_vulkan_download_resident_pcm(
+    lsx_vulkan_context_t *context,
+    lsx_vulkan_resident_buffer_t const *resident,
+    double *output, size_t output_samples);
 int lsx_vulkan_create_compute_pipeline(
     lsx_vulkan_context_t *context, uint32_t const *spirv,
     size_t spirv_size, VkPipelineLayout layout, VkPipeline *pipeline);

@@ -18,6 +18,9 @@
 #define LSX_EFF_ALIAS
 #include "sox_i.h"
 #if HAVE_VULKAN
+#include "dft_filter.h"
+#endif
+#if HAVE_VULKAN
 #include "vulkan_engine.h"
 #include "vulkan_effect_chain.h"
 #endif
@@ -176,6 +179,27 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
     free(eff0.priv);
     return SOX_EOF;
   }
+#if HAVE_VULKAN
+  if (chain->length &&
+      sox_globals.vulkan_profile == sox_vulkan_profile_fast) {
+    int fused = lsx_fir_vulkan_try_fuse(
+        chain->effects[chain->length - 1u], effp);
+
+    if (fused < 0) {
+      free(eff0.priv);
+      return SOX_EOF;
+    }
+    if (fused > 0) {
+      free(eff0.priv);
+      effp->handler.stop(effp);
+      if (effp->handler.kill)
+        effp->handler.kill(effp);
+      free(effp->priv);
+      effp->priv = NULL;
+      return SOX_SUCCESS;
+    }
+  }
+#endif
   if (in->mult)
     lsx_debug("mult=%g", *in->mult);
 
@@ -374,7 +398,9 @@ static void report_vulkan_resident_format(
     lsx_vulkan_resident_buffer_t const *resident)
 {
   sox_effect_t const *effp = effect;
-  static char const *formats[] = {"f32", "f64", "dsd_u32"};
+  static char const *formats[] = {
+    "f32", "f32x2", "f64", "dsd_u32"
+  };
   static char const *domains[] = {
     "sox_sample", "normalized", "dsd"
   };

@@ -56,4 +56,3 @@ sox_effect_handler_t const * lsx_output_effect_fn(void)
   };
   return &handler;
 }
-

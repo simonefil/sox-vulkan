@@ -11,6 +11,7 @@
 #include "vulkan_fft.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,14 +24,20 @@
 #include "fir_partition_f64_spv.inc"
 #include "fir_partition_f32_spv.inc"
 #include "fir_partition_accurate_f32_spv.inc"
+#include "fir_partition_strict_f32_spv.inc"
+#include "fir_partition_split_f32_spv.inc"
 #include "fir_partition_precise_f64_spv.inc"
 #include "fir_direct_reference_f64_spv.inc"
+#include "fir_direct_strict_f64_spv.inc"
 #include "fir_direct_accurate_f32_spv.inc"
 
-#define FIR_FFT_SIZE 32768u
-#define FIR_BLOCK_FRAMES (FIR_FFT_SIZE / 2u)
+#define FIR_DEFAULT_FFT_SIZE 32768u
+#define FIR_FAST_FFT_SIZE 131072u
+#define FIR_DEFAULT_BLOCK_FRAMES (FIR_DEFAULT_FFT_SIZE / 2u)
+#define FIR_FAST_BLOCK_FRAMES (FIR_FAST_FFT_SIZE / 2u)
+#define FIR_FFT_SIZE (context->fft_size)
+#define FIR_BLOCK_FRAMES (context->block_frames)
 #define FIR_LOCAL_SIZE 256u
-#define FIR_DIRECT_REFERENCE_MAX_TAPS 8192u
 
 typedef lsx_vulkan_buffer_t buffer_t;
 
@@ -41,9 +48,23 @@ typedef struct {
   uint32_t current_slot;
 } partition_parameters_t;
 
+typedef struct {
+  uint32_t operation;
+  uint32_t stage;
+  uint32_t partitions;
+  uint32_t channels;
+  uint32_t current_slot;
+  uint32_t inverse;
+  uint32_t source_is_a;
+  uint32_t reserved;
+} strict_fp32_parameters_t;
+
 lsx_static_assert(
     sizeof(partition_parameters_t) == 16,
     vulkan_fir_partition_push_layout);
+lsx_static_assert(
+    sizeof(strict_fp32_parameters_t) == 32,
+    vulkan_fir_strict_fp32_push_layout);
 
 struct lsx_fir_vulkan {
   lsx_vulkan_context_t *vulkan;
@@ -58,9 +79,12 @@ struct lsx_fir_vulkan {
   VkCommandBuffer *resident_process_commands;
   VkFence fence;
   buffer_t working;
+  buffer_t working_scratch;
   buffer_t history;
   buffer_t kernels;
   buffer_t kernels_low;
+  buffer_t twiddles;
+  buffer_t strict_output;
   buffer_t upload;
   buffer_t resident_upload[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   buffer_t download;
@@ -70,10 +94,16 @@ struct lsx_fir_vulkan {
   size_t element_size;
   sox_bool double_precision;
   sox_bool accurate_fp32;
+  sox_bool split_fp32;
+  sox_bool strict_fp32;
+  sox_bool authoritative_fp64_kernels;
   sox_bool precise_fp64;
   sox_bool direct_reference;
+  sox_bool direct_strict;
   sox_bool direct_accurate;
   uint32_t taps;
+  uint32_t fft_size;
+  uint32_t block_frames;
   uint32_t partitions;
   uint32_t channels;
   uint32_t current_slot;
@@ -191,8 +221,10 @@ static int create_commands(lsx_fir_vulkan_t *context)
 static int create_partition_pipeline(lsx_fir_vulkan_t *context)
 {
   uint32_t binding_count =
-      context->accurate_fp32 ? 4u : 3u;
-  VkDescriptorSetLayoutBinding bindings[4];
+      context->strict_fp32 ? 6u :
+      context->accurate_fp32 ||
+      context->split_fp32 ? 4u : 3u;
+  VkDescriptorSetLayoutBinding bindings[6];
   VkDescriptorSetLayoutCreateInfo layout_info = {
     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
   };
@@ -206,16 +238,39 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
   VkDescriptorSetAllocateInfo allocation = {
     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO
   };
-  VkDescriptorBufferInfo buffer_info[4] = {
+  VkDescriptorBufferInfo buffer_info[6] = {
     {context->working.buffer, 0, context->working.size},
-    {context->history.buffer, 0, context->history.size},
-    {context->kernels.buffer, 0, context->kernels.size},
-    {context->kernels_low.buffer, 0, context->kernels_low.size}
+    {
+      context->strict_fp32 ?
+      context->working_scratch.buffer : context->history.buffer,
+      0,
+      context->strict_fp32 ?
+      context->working_scratch.size : context->history.size
+    },
+    {
+      context->strict_fp32 ?
+      context->history.buffer : context->kernels.buffer,
+      0,
+      context->strict_fp32 ?
+      context->history.size : context->kernels.size
+    },
+    {
+      context->strict_fp32 ?
+      context->kernels.buffer : context->kernels_low.buffer,
+      0,
+      context->strict_fp32 ?
+      context->kernels.size : context->kernels_low.size
+    },
+    {context->twiddles.buffer, 0, context->twiddles.size},
+    {context->strict_output.buffer, 0, context->strict_output.size}
   };
-  VkWriteDescriptorSet writes[4];
+  VkWriteDescriptorSet writes[6];
   VkPushConstantRange push_range = {
     VK_SHADER_STAGE_COMPUTE_BIT,
-    0, sizeof(partition_parameters_t)
+    0,
+    context->strict_fp32 ?
+    sizeof(strict_fp32_parameters_t) :
+    sizeof(partition_parameters_t)
   };
   VkPipelineLayoutCreateInfo pipeline_layout_info = {
     VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -272,10 +327,16 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
       context->double_precision ?
           (context->direct_reference ?
            fir_direct_reference_f64_spv :
+           context->direct_strict ?
+           fir_direct_strict_f64_spv :
            context->precise_fp64 ?
            fir_partition_precise_f64_spv :
            fir_partition_f64_spv) :
-          (context->direct_accurate ?
+          (context->strict_fp32 ?
+           fir_partition_strict_f32_spv :
+           context->split_fp32 ?
+           fir_partition_split_f32_spv :
+           context->direct_accurate ?
            fir_direct_accurate_f32_spv :
            context->accurate_fp32 ?
            fir_partition_accurate_f32_spv :
@@ -283,10 +344,16 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
       context->double_precision ?
           (context->direct_reference ?
            sizeof(fir_direct_reference_f64_spv) :
+           context->direct_strict ?
+           sizeof(fir_direct_strict_f64_spv) :
            context->precise_fp64 ?
            sizeof(fir_partition_precise_f64_spv) :
            sizeof(fir_partition_f64_spv)) :
-          (context->direct_accurate ?
+          (context->strict_fp32 ?
+           sizeof(fir_partition_strict_f32_spv) :
+           context->split_fp32 ?
+           sizeof(fir_partition_split_f32_spv) :
+           context->direct_accurate ?
            sizeof(fir_direct_accurate_f32_spv) :
            context->accurate_fp32 ?
            sizeof(fir_partition_accurate_f32_spv) :
@@ -300,15 +367,135 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
 static int initialize_fft(lsx_fir_vulkan_t *context)
 {
   if (context->direct_reference ||
-      context->direct_accurate)
+      context->direct_strict ||
+      context->direct_accurate ||
+      context->strict_fp32)
     return SOX_SUCCESS;
   context->fft = lsx_vulkan_fft_create(
       context->vulkan, &context->working,
       FIR_FFT_SIZE, context->channels,
       context->double_precision,
+      context->vulkan->profile ==
+      sox_vulkan_profile_reference,
       sox_true, sox_true,
       &context->fence);
   return context->fft ? SOX_SUCCESS : SOX_EOF;
+}
+
+static void store_double_single(
+    float *target, size_t index, double value)
+{
+  float high = (float)value;
+
+  target[index] = high;
+  target[index + 1u] =
+      (float)(value - (double)high);
+}
+
+static int initialize_strict_fp32_twiddles(
+    lsx_fir_vulkan_t *context)
+{
+  float *upload = context->upload.mapped;
+  VkBufferCopy copy = {
+    0, 0,
+    (VkDeviceSize)(FIR_FFT_SIZE / 2u) *
+    4u * sizeof(*upload)
+  };
+  uint32_t index;
+
+  memset(upload, 0, (size_t)copy.size);
+  for (index = 0; index < FIR_FFT_SIZE / 2u; ++index) {
+    double angle =
+        2.0 * acos(-1.0) * (double)index /
+        (double)FIR_FFT_SIZE;
+
+    store_double_single(
+        upload, (size_t)index * 4u, cos(angle));
+    store_double_single(
+        upload, (size_t)index * 4u + 2u, sin(angle));
+  }
+  if (begin_commands(context) != SOX_SUCCESS)
+    return SOX_EOF;
+  vkCmdCopyBuffer(
+      context->command_buffer, context->upload.buffer,
+      context->twiddles.buffer, 1, &copy);
+  return submit_commands(
+      context, lsx_vulkan_wait_fir_setup);
+}
+
+static int initialize_strict_fp32_kernels(
+    lsx_fir_vulkan_t *context,
+    double const *coefficients, size_t taps)
+{
+  double *spectrum = lsx_calloc(
+      FIR_FFT_SIZE, sizeof(*spectrum));
+  uint32_t partition;
+
+  if (initialize_strict_fp32_twiddles(context) !=
+      SOX_SUCCESS) {
+    free(spectrum);
+    return SOX_EOF;
+  }
+  for (partition = 0;
+       partition < context->partitions; ++partition) {
+    size_t first = (size_t)partition * FIR_BLOCK_FRAMES;
+    size_t length = min(
+        (size_t)FIR_BLOCK_FRAMES, taps - first);
+    float *upload = context->upload.mapped;
+    VkBufferCopy copy = {
+      0,
+      (VkDeviceSize)partition * context->working.size,
+      context->working.size
+    };
+    uint32_t channel;
+
+    memset(
+        spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
+    memcpy(
+        spectrum, coefficients + first,
+        length * sizeof(*spectrum));
+    lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
+    memset(upload, 0, (size_t)context->working.size);
+    for (channel = 0; channel < context->channels; ++channel) {
+      uint32_t bin;
+
+      for (bin = 0; bin < FIR_FFT_SIZE; ++bin) {
+        uint32_t source_bin =
+            bin <= FIR_FFT_SIZE / 2u ?
+            bin : FIR_FFT_SIZE - bin;
+        double real =
+            source_bin == 0u ? spectrum[0] :
+            source_bin == FIR_FFT_SIZE / 2u ?
+            spectrum[1] : spectrum[2u * source_bin];
+        double imaginary =
+            source_bin == 0u ||
+            source_bin == FIR_FFT_SIZE / 2u ?
+            0. : -spectrum[2u * source_bin + 1u];
+        size_t target =
+            ((size_t)channel * FIR_FFT_SIZE + bin) * 4u;
+
+        if (bin > FIR_FFT_SIZE / 2u)
+          imaginary = -imaginary;
+        store_double_single(upload, target, real);
+        store_double_single(
+            upload, target + 2u, imaginary);
+      }
+    }
+    if (begin_commands(context) != SOX_SUCCESS) {
+      free(spectrum);
+      return SOX_EOF;
+    }
+    vkCmdCopyBuffer(
+        context->command_buffer, context->upload.buffer,
+        context->kernels.buffer, 1, &copy);
+    if (submit_commands(
+        context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS) {
+      free(spectrum);
+      return SOX_EOF;
+    }
+  }
+  free(spectrum);
+  return SOX_SUCCESS;
 }
 
 static int initialize_accurate_kernels(
@@ -462,7 +649,11 @@ static int initialize_kernels(
   uint32_t channel;
   uint32_t component;
 
-  if (context->direct_reference) {
+  if (context->strict_fp32)
+    return initialize_strict_fp32_kernels(
+        context, coefficients, taps);
+  if (context->direct_reference ||
+      context->direct_strict) {
     VkBufferCopy copy = {
       0, 0, (VkDeviceSize)taps * sizeof(*coefficients)
     };
@@ -508,11 +699,11 @@ static int initialize_kernels(
     }
     return SOX_SUCCESS;
   }
-  if (context->accurate_fp32)
+  if (context->accurate_fp32 ||
+      context->split_fp32)
     return initialize_accurate_kernels(
         context, coefficients, taps);
-  if (context->precise_fp64 &&
-      context->vulkan->profile != sox_vulkan_profile_reference)
+  if (context->authoritative_fp64_kernels)
     return initialize_precise_f64_kernels(
         context, coefficients, taps);
   for (partition = 0;
@@ -656,6 +847,209 @@ static void append_direct_convolution(
       (count % FIR_LOCAL_SIZE != 0), 1, 1);
 }
 
+static void append_strict_fp32_dispatch(
+    lsx_fir_vulkan_t *context,
+    VkCommandBuffer command_buffer,
+    strict_fp32_parameters_t const *parameters,
+    uint32_t count)
+{
+  vkCmdBindPipeline(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->pipeline);
+  vkCmdBindDescriptorSets(
+      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      context->pipeline_layout, 0, 1,
+      &context->descriptor_set, 0, NULL);
+  vkCmdPushConstants(
+      command_buffer, context->pipeline_layout,
+      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(*parameters), parameters);
+  vkCmdDispatch(
+      command_buffer,
+      count / FIR_LOCAL_SIZE +
+      (count % FIR_LOCAL_SIZE != 0), 1, 1);
+}
+
+static int record_strict_fp32_command_bank(
+    lsx_fir_vulkan_t *context, VkCommandBuffer **commands,
+    sox_bool download_output, uint32_t bank_depth)
+{
+  VkCommandBufferAllocateInfo allocation = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, NULL,
+    context->vulkan->command_pool,
+    VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    context->partitions * bank_depth
+  };
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
+  };
+  VkDeviceSize channel_spectrum_size =
+      (VkDeviceSize)FIR_FFT_SIZE *
+      4u * sizeof(float);
+  VkCommandBuffer *process_commands = lsx_calloc(
+      context->partitions * bank_depth,
+      sizeof(*process_commands));
+  uint32_t command_index;
+
+  *commands = NULL;
+  if (vk_result(vkAllocateCommandBuffers(
+      context->vulkan->device, &allocation,
+      process_commands),
+      "vkAllocateCommandBuffers FIR strict FP32 process") !=
+      SOX_SUCCESS) {
+    free(process_commands);
+    return SOX_EOF;
+  }
+  for (command_index = 0;
+       command_index < context->partitions * bank_depth;
+       ++command_index) {
+    uint32_t current_slot =
+        command_index % context->partitions;
+    uint32_t bank_index =
+        command_index / context->partitions;
+    VkCommandBuffer command_buffer =
+        process_commands[command_index];
+    VkBuffer upload_buffer = download_output ?
+        context->upload.buffer :
+        context->resident_upload[bank_index].buffer;
+    VkBufferCopy upload_copy = {
+      0, 0, context->working.size
+    };
+    strict_fp32_parameters_t parameters = {
+      0u, 0u, context->partitions,
+      context->channels, current_slot,
+      0u, 1u, 0u
+    };
+    uint32_t stage;
+    uint32_t channel;
+
+    if (vk_result(vkBeginCommandBuffer(
+        command_buffer, &begin),
+        "vkBeginCommandBuffer FIR strict FP32 process") !=
+        SOX_SUCCESS)
+      goto error;
+    lsx_vulkan_label_begin(
+        context->vulkan, command_buffer,
+        download_output ?
+        "FIR strict FP32 process and download" :
+        "FIR strict FP32 resident process");
+    vkCmdCopyBuffer(
+        command_buffer, upload_buffer,
+        context->working.buffer, 1, &upload_copy);
+    memory_barrier(
+        command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    lsx_vulkan_label_begin(
+        context->vulkan, command_buffer,
+        "FIR strict FP32 forward double-single FFT");
+    for (stage = 0; stage < 15u; ++stage) {
+      parameters.operation = 0u;
+      parameters.stage = stage;
+      parameters.inverse = 0u;
+      parameters.source_is_a =
+          stage % 2u == 0u;
+      append_strict_fp32_dispatch(
+          context, command_buffer, &parameters,
+          context->channels * FIR_FFT_SIZE / 2u);
+      memory_barrier(
+          command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+          VK_ACCESS_SHADER_READ_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+    lsx_vulkan_label_end(context->vulkan, command_buffer);
+    memory_barrier(
+        command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT);
+    for (channel = 0;
+         channel < context->channels; ++channel) {
+      VkBufferCopy history_copy = {
+        (VkDeviceSize)channel * channel_spectrum_size,
+        ((VkDeviceSize)channel * context->partitions +
+         current_slot) * channel_spectrum_size,
+        channel_spectrum_size
+      };
+
+      vkCmdCopyBuffer(
+          command_buffer, context->working_scratch.buffer,
+          context->history.buffer, 1, &history_copy);
+    }
+    memory_barrier(
+        command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    parameters.operation = 1u;
+    parameters.inverse = 0u;
+    parameters.source_is_a = 0u;
+    append_strict_fp32_dispatch(
+        context, command_buffer, &parameters,
+        context->channels * FIR_FFT_SIZE);
+    memory_barrier(
+        command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    lsx_vulkan_label_begin(
+        context->vulkan, command_buffer,
+        "FIR strict FP32 inverse double-single FFT");
+    for (stage = 0; stage < 15u; ++stage) {
+      parameters.operation = 0u;
+      parameters.stage = stage;
+      parameters.inverse = 1u;
+      parameters.source_is_a =
+          stage % 2u == 0u;
+      append_strict_fp32_dispatch(
+          context, command_buffer, &parameters,
+          context->channels * FIR_FFT_SIZE / 2u);
+      memory_barrier(
+          command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+          VK_ACCESS_SHADER_READ_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+    lsx_vulkan_label_end(context->vulkan, command_buffer);
+    parameters.operation = 2u;
+    parameters.inverse = 0u;
+    parameters.source_is_a = 0u;
+    append_strict_fp32_dispatch(
+        context, command_buffer, &parameters,
+        context->channels * FIR_BLOCK_FRAMES);
+    if (download_output) {
+      VkBufferCopy output_copy = {
+        0, 0, context->strict_output.size
+      };
+
+      memory_barrier(
+          command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+          VK_ACCESS_TRANSFER_READ_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT);
+      vkCmdCopyBuffer(
+          command_buffer, context->strict_output.buffer,
+          context->download.buffer, 1, &output_copy);
+    }
+    lsx_vulkan_label_end(context->vulkan, command_buffer);
+    if (vk_result(vkEndCommandBuffer(command_buffer),
+        "vkEndCommandBuffer FIR strict FP32 process") !=
+        SOX_SUCCESS)
+      goto error;
+  }
+  *commands = process_commands;
+  return SOX_SUCCESS;
+
+error:
+  vkFreeCommandBuffers(
+      context->vulkan->device, context->vulkan->command_pool,
+      context->partitions * bank_depth, process_commands);
+  free(process_commands);
+  return SOX_EOF;
+}
+
 static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffer **commands, sox_bool download_output, uint32_t bank_depth)
 {
   VkDeviceSize complex_size = 2u * context->element_size;
@@ -680,6 +1074,9 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
   };
   uint32_t command_index;
 
+  if (context->strict_fp32)
+    return record_strict_fp32_command_bank(
+        context, commands, download_output, bank_depth);
   VkCommandBuffer *process_commands = lsx_calloc(context->partitions * bank_depth, sizeof(*process_commands));
 
   *commands = NULL;
@@ -714,6 +1111,7 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
         VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     if (context->direct_reference ||
+        context->direct_strict ||
         context->direct_accurate) {
       lsx_vulkan_label_begin(
           context->vulkan, command_buffer,
@@ -753,12 +1151,12 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
         sox_false) != SOX_SUCCESS)
       goto error;
     lsx_vulkan_label_end(context->vulkan, command_buffer);
+    lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR history update");
     memory_barrier(
         command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
         VK_ACCESS_TRANSFER_READ_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
-    lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR history update");
     for (channel = 0; channel < context->channels; ++channel) {
       VkBufferCopy history_copy = {
         (VkDeviceSize)channel * spectrum_size,
@@ -846,7 +1244,15 @@ static int create_buffers(lsx_fir_vulkan_t *context)
   VkPhysicalDeviceLimits const *limits =
       &context->vulkan->properties.limits;
 
-  if (context->direct_accurate)
+  if (context->strict_fp32) {
+    working_size =
+        (VkDeviceSize)context->channels *
+        FIR_FFT_SIZE * 4u * sizeof(float);
+    download_size =
+        (VkDeviceSize)context->channels *
+        FIR_BLOCK_FRAMES * 2u * sizeof(float);
+  }
+  else if (context->direct_accurate)
     working_size *= 2u;
   if (context->partitions > UINT64_MAX / working_size) {
     lsx_fail("Vulkan FIR buffer size overflow");
@@ -889,7 +1295,28 @@ static int create_buffers(lsx_fir_vulkan_t *context)
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
       VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != SOX_SUCCESS)
     return SOX_EOF;
-  if (context->accurate_fp32 &&
+  if (context->strict_fp32 &&
+      (create_buffer(
+       context, &context->working_scratch, working_size,
+       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+       create_buffer(
+       context, &context->twiddles,
+       (VkDeviceSize)(FIR_FFT_SIZE / 2u) *
+       4u * sizeof(float),
+       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+       create_buffer(
+       context, &context->strict_output, download_size,
+       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS))
+    return SOX_EOF;
+  if ((context->accurate_fp32 ||
+       context->split_fp32) &&
       create_buffer(
       context, &context->kernels_low, bank_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -921,13 +1348,14 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create(
   double started = monotonic_seconds();
 
   if (!vulkan || !coefficients || !taps || !channels ||
-      taps > UINT32_MAX - FIR_BLOCK_FRAMES) {
+      taps > UINT32_MAX - FIR_FAST_BLOCK_FRAMES) {
     lsx_fail("invalid Vulkan FIR configuration");
     return NULL;
   }
   if (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
-      vulkan->profile != sox_vulkan_profile_accurate) {
+      vulkan->profile != sox_vulkan_profile_accurate &&
+      vulkan->profile != sox_vulkan_profile_strict) {
     lsx_fail(
         "Vulkan FIR profile %s is not implemented for the FP32 "
         "emulated numerical family",
@@ -936,22 +1364,29 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create(
   }
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
-  context->double_precision = vulkan->shader_float64;
+  context->fft_size =
+      vulkan->profile == sox_vulkan_profile_fast ?
+      FIR_FAST_FFT_SIZE : FIR_DEFAULT_FFT_SIZE;
+  context->block_frames = context->fft_size / 2u;
+  context->double_precision = vulkan->use_float64;
+  context->strict_fp32 =
+      !context->double_precision &&
+      vulkan->profile == sox_vulkan_profile_strict;
   context->accurate_fp32 =
       !context->double_precision &&
       vulkan->profile == sox_vulkan_profile_accurate;
+  context->split_fp32 = sox_false;
   context->precise_fp64 =
       context->double_precision &&
-      vulkan->profile != sox_vulkan_profile_fast;
-  context->direct_reference =
-      context->double_precision &&
       (vulkan->profile == sox_vulkan_profile_strict ||
-       vulkan->profile == sox_vulkan_profile_reference) &&
-      taps <= FIR_DIRECT_REFERENCE_MAX_TAPS;
-  context->direct_accurate =
-      !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_accurate &&
-      taps <= FIR_DIRECT_REFERENCE_MAX_TAPS;
+       vulkan->profile == sox_vulkan_profile_reference);
+  context->authoritative_fp64_kernels =
+      context->double_precision &&
+      (vulkan->profile == sox_vulkan_profile_accurate ||
+       vulkan->profile == sox_vulkan_profile_strict);
+  context->direct_reference = sox_false;
+  context->direct_strict = sox_false;
+  context->direct_accurate = sox_false;
   context->taps = (uint32_t)taps;
   context->element_size = context->double_precision ?
       sizeof(double) : sizeof(float);
@@ -980,11 +1415,29 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create(
   lsx_report(
       "Vulkan FIR strategy: %s",
       context->direct_reference ?
+      "direct FP64 double-double product and accumulation" :
+      context->direct_strict ?
       "direct FP64 convolution + compensated accumulation" :
       context->direct_accurate ?
       "direct FP32 float-float convolution + split coefficients" :
+      context->strict_fp32 ?
+      vulkan->profile == sox_vulkan_profile_accurate ?
+      "tail double-single FFT + split twiddles + double-single "
+      "accumulation" :
+      "double-single FFT + split twiddles + double-single accumulation" :
+      context->split_fp32 ?
+      "FP32 FFT + split coefficients + FP32 accumulation" :
       context->accurate_fp32 ?
       "FP32 FFT + split coefficients + compensated accumulation" :
+      context->double_precision &&
+      vulkan->profile == sox_vulkan_profile_reference ?
+      "FP64 double-double FFT + compensated FP64 accumulation" :
+      context->authoritative_fp64_kernels &&
+      context->precise_fp64 ?
+      "FP64 FFT + authoritative coefficient spectra + compensated "
+      "FP64 accumulation" :
+      context->authoritative_fp64_kernels ?
+      "FP64 FFT + authoritative coefficient spectra + FP64 accumulation" :
       context->precise_fp64 ?
       "FP64 FFT + compensated FP64 accumulation" :
       context->double_precision ?
@@ -1056,9 +1509,12 @@ void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context)
         context->vulkan->device, context->fence, NULL);
   destroy_buffer(context, &context->download);
   destroy_buffer(context, &context->upload);
+  destroy_buffer(context, &context->strict_output);
+  destroy_buffer(context, &context->twiddles);
   destroy_buffer(context, &context->kernels);
   destroy_buffer(context, &context->kernels_low);
   destroy_buffer(context, &context->history);
+  destroy_buffer(context, &context->working_scratch);
   destroy_buffer(context, &context->working);
   free(context->output);
   free(context->previous);
@@ -1068,17 +1524,40 @@ void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context)
 
 size_t lsx_fir_vulkan_block_frames(void)
 {
-  return FIR_BLOCK_FRAMES;
+  return FIR_DEFAULT_BLOCK_FRAMES;
 }
 
-size_t lsx_fir_vulkan_prepared_stride(void)
+size_t lsx_fir_vulkan_block_frames_for(
+    lsx_vulkan_context_t const *context)
 {
-  return FIR_FFT_SIZE + 2u;
+  return context &&
+      context->profile == sox_vulkan_profile_fast ?
+      FIR_FAST_BLOCK_FRAMES :
+      FIR_DEFAULT_BLOCK_FRAMES;
+}
+
+size_t lsx_fir_vulkan_prepared_stride(
+    lsx_fir_vulkan_t const *context)
+{
+  return context && context->strict_fp32 ?
+      FIR_FFT_SIZE : FIR_FFT_SIZE + 2u;
 }
 
 lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *context)
 {
   return context ? &context->resident_upload[context->resident_bank_index] : NULL;
+}
+
+static uint32_t reverse_fft_index(uint32_t value)
+{
+  uint32_t reversed = 0u;
+  uint32_t bit;
+
+  for (bit = 0u; bit < 15u; ++bit) {
+    reversed = (reversed << 1u) | (value & 1u);
+    value >>= 1u;
+  }
+  return reversed;
 }
 
 static void prepare_process_input(lsx_fir_vulkan_t *context, double const *input, buffer_t *upload)
@@ -1099,7 +1578,26 @@ static void prepare_process_input(lsx_fir_vulkan_t *context, double const *input
           (size_t)channel * (FIR_FFT_SIZE + 2u) + frame;
       size_t second_index = first_index + FIR_BLOCK_FRAMES;
 
-      if (context->double_precision) {
+      if (context->strict_fp32) {
+        float *prepared = context->working_host;
+        uint32_t first_reversed =
+            reverse_fft_index((uint32_t)frame);
+        uint32_t second_reversed =
+            reverse_fft_index(
+                (uint32_t)frame + FIR_BLOCK_FRAMES);
+        size_t channel_base =
+            (size_t)channel * FIR_FFT_SIZE;
+
+        store_double_single(
+            prepared,
+            (channel_base + first_reversed) * 4u,
+            context->previous[previous_index]);
+        store_double_single(
+            prepared,
+            (channel_base + second_reversed) * 4u,
+            value);
+      }
+      else if (context->double_precision) {
         ((double *)context->working_host)[first_index] =
             context->previous[previous_index];
         ((double *)context->working_host)[second_index] = value;
@@ -1158,9 +1656,19 @@ int lsx_fir_vulkan_process(
       size_t index =
           (size_t)channel * FIR_BLOCK_FRAMES + frame;
 
-      context->output[frame * context->channels + channel] =
-          context->double_precision ?
-          download[index] : ((float const *)download)[index];
+      if (context->strict_fp32) {
+        float const *double_single =
+            (float const *)download + index * 2u;
+
+        context->output[
+            frame * context->channels + channel] =
+            (double)double_single[0] +
+            (double)double_single[1];
+      }
+      else
+        context->output[frame * context->channels + channel] =
+            context->double_precision ?
+            download[index] : ((float const *)download)[index];
     }
   context->current_slot =
       (context->current_slot + 1u) % context->partitions;
@@ -1174,12 +1682,17 @@ static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, 
 {
   memset(resident, 0, sizeof(*resident));
   resident->buffer =
+      context->strict_fp32 ?
+      &context->strict_output :
       context->direct_reference ||
+      context->direct_strict ||
       context->direct_accurate ?
       &context->history : &context->working;
   resident->owner = context;
   resident->offset =
+      context->strict_fp32 ? 0 :
       context->direct_reference ||
+      context->direct_strict ||
       context->direct_accurate ? 0 :
       (VkDeviceSize)FIR_BLOCK_FRAMES *
       context->element_size;
@@ -1190,11 +1703,15 @@ static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, 
   resident->valid_elements = FIR_BLOCK_FRAMES;
   resident->frame_stride_elements = 1u;
   resident->channel_stride_elements = FIR_FFT_SIZE + 2u;
+  if (context->strict_fp32)
+    resident->channel_stride_elements = FIR_BLOCK_FRAMES;
   resident->frame_offset = frame_offset;
   resident->rate = rate;
   resident->channels = context->channels;
   resident->frames_per_element = 1u;
-  resident->format = context->double_precision ?
+  resident->format = context->strict_fp32 ?
+      lsx_vulkan_resident_format_f32x2 :
+      context->double_precision ?
       lsx_vulkan_resident_format_f64 :
       lsx_vulkan_resident_format_f32;
   resident->domain = lsx_vulkan_resident_domain_sox_sample;

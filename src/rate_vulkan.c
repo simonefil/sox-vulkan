@@ -11,10 +11,13 @@
 
 #include "rate_select_f64_spv.inc"
 #include "rate_select_f32_spv.inc"
+#include "rate_select_strict_f32_spv.inc"
 #include "rate_prepare_f64_spv.inc"
 #include "rate_prepare_f32_spv.inc"
+#include "rate_prepare_strict_f32_spv.inc"
 #include "rate_stream_append_f64_spv.inc"
 #include "rate_stream_append_f32_spv.inc"
+#include "rate_stream_append_strict_f32_spv.inc"
 
 #define RATE_SELECT_BINDINGS 2u
 #define RATE_SELECT_LOCAL_SIZE 128u
@@ -104,6 +107,7 @@ struct lsx_rate_vulkan {
   uint32_t channels;
   uint32_t decimation_phase;
   sox_bool double_precision;
+  sox_bool strict_fp32;
 };
 
 static int vk_result(VkResult result, char const *operation)
@@ -114,15 +118,25 @@ static int vk_result(VkResult result, char const *operation)
 static size_t resident_sample_size(
     lsx_rate_vulkan_t const *context)
 {
-  return context->double_precision ? sizeof(double) : sizeof(float);
+  return context->strict_fp32 ?
+      2u * sizeof(float) :
+      context->double_precision ? sizeof(double) : sizeof(float);
 }
 
 static lsx_vulkan_resident_format_t resident_format(
     lsx_rate_vulkan_t const *context)
 {
-  return context->double_precision ?
+  return context->strict_fp32 ?
+      lsx_vulkan_resident_format_f32x2 :
+      context->double_precision ?
       lsx_vulkan_resident_format_f64 :
       lsx_vulkan_resident_format_f32;
+}
+
+lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(
+    lsx_rate_vulkan_t const *context)
+{
+  return resident_format(context);
 }
 
 static int create_resident_output(lsx_rate_vulkan_t *context)
@@ -191,6 +205,12 @@ static int create_resident_output(lsx_rate_vulkan_t *context)
       sizeof(rate_select_f64_spv),
       context->resident_pipeline_layout,
       &context->resident_pipeline) :
+      context->strict_fp32 ?
+      lsx_vulkan_create_compute_pipeline(
+      context->vulkan, rate_select_strict_f32_spv,
+      sizeof(rate_select_strict_f32_spv),
+      context->resident_pipeline_layout,
+      &context->resident_pipeline) :
       lsx_vulkan_create_compute_pipeline(
       context->vulkan, rate_select_f32_spv,
       sizeof(rate_select_f32_spv),
@@ -243,7 +263,8 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
   VkDescriptorSetLayout layouts[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkCommandBufferAllocateInfo command_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   VkDeviceSize previous_size =
-      (VkDeviceSize)lsx_fir_vulkan_block_frames() *
+      (VkDeviceSize)lsx_fir_vulkan_block_frames_for(
+      context->vulkan) *
       context->channels * resident_sample_size(context);
   uint32_t index;
 
@@ -267,6 +288,8 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->prepare_pipeline_layout), "vkCreatePipelineLayout rate prepare") != SOX_SUCCESS ||
       (context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_f64_spv, sizeof(rate_prepare_f64_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
+       context->strict_fp32 ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_strict_f32_spv, sizeof(rate_prepare_strict_f32_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_f32_spv, sizeof(rate_prepare_f32_spv), context->prepare_pipeline_layout, &context->prepare_pipeline)) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
@@ -291,7 +314,8 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
 lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, size_t taps, size_t post_peak, uint32_t up_factor, uint32_t down_factor, uint32_t channels)
 {
   lsx_rate_vulkan_t *context;
-  size_t block_frames = lsx_fir_vulkan_block_frames();
+  size_t block_frames =
+      lsx_fir_vulkan_block_frames_for(vulkan);
   size_t output_capacity;
 
   if (!vulkan || !coefficients || !taps || post_peak >= taps || !up_factor || !down_factor || !channels || block_frames % up_factor) {
@@ -300,7 +324,10 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double c
   }
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
-  context->double_precision = vulkan->shader_float64;
+  context->double_precision = vulkan->use_float64;
+  context->strict_fp32 =
+      !context->double_precision &&
+      vulkan->profile == sox_vulkan_profile_strict;
   context->input_frames = block_frames / up_factor;
   context->skip_frames = taps - 1u - post_peak / up_factor * up_factor;
   context->up_factor = up_factor;
@@ -393,7 +420,8 @@ size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context)
 static void prepare_stage_input(
     lsx_rate_vulkan_t *context, double const *input)
 {
-  size_t block_frames = lsx_fir_vulkan_block_frames();
+  size_t block_frames =
+      lsx_fir_vulkan_block_frames_for(context->vulkan);
   size_t input_frame;
   size_t channel;
 
@@ -413,7 +441,8 @@ static void prepare_stage_input(
 
 int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, double const **output, size_t *output_frames)
 {
-  size_t block_frames = lsx_fir_vulkan_block_frames();
+  size_t block_frames =
+      lsx_fir_vulkan_block_frames_for(context->vulkan);
   double const *filtered;
   size_t output_frame = 0;
   size_t frame;
@@ -531,9 +560,10 @@ static int run_resident_selection(
   return SOX_SUCCESS;
 }
 
-static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *filtered, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
+static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *filtered, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, sox_bool allow_empty, lsx_vulkan_resident_buffer_t *resident)
 {
-  size_t block_frames = lsx_fir_vulkan_block_frames();
+  size_t block_frames =
+      lsx_fir_vulkan_block_frames_for(context->vulkan);
   select_parameters_t parameters;
   size_t skipped;
   size_t available;
@@ -551,9 +581,21 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
       context->down_factor - context->decimation_phase : 0u;
   output_frames = available > first ?
       1u + (available - first - 1u) / context->down_factor : 0u;
-  if (!output_frames || output_frames > context->output_capacity) {
+  if (output_frames > context->output_capacity) {
     lsx_fail("resident Vulkan rate selector produced invalid frame count %lu", (unsigned long)output_frames);
     return SOX_EOF;
+  }
+  if (!output_frames) {
+    context->decimation_phase =
+        (context->decimation_phase +
+        (uint32_t)(available % context->down_factor)) %
+        context->down_factor;
+    if (!allow_empty) {
+      lsx_fail("resident Vulkan rate selector produced invalid frame count 0");
+      return SOX_EOF;
+    }
+    memset(resident, 0, sizeof(*resident));
+    return SOX_SUCCESS;
   }
   memset(&parameters, 0, sizeof(parameters));
   parameters.output_frames = (uint32_t)output_frames;
@@ -561,7 +603,8 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   parameters.input_step = context->down_factor;
   parameters.input_channel_stride = (uint32_t)filtered->channel_stride_elements;
   parameters.channels = context->channels;
-  parameters.normalize = normalize ? 1u : 0u;
+  parameters.normalize =
+      normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   context->decimation_phase =
       (context->decimation_phase +
       (uint32_t)(available % context->down_factor)) %
@@ -607,7 +650,8 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   VkBufferMemoryBarrier input_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, 0, VK_ACCESS_SHADER_READ_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
   prepare_parameters_t parameters;
   lsx_vulkan_buffer_t *prepared;
-  size_t block_frames = lsx_fir_vulkan_block_frames();
+  size_t block_frames =
+      lsx_fir_vulkan_block_frames_for(context->vulkan);
   uint32_t index;
 
   if (!input ||
@@ -650,7 +694,9 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   parameters.input_frames = (uint32_t)context->input_frames;
   parameters.input_frame_stride = (uint32_t)input->frame_stride_elements;
   parameters.input_channel_stride = (uint32_t)input->channel_stride_elements;
-  parameters.prepared_channel_stride = (uint32_t)lsx_fir_vulkan_prepared_stride();
+  parameters.prepared_channel_stride =
+      (uint32_t)lsx_fir_vulkan_prepared_stride(
+          context->fir);
   parameters.up_factor = context->up_factor;
   parameters.channels = context->channels;
   input_barrier.srcAccessMask = input->producer_access;
@@ -692,7 +738,9 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   VkDeviceSize size;
   uint32_t index;
 
-  context->resident_stream_capacity = lsx_fir_vulkan_block_frames() + context->input_frames;
+  context->resident_stream_capacity =
+      lsx_fir_vulkan_block_frames_for(context->vulkan) +
+      context->input_frames;
   size = (VkDeviceSize)context->resident_stream_capacity *
       context->channels * resident_sample_size(context);
   if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_stream[0], size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->resident_stream[1], size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
@@ -717,6 +765,8 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->stream_append_pipeline_layout), "vkCreatePipelineLayout rate stream append") != SOX_SUCCESS ||
       (context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_f64_spv, sizeof(rate_stream_append_f64_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
+       context->strict_fp32 ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_strict_f32_spv, sizeof(rate_stream_append_strict_f32_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_f32_spv, sizeof(rate_stream_append_f32_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline)) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
@@ -887,8 +937,19 @@ int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate
   input.domain = lsx_vulkan_resident_domain_sox_sample;
   input.layout = lsx_vulkan_resident_layout_interleaved;
   input.state = state;
-  if (lsx_rate_vulkan_process_resident_input(context, &input, rate, frame_offset, state, normalize, resident) != SOX_SUCCESS)
+  if (record_resident_prepare(context, &input) != SOX_SUCCESS ||
+      lsx_fir_vulkan_process_prepared_resident(
+      context->fir, rate * context->down_factor, 0, state,
+      resident) != SOX_SUCCESS)
     return SOX_EOF;
+  {
+    lsx_vulkan_resident_buffer_t filtered = *resident;
+
+    if (finish_resident_process(
+        context, &filtered, rate, frame_offset, state,
+        normalize, sox_true, resident) != SOX_SUCCESS)
+      return SOX_EOF;
+  }
   remaining = context->resident_stream_occupancy - context->input_frames;
   if (remaining) {
     command = context->resident_stream_commands[context->resident_stream_command_index];
@@ -909,7 +970,7 @@ int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate
     context->resident_stream_index ^= 1u;
   }
   context->resident_stream_occupancy = remaining;
-  *produced = sox_true;
+  *produced = resident->valid_elements ? sox_true : sox_false;
   return SOX_SUCCESS;
 }
 
@@ -995,7 +1056,9 @@ int lsx_rate_vulkan_process_resident_input(lsx_rate_vulkan_t *context, lsx_vulka
     return SOX_EOF;
   if (lsx_fir_vulkan_process_prepared_resident(context->fir, rate * context->down_factor, 0, state, &filtered) != SOX_SUCCESS)
     return SOX_EOF;
-  return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, resident);
+  return finish_resident_process(
+      context, &filtered, rate, frame_offset, state,
+      normalize, sox_false, resident);
 }
 
 int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
@@ -1009,5 +1072,7 @@ int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *i
     lsx_fail("resident Vulkan rate FIR failed");
     return SOX_EOF;
   }
-  return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, resident);
+  return finish_resident_process(
+      context, &filtered, rate, frame_offset, state,
+      normalize, sox_false, resident);
 }

@@ -1,0 +1,47 @@
+/*
+ * Convert a resident double-single interleaved stream to the planar FP32
+ * layout used by the Vulkan SDM modulator.  The conversion is deliberately
+ * placed at the SDM boundary because the modulator itself is an FP32 engine.
+ *
+ * This library is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 2.1 of the License, or (at
+ * your option) any later version.
+ */
+
+#version 450
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer InputSamples {
+  vec2 input_samples[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutputSamples {
+  float output_samples[];
+};
+
+layout(push_constant) uniform Parameters {
+  uint input_frames;
+  uint output_frames;
+  uint channels;
+  uint padding;
+} parameters;
+
+void main()
+{
+  uint frame = gl_GlobalInvocationID.x;
+  uint channel = gl_GlobalInvocationID.y;
+
+  if (frame >= parameters.output_frames ||
+      channel >= parameters.channels)
+    return;
+
+  float value = 0.0;
+  if (frame < parameters.input_frames) {
+    vec2 split = input_samples[
+        frame * parameters.channels + channel];
+
+    value = split.x + split.y;
+  }
+  output_samples[channel * parameters.output_frames + frame] = value;
+}

@@ -16,6 +16,7 @@
  */
 
 #include "sox_i.h"
+#include "fifo.h"
 #include <string.h>
 
 typedef struct {
@@ -294,6 +295,7 @@ static int stop(sox_effect_t * effp)
   free(p->cepstrumWindow);
   free(p->spectrumWindow);
   free(p->samples);
+  effp->internal_chain_endpoint = NULL;
   return SOX_SUCCESS;
 }
 

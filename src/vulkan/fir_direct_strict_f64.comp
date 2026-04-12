@@ -32,28 +32,19 @@ void main()
     const uint input_base = channel * parameters.stride;
     const uint output_base = channel * parameters.stride;
     const uint position = parameters.block_frames + frame;
-    dvec2 sum = dvec2(0.0);
+    double sum = 0.0;
+    double correction = 0.0;
 
     for (uint tap = 0; tap < parameters.taps; ++tap) {
-      const double left =
-          input_samples.values[input_base + position - tap];
-      const double right = coefficients.values[tap];
-      const double product = left * right;
-      const dvec2 value = dvec2(
-          product, fma(left, right, -product));
-      const double high = sum.x + value.x;
-      const double virtual_value = high - sum.x;
-      const double low =
-          (sum.x - (high - virtual_value)) +
-          (value.x - virtual_value) +
-          sum.y + value.y;
-      const double normalized_high = high + low;
-      const double normalized_low =
-          low - (normalized_high - high);
+      const double product =
+          input_samples.values[input_base + position - tap] *
+          coefficients.values[tap];
+      const double adjusted = product - correction;
+      const double next = sum + adjusted;
 
-      sum = dvec2(normalized_high, normalized_low);
+      correction = (next - sum) - adjusted;
+      sum = next;
     }
-    output_samples.values[output_base + frame] =
-        sum.x + sum.y;
+    output_samples.values[output_base + frame] = sum;
   }
 }

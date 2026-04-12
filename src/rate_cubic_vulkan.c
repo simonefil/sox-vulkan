@@ -14,6 +14,7 @@
 
 #include "rate_cubic_f64_spv.inc"
 #include "rate_cubic_f32_spv.inc"
+#include "rate_cubic_strict_f32_spv.inc"
 
 #define RATE_CUBIC_BLOCK_FRAMES 16384u
 #define RATE_CUBIC_BINDINGS 2u
@@ -50,6 +51,7 @@ struct lsx_rate_cubic_vulkan {
   uint32_t pre_post;
   uint32_t max_output_frames;
   sox_bool double_precision;
+  sox_bool strict_fp32;
 };
 
 static int vk_result(VkResult result, char const *operation)
@@ -65,11 +67,17 @@ static int create_buffers(lsx_rate_cubic_vulkan_t *context)
   VkDeviceSize input_size =
       (VkDeviceSize)(RATE_CUBIC_BLOCK_FRAMES +
       context->pre_post) * context->parameters.channels *
-      (context->double_precision ? sizeof(double) : sizeof(float));
+      (context->strict_fp32 ?
+       2u * sizeof(float) :
+       context->double_precision ?
+       sizeof(double) : sizeof(float));
   VkDeviceSize output_size =
       (VkDeviceSize)context->max_output_frames *
       context->parameters.channels *
-      (context->double_precision ? sizeof(double) : sizeof(float));
+      (context->strict_fp32 ?
+       2u * sizeof(float) :
+       context->double_precision ?
+       sizeof(double) : sizeof(float));
 
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->input, input_size,
@@ -147,6 +155,11 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
       lsx_vulkan_create_compute_pipeline(
           context->vulkan, rate_cubic_f64_spv,
           sizeof(rate_cubic_f64_spv),
+          context->pipeline_layout, &context->pipeline) :
+      context->strict_fp32 ?
+      lsx_vulkan_create_compute_pipeline(
+          context->vulkan, rate_cubic_strict_f32_spv,
+          sizeof(rate_cubic_strict_f32_spv),
           context->pipeline_layout, &context->pipeline) :
       lsx_vulkan_create_compute_pipeline(
           context->vulkan, rate_cubic_f32_spv,
@@ -228,7 +241,8 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
 
   if (!vulkan || (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
-      vulkan->profile != sox_vulkan_profile_accurate) || !step ||
+      vulkan->profile != sox_vulkan_profile_accurate &&
+      vulkan->profile != sox_vulkan_profile_strict) || !step ||
       pre_post < 3u || !channels)
     return NULL;
   limit = (uint64_t)RATE_CUBIC_BLOCK_FRAMES << 32;
@@ -237,7 +251,10 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
     return NULL;
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
-  context->double_precision = vulkan->shader_float64;
+  context->double_precision = vulkan->use_float64;
+  context->strict_fp32 =
+      !context->double_precision &&
+      vulkan->profile == sox_vulkan_profile_strict;
   context->step = step;
   context->pre_post = pre_post;
   context->max_output_frames = (uint32_t)maximum;
@@ -351,6 +368,16 @@ int lsx_rate_cubic_vulkan_process(
     memcpy(
         context->input.mapped, input,
         sample_count * sizeof(*input));
+  else if (context->strict_fp32)
+    for (index = 0; index < sample_count; ++index) {
+      float high = (float)input[index];
+      float *target =
+          (float *)context->input.mapped + 2u * index;
+
+      target[0] = high;
+      target[1] =
+          (float)(input[index] - (double)high);
+    }
   else
     for (index = 0; index < sample_count; ++index)
       ((float *)context->input.mapped)[index] = (float)input[index];
@@ -405,6 +432,17 @@ int lsx_rate_cubic_vulkan_process(
   sample_count = (size_t)count * context->parameters.channels;
   if (context->double_precision)
     *output = context->output.mapped;
+  else if (context->strict_fp32) {
+    for (index = 0; index < sample_count; ++index) {
+      float const *value =
+          (float const *)context->output.mapped +
+          2u * index;
+
+      context->host_output[index] =
+          (double)value[0] + (double)value[1];
+    }
+    *output = context->host_output;
+  }
   else {
     for (index = 0; index < sample_count; ++index)
       context->host_output[index] =

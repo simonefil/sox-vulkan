@@ -71,6 +71,7 @@
 #include "sdm_polyphase_spv.inc"
 #include "sdm_mash2_fsm_spv.inc"
 #include "sdm_resident_f32_spv.inc"
+#include "sdm_resident_strict_f32_spv.inc"
 #include "sdm_specialized_stream_f64_spv.inc"
 
 enum {
@@ -203,6 +204,7 @@ struct lsx_sdm_vulkan {
   uint32_t resident_pending_frames;
   uint32_t resident_append_bank_index;
   uint32_t resident_append_pending;
+  sox_bool resident_strict_fp32;
   uint32_t specialized_pending_frames;
   uint32_t specialized_stream_index;
   sox_bool specialized_final;
@@ -620,7 +622,9 @@ static int create_descriptors_and_pipelines(
   return SOX_SUCCESS;
 }
 
-static int create_resident_pipeline(lsx_sdm_vulkan_t *context)
+static int create_resident_pipeline(
+    lsx_sdm_vulkan_t *context,
+    lsx_vulkan_resident_format_t input_format)
 {
   VkDescriptorSetLayoutBinding bindings[SDM_VULKAN_RESIDENT_BINDINGS];
   VkDescriptorSetLayoutCreateInfo descriptor_info = {
@@ -643,13 +647,23 @@ static int create_resident_pipeline(lsx_sdm_vulkan_t *context)
     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO
   };
   uint32_t index;
+  VkDeviceSize input_sample_size;
 
+  if (input_format != lsx_vulkan_resident_format_f32 &&
+      input_format != lsx_vulkan_resident_format_f32x2)
+    return SOX_EOF;
   if (context->resident_pipeline)
-    return SOX_SUCCESS;
+    return context->resident_strict_fp32 ==
+        (input_format == lsx_vulkan_resident_format_f32x2) ?
+        SOX_SUCCESS : SOX_EOF;
+  context->resident_strict_fp32 =
+      input_format == lsx_vulkan_resident_format_f32x2;
+  input_sample_size = context->resident_strict_fp32 ?
+      2u * sizeof(float) : sizeof(float);
   if (lsx_vulkan_buffer_create(
       context->vulkan, &context->resident_input,
       (VkDeviceSize)context->input_frames *
-      context->channels * sizeof(float),
+      context->channels * input_sample_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
@@ -677,7 +691,12 @@ static int create_resident_pipeline(lsx_sdm_vulkan_t *context)
       &context->resident_pipeline_layout),
       "vkCreatePipelineLayout resident DSD") != SOX_SUCCESS ||
       create_pipeline(
-      context, sdm_vulkan_resident_spv,
+      context,
+      context->resident_strict_fp32 ?
+      sdm_vulkan_resident_strict_f32_spv :
+      sdm_vulkan_resident_spv,
+      context->resident_strict_fp32 ?
+      sdm_vulkan_resident_strict_f32_spv_size :
       sdm_vulkan_resident_spv_size,
       context->resident_pipeline_layout,
       &context->resident_pipeline) != SOX_SUCCESS)
@@ -741,7 +760,7 @@ static int create_specialized_stream_pipeline(
 
   if (context->specialized_stream_pipeline)
     return SOX_SUCCESS;
-  if (!context->vulkan->shader_float64) {
+  if (!context->vulkan->use_float64) {
     lsx_fail(
         "specialized resident Vulkan SDM input requires shaderFloat64");
     return SOX_EOF;
@@ -1487,8 +1506,10 @@ static int append_resident_input(
     VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
     0, VK_ACCESS_TRANSFER_READ_BIT
   };
+  VkDeviceSize sample_size = context->resident_strict_fp32 ?
+      2u * sizeof(float) : sizeof(float);
   VkDeviceSize frame_size =
-      (VkDeviceSize)context->channels * sizeof(float);
+      (VkDeviceSize)context->channels * sample_size;
   VkBufferCopy copy = {
     input->offset + (VkDeviceSize)source_frame * frame_size,
     (VkDeviceSize)context->resident_pending_frames * frame_size,
@@ -2442,8 +2463,7 @@ static int process_resident_pending(
   context->mash_parameters.sample_count = context->output_frames;
   context->mash_parameters.block_count = context->block_count;
   context->mash_parameters.scan_storage_count = context->scan_count;
-  if (!context->scan_count ||
-      create_resident_pipeline(context) != SOX_SUCCESS)
+  if (!context->scan_count || !context->resident_pipeline)
     return SOX_EOF;
   if (record_resident_and_run(context, input_frames) != SOX_SUCCESS)
     return SOX_EOF;
@@ -2474,7 +2494,8 @@ int lsx_sdm_vulkan_process_resident(
       lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS)
     return SOX_EOF;
   output_rate = (sox_rate_t)context->dsd_factor * 44100.;
-  if (input->format != lsx_vulkan_resident_format_f32 ||
+  if ((input->format != lsx_vulkan_resident_format_f32 &&
+       input->format != lsx_vulkan_resident_format_f32x2) ||
       input->domain != lsx_vulkan_resident_domain_normalized ||
       input->layout != lsx_vulkan_resident_layout_interleaved ||
       input->frames_per_element != 1u ||
@@ -2489,7 +2510,8 @@ int lsx_sdm_vulkan_process_resident(
     lsx_fail("unsupported resident Vulkan DSD input");
     return SOX_EOF;
   }
-  if (create_resident_pipeline(context) != SOX_SUCCESS)
+  if (create_resident_pipeline(
+      context, input->format) != SOX_SUCCESS)
     return SOX_EOF;
   started = monotonic_seconds();
   *output_ready = sox_false;

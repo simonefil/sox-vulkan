@@ -32,13 +32,14 @@ typedef dft_filter_priv_t priv_t;
 #if HAVE_VULKAN
 static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced);
 static int drain_vulkan_resident_producer(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done);
+static int consume_vulkan_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active);
 static int transform_vulkan_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *active);
 static int drain_transform_vulkan_resident(sox_effect_t *effp, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *done);
 
 static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
   flow_vulkan_resident_producer,
   drain_vulkan_resident_producer,
-  NULL,
+  consume_vulkan_resident,
   transform_vulkan_resident,
   drain_transform_vulkan_resident
 };
@@ -50,6 +51,28 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_producer_endpoint = {
   NULL,
   NULL
 };
+
+static int ensure_vulkan_fusion(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  double *taps;
+  int num_taps;
+  int post_peak;
+
+  if (!p->vulkan_fusion_pending)
+    return SOX_SUCCESS;
+  taps = lsx_memdup(
+      p->vulkan_source_taps,
+      (size_t)p->vulkan_source_num_taps *
+      sizeof(*p->vulkan_source_taps));
+  num_taps = p->vulkan_source_num_taps;
+  post_peak = p->vulkan_source_post_peak;
+  if (lsx_dft_filter_restart_vulkan(
+      effp, taps, num_taps, post_peak) != SOX_SUCCESS)
+    return SOX_EOF;
+  p->vulkan_fusion_pending = sox_false;
+  return SOX_SUCCESS;
+}
 #endif
 
 void lsx_set_dft_filter(dft_filter_t *f, double *h, int n, int post_peak)
@@ -84,7 +107,7 @@ static int start(sox_effect_t * effp)
     lsx_vulkan_context_t *vulkan =
         lsx_vulkan_context_get(effp->global_info);
     sox_bool enable_resident =
-        vulkan && vulkan->shader_float64 &&
+        vulkan &&
         !getenv("SOX_VULKAN_DISABLE_RESIDENT_DFT_CONSUMER");
     size_t block_samples;
 
@@ -94,9 +117,17 @@ static int start(sox_effect_t * effp)
       f->taps = NULL;
       return SOX_EOF;
     }
+    if (!p->vulkan_source_taps) {
+      p->vulkan_source_taps = lsx_memdup(
+          f->taps,
+          (size_t)f->num_taps * sizeof(*f->taps));
+      p->vulkan_source_num_taps = f->num_taps;
+      p->vulkan_source_post_peak = f->post_peak;
+    }
     p->vulkan = lsx_fir_vulkan_create(
         vulkan, f->taps, (size_t)f->num_taps,
         (uint32_t)effp->in_signal.channels);
+    p->vulkan_context = vulkan;
     if (enable_resident)
       p->vulkan_resident = lsx_rate_vulkan_create(
           vulkan, f->taps, (size_t)f->num_taps,
@@ -107,7 +138,7 @@ static int start(sox_effect_t * effp)
     if (!p->vulkan || (enable_resident && !p->vulkan_resident))
       return SOX_EOF;
     block_samples =
-        lsx_fir_vulkan_block_frames() *
+        lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
         effp->in_signal.channels;
     fifo_create(&p->vulkan_input_fifo, sizeof(double));
     fifo_create(&p->vulkan_output_fifo, sizeof(double));
@@ -165,7 +196,7 @@ static void append_vulkan_output(
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t block_samples =
-      lsx_fir_vulkan_block_frames() *
+      lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
       effp->in_signal.channels;
   size_t skip = min(p->vulkan_skip_samples, block_samples);
   size_t count = block_samples - skip;
@@ -179,7 +210,7 @@ static int process_vulkan_input(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t block_samples =
-      lsx_fir_vulkan_block_frames() *
+      lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
       effp->in_signal.channels;
 
   while ((size_t)fifo_occupancy(
@@ -203,7 +234,9 @@ static void trim_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_
   size_t skip_frames = min(p->vulkan_skip_samples / channels, resident->valid_elements);
   size_t element_size =
       resident->format == lsx_vulkan_resident_format_f32 ?
-      sizeof(float) : sizeof(double);
+      sizeof(float) :
+      resident->format == lsx_vulkan_resident_format_f32x2 ?
+      2u * sizeof(float) : sizeof(double);
 
   p->vulkan_skip_samples -= skip_frames * channels;
   resident->offset += (VkDeviceSize)skip_frames * element_size;
@@ -215,9 +248,13 @@ static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const 
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t channels = effp->in_signal.channels;
-  size_t block_samples = lsx_fir_vulkan_block_frames() * channels;
+  size_t block_samples =
+      lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
+      channels;
   size_t idone = *isamp - *isamp % channels;
 
+  if (ensure_vulkan_fusion(effp) != SOX_SUCCESS)
+    return SOX_EOF;
   memset(resident, 0, sizeof(*resident));
   *produced = sox_false;
   if (idone) {
@@ -236,6 +273,15 @@ static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const 
     if (resident->valid_elements) {
       p->samples_out += resident->valid_elements * channels;
       *produced = sox_true;
+      ++p->vulkan_resident_pending;
+      if (p->vulkan_resident_pending >=
+          lsx_rate_vulkan_resident_batch_depth(
+              p->vulkan_resident)) {
+        p->vulkan_resident_pending = 0;
+        if (lsx_fir_vulkan_flush_resident(p->vulkan) !=
+            SOX_SUCCESS)
+          return SOX_EOF;
+      }
       return SOX_SUCCESS;
     }
     if (lsx_fir_vulkan_flush_resident(p->vulkan) != SOX_SUCCESS)
@@ -248,9 +294,13 @@ static int drain_vulkan_resident_producer(sox_effect_t *effp, lsx_vulkan_residen
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t channels = effp->in_signal.channels;
-  size_t block_samples = lsx_fir_vulkan_block_frames() * channels;
+  size_t block_samples =
+      lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
+      channels;
   uint64_t remaining = p->samples_in > p->samples_out ? p->samples_in - p->samples_out : 0;
 
+  if (ensure_vulkan_fusion(effp) != SOX_SUCCESS)
+    return SOX_EOF;
   memset(resident, 0, sizeof(*resident));
   *produced = sox_false;
   *done = remaining == 0;
@@ -269,6 +319,15 @@ static int drain_vulkan_resident_producer(sox_effect_t *effp, lsx_vulkan_residen
       resident->valid_elements = min(resident->valid_elements, remaining_frames);
       p->samples_out += resident->valid_elements * channels;
       *produced = sox_true;
+      ++p->vulkan_resident_pending;
+      if (p->vulkan_resident_pending >=
+          lsx_rate_vulkan_resident_batch_depth(
+              p->vulkan_resident)) {
+        p->vulkan_resident_pending = 0;
+        if (lsx_fir_vulkan_flush_resident(p->vulkan) !=
+            SOX_SUCCESS)
+          return SOX_EOF;
+      }
       *done = p->samples_out == p->samples_in;
       if (*done)
         resident->state = lsx_vulkan_resident_final;
@@ -333,7 +392,7 @@ static int transform_vulkan_resident(
   }
   if (input->rate != effp->in_signal.rate ||
       input->channels != channels ||
-      lsx_rate_vulkan_append_resident_stream_quantized(
+      lsx_rate_vulkan_append_resident_stream(
           p->vulkan_resident, input) != SOX_SUCCESS)
     return SOX_EOF;
   p->samples_in += input->valid_elements * channels;
@@ -357,6 +416,118 @@ static int transform_vulkan_resident(
   }
   *active = lsx_rate_vulkan_resident_stream_ready(
       p->vulkan_resident);
+  return SOX_SUCCESS;
+}
+
+static size_t emit_vulkan_consumer_output(
+    fifo_t *fifo, sox_sample_t *output, size_t capacity,
+    uint64_t *clips)
+{
+  size_t count = min(capacity, (size_t)fifo_occupancy(fifo));
+  double const *samples = fifo_read(fifo, count, NULL);
+
+  if (count)
+    lsx_save_samples(output, samples, count, clips);
+  return count;
+}
+
+static int queue_vulkan_consumer_output(
+    sox_effect_t *effp,
+    lsx_vulkan_resident_buffer_t const *resident)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t samples;
+
+  if (!resident ||
+      resident->domain != lsx_vulkan_resident_domain_sox_sample ||
+      resident->channels != effp->out_signal.channels)
+    return SOX_EOF;
+  samples = resident->valid_elements * resident->channels;
+  if (resident->channels &&
+      samples / resident->channels != resident->valid_elements)
+    return SOX_EOF;
+  if (lsx_vulkan_download_resident_pcm(
+      p->vulkan_context, resident, p->vulkan_drain_block,
+      lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
+      resident->channels) !=
+      SOX_SUCCESS)
+    return SOX_EOF;
+  fifo_write(
+      &p->vulkan_output_fifo, samples, p->vulkan_drain_block);
+  return SOX_SUCCESS;
+}
+
+static int consume_vulkan_resident(
+    sox_effect_t *effp,
+    lsx_vulkan_resident_buffer_t const *input,
+    sox_bool *input_consumed, uint64_t *input_clips,
+    sox_sample_t *obuf, size_t *osamp, sox_bool *active)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t capacity;
+  size_t emitted;
+  unsigned attempt;
+
+  if (!p->vulkan_resident || !input_consumed || !input_clips ||
+      !obuf || !osamp || !active)
+    return SOX_EOF;
+  capacity = *osamp;
+  *osamp = 0;
+  *input_consumed = sox_false;
+  *input_clips = lsx_rate_vulkan_resident_stream_clips(
+      p->vulkan_resident);
+  emitted = emit_vulkan_consumer_output(
+      &p->vulkan_output_fifo, obuf, capacity, input_clips);
+  *osamp = emitted;
+  for (attempt = 0; emitted < capacity && attempt < 2u; ++attempt) {
+    lsx_vulkan_resident_buffer_t resident;
+    sox_bool produced = sox_false;
+    sox_bool consumed = sox_false;
+    int status;
+
+    if (p->vulkan_consumer_transform_active)
+      status = transform_vulkan_resident(
+          effp, NULL, &consumed, input_clips, &resident,
+          &produced, &p->vulkan_consumer_transform_active);
+    else if (input && !*input_consumed) {
+      status = transform_vulkan_resident(
+          effp, input, &consumed, input_clips, &resident,
+          &produced, &p->vulkan_consumer_transform_active);
+      *input_consumed = consumed;
+      if (consumed && input->state == lsx_vulkan_resident_final)
+        p->vulkan_consumer_final_received = sox_true;
+    }
+    else if (p->vulkan_consumer_final_received &&
+             !p->vulkan_consumer_done)
+      status = drain_transform_vulkan_resident(
+          effp, input_clips, &resident, &produced,
+          &p->vulkan_consumer_done);
+    else
+      break;
+    if (status != SOX_SUCCESS)
+      return status;
+    if (produced) {
+      size_t count;
+
+      if (queue_vulkan_consumer_output(effp, &resident) !=
+          SOX_SUCCESS)
+        return SOX_EOF;
+      count = emit_vulkan_consumer_output(
+          &p->vulkan_output_fifo, obuf + emitted,
+          capacity - emitted, input_clips);
+      emitted += count;
+      *osamp = emitted;
+    }
+    if (!produced && !consumed &&
+        !p->vulkan_consumer_transform_active &&
+        !(p->vulkan_consumer_final_received &&
+          !p->vulkan_consumer_done))
+      break;
+  }
+  *active = fifo_occupancy(&p->vulkan_output_fifo) ||
+      p->vulkan_consumer_transform_active ||
+      (p->vulkan_consumer_final_received &&
+       !p->vulkan_consumer_done);
   return SOX_SUCCESS;
 }
 
@@ -415,6 +586,11 @@ static int flow_vulkan(
       (size_t)fifo_occupancy(&p->vulkan_output_fifo));
   double const *output;
 
+  if (ensure_vulkan_fusion(effp) != SOX_SUCCESS) {
+    *isamp = *osamp = 0;
+    return SOX_EOF;
+  }
+
   odone -= odone % channels;
   output = fifo_read(&p->vulkan_output_fifo, odone, NULL);
   if (odone) {
@@ -444,7 +620,7 @@ static int drain_vulkan(
   priv_t *p = (priv_t *)effp->priv;
   static size_t isamp;
   size_t block_samples =
-      lsx_fir_vulkan_block_frames() *
+      lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
       effp->in_signal.channels;
   uint64_t remaining =
       p->samples_in > p->samples_out ?
@@ -546,9 +722,15 @@ static int stop(sox_effect_t * effp)
     fifo_delete(&p->vulkan_output_fifo);
     free(p->vulkan_drain_block);
     p->vulkan = NULL;
+    p->vulkan_context = NULL;
     p->vulkan_drain_block = NULL;
     effp->internal_chain_endpoint = NULL;
     memset(p->filter_ptr, 0, sizeof(*p->filter_ptr));
+    free(p->vulkan_source_taps);
+    p->vulkan_source_taps = NULL;
+    p->vulkan_source_num_taps = 0;
+    p->vulkan_source_post_peak = 0;
+    p->vulkan_fusion_pending = sox_false;
     return SOX_SUCCESS;
   }
 #endif
@@ -558,6 +740,31 @@ static int stop(sox_effect_t * effp)
   memset(p->filter_ptr, 0, sizeof(*p->filter_ptr));
   return SOX_SUCCESS;
 }
+
+#if HAVE_VULKAN
+int lsx_dft_filter_restart_vulkan(
+    sox_effect_t *effp, double *taps,
+    int num_taps, int post_peak)
+{
+  priv_t *p;
+
+  if (!effp || !taps || num_taps < 1 ||
+      post_peak < 0 || post_peak >= num_taps)
+    return SOX_EOF;
+  p = (priv_t *)effp->priv;
+  if (!p || !p->vulkan || stop(effp) != SOX_SUCCESS) {
+    free(taps);
+    return SOX_EOF;
+  }
+  p->vulkan_source_taps = lsx_memdup(
+      taps, (size_t)num_taps * sizeof(*taps));
+  p->vulkan_source_num_taps = num_taps;
+  p->vulkan_source_post_peak = post_peak;
+  lsx_set_dft_filter(
+      p->filter_ptr, taps, num_taps, post_peak);
+  return start(effp);
+}
+#endif
 
 sox_effect_handler_t const * lsx_dft_filter_effect_fn(void)
 {

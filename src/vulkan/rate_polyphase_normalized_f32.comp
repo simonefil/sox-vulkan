@@ -32,7 +32,7 @@ layout(push_constant) uniform Parameters {
   uint taps;
   uint channels;
   uint normalize;
-  uint padding;
+  uint symmetric_presum;
 } parameters;
 
 const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
@@ -50,11 +50,29 @@ void main()
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
   double sum = 0.0;
-  for (uint tap = 0u; tap < parameters.taps; ++tap)
-    sum += coefficients[tap * parameters.phase_count + phase] *
+  if (parameters.symmetric_presum != 0u) {
+    uint center = parameters.taps / 2u;
+
+    sum = coefficients[center] *
         input_samples[
-            (input_base + tap) *
+            (input_base + center) *
             parameters.channels + channel];
+    for (uint tap = 0u; tap < center; ++tap)
+      if (coefficients[tap] != 0.0)
+        sum += (input_samples[
+            (input_base + tap) *
+            parameters.channels + channel] +
+            input_samples[
+            (input_base + parameters.taps - 1u - tap) *
+            parameters.channels + channel]) *
+            coefficients[tap];
+  }
+  else
+    for (uint tap = 0u; tap < parameters.taps; ++tap)
+      sum += coefficients[tap * parameters.phase_count + phase] *
+          input_samples[
+              (input_base + tap) *
+              parameters.channels + channel];
   output_samples[output_frame * parameters.channels + channel] =
       float(sum * SOX_SAMPLE_SCALE);
 }

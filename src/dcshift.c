@@ -67,7 +67,6 @@ static int sox_dcshift_start(sox_effect_t * effp)
 
     dcs->limited = 0;
     dcs->totalprocessed = 0;
-
     return SOX_SUCCESS;
 }
 
@@ -136,7 +135,6 @@ static int sox_dcshift_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_s
 static int sox_dcshift_stop(sox_effect_t * effp)
 {
     priv_t * dcs = (priv_t *) effp->priv;
-
     if (dcs->limited)
     {
         lsx_warn("DCSHIFT limited %" PRIu64 " values (%d percent).",

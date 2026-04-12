@@ -16,6 +16,7 @@ typedef struct lsx_vulkan_fft lsx_vulkan_fft_t;
 lsx_vulkan_fft_t *lsx_vulkan_fft_create(
     lsx_vulkan_context_t *vulkan, lsx_vulkan_buffer_t *buffer,
     uint32_t length, uint32_t batches, sox_bool double_precision,
+    sox_bool double_double_precision,
     sox_bool real_to_complex, sox_bool normalize_inverse,
     VkFence *fence);
 void lsx_vulkan_fft_destroy(lsx_vulkan_fft_t *context);

@@ -124,6 +124,7 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     size_t const n);
 void lsx_normalize_samples(double * const dest, double const * const src,
     size_t const n);
+sox_bool lsx_sample_values_are_normalized(void);
 
 #ifdef HAVE_BYTESWAP_H
 #include <byteswap.h>

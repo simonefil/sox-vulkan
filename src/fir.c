@@ -18,12 +18,139 @@
 #include "sox_i.h"
 #include "dft_filter.h"
 
+#include <limits.h>
+
+#if HAVE_VULKAN
+#include "vulkan_engine.h"
+#endif
+
 typedef struct {
   dft_filter_priv_t  base;
   char const         * filename;
   double             * h;
   int                n;
 } priv_t;
+
+#if HAVE_VULKAN
+#define FIR_FAST_FUSION_MAX_TAPS 4194304u
+
+static double *convolve_fir(
+    double const *first, int first_count,
+    double const *second, int second_count,
+    int *result_count)
+{
+  size_t count =
+      (size_t)first_count + (size_t)second_count - 1u;
+  size_t dft_length = 1u;
+  double *first_spectrum;
+  double *second_spectrum;
+  double *result;
+  size_t index;
+  double scale;
+
+  if (count > INT_MAX)
+    return NULL;
+  while (dft_length < count) {
+    if (dft_length > (size_t)INT_MAX / 2u)
+      return NULL;
+    dft_length *= 2u;
+  }
+  first_spectrum = lsx_calloc(
+      dft_length, sizeof(*first_spectrum));
+  second_spectrum = lsx_calloc(
+      dft_length, sizeof(*second_spectrum));
+  memcpy(
+      first_spectrum, first,
+      (size_t)first_count * sizeof(*first));
+  memcpy(
+      second_spectrum, second,
+      (size_t)second_count * sizeof(*second));
+  lsx_safe_rdft((int)dft_length, 1, first_spectrum);
+  lsx_safe_rdft((int)dft_length, 1, second_spectrum);
+  first_spectrum[0] *= second_spectrum[0];
+  first_spectrum[1] *= second_spectrum[1];
+  for (index = 2u; index < dft_length; index += 2u) {
+    double real =
+        first_spectrum[index] * second_spectrum[index] -
+        first_spectrum[index + 1u] *
+        second_spectrum[index + 1u];
+    double imaginary =
+        first_spectrum[index] *
+        second_spectrum[index + 1u] +
+        first_spectrum[index + 1u] *
+        second_spectrum[index];
+
+    first_spectrum[index] = real;
+    first_spectrum[index + 1u] = imaginary;
+  }
+  lsx_safe_rdft((int)dft_length, -1, first_spectrum);
+  result = lsx_malloc(count * sizeof(*result));
+  scale = 2.0 / (double)dft_length;
+  for (index = 0; index < count; ++index)
+    result[index] = first_spectrum[index] * scale;
+  free(second_spectrum);
+  free(first_spectrum);
+  *result_count = (int)count;
+  return result;
+}
+
+int lsx_fir_vulkan_try_fuse(
+    sox_effect_t *first, sox_effect_t const *second)
+{
+  priv_t *first_private;
+  priv_t const *second_private;
+  dft_filter_priv_t *first_base;
+  dft_filter_priv_t const *second_base;
+  double *combined;
+  int first_count;
+  int second_count;
+  int combined_count;
+  int combined_post_peak;
+
+  if (!first || !second ||
+      sox_globals.vulkan_profile != sox_vulkan_profile_fast ||
+      strcmp(first->handler.name, "fir") ||
+      strcmp(second->handler.name, "fir") ||
+      first->in_signal.rate != second->in_signal.rate ||
+      first->in_signal.channels != second->in_signal.channels)
+    return 0;
+  first_private = (priv_t *)first->priv;
+  second_private = (priv_t const *)second->priv;
+  first_base = &first_private->base;
+  second_base = &second_private->base;
+  if (!first_base->vulkan_source_taps ||
+      !second_base->vulkan_source_taps ||
+      first_base->vulkan_context->shader_float64)
+    return 0;
+  first_count = first_base->vulkan_source_num_taps;
+  second_count = second_base->vulkan_source_num_taps;
+  if ((size_t)first_count + (size_t)second_count - 1u >
+      FIR_FAST_FUSION_MAX_TAPS)
+    return 0;
+  combined = convolve_fir(
+      first_base->vulkan_source_taps, first_count,
+      second_base->vulkan_source_taps, second_count,
+      &combined_count);
+  if (!combined) {
+    lsx_fail("Vulkan FAST FIR fusion exceeds supported length");
+    return -1;
+  }
+  combined_post_peak =
+      first_base->vulkan_source_post_peak +
+      second_base->vulkan_source_post_peak;
+  free(first_base->vulkan_source_taps);
+  first_base->vulkan_source_taps = combined;
+  first_base->vulkan_source_num_taps = combined_count;
+  first_base->vulkan_source_post_peak = combined_post_peak;
+  first_base->vulkan_fusion_pending = sox_true;
+  lsx_report(
+      "Vulkan FIR fusion: %d + %d taps -> %d taps, "
+      "post-peak %d",
+      first_count, second_count,
+      combined_count, combined_post_peak);
+  return 1;
+}
+#endif
 
 static int create(sox_effect_t * effp, int argc, char * * argv)
 {

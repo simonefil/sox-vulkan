@@ -263,6 +263,7 @@ static int sox_noisered_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_
     size_t whole_window = (ncopy + data->bufdata == WINDOWSIZE);
     int oldbuf = data->bufdata;
     size_t i;
+    int status = SOX_SUCCESS;
 
     /* FIXME: Make this automatic for all effects */
     assert(effp->in_signal.channels == effp->out_signal.channels);
@@ -285,10 +286,15 @@ static int sox_noisered_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_
             chan->window[oldbuf + j] =
                 SOX_SAMPLE_TO_FLOAT_32BIT(ibuf[i + tracks * j], effp->clips);
 
-        if (!whole_window)
-            continue;
-        else
-            process_window(effp, data, (unsigned) i, (unsigned) tracks, obuf, (unsigned) (oldbuf + ncopy));
+    }
+
+    if (whole_window) {
+        for (i = 0; i < tracks; ++i)
+            if (process_window(
+                effp, data, (unsigned)i, (unsigned)tracks,
+                obuf, (unsigned)(oldbuf + ncopy)) ==
+                SOX_EOF)
+                status = SOX_EOF;
     }
 
     *isamp = tracks*ncopy;
@@ -297,7 +303,7 @@ static int sox_noisered_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_
     else
         *osamp = 0;
 
-    return SOX_SUCCESS;
+    return status;
 }
 
 /*
@@ -310,7 +316,9 @@ static int sox_noisered_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *o
     unsigned i;
     unsigned tracks = effp->in_signal.channels;
     for (i = 0; i < tracks; i ++)
-        *osamp = process_window(effp, data, i, tracks, obuf, (unsigned) data->bufdata);
+        *osamp = process_window(
+            effp, data, i, tracks, obuf,
+            (unsigned)data->bufdata);
 
     /* FIXME: This is very picky.  osamp needs to be big enough to get all
      * remaining data or it will be discarded.

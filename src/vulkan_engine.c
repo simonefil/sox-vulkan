@@ -186,6 +186,8 @@ static VkDeviceSize resident_element_size(
   switch (format) {
     case lsx_vulkan_resident_format_f32:
       return sizeof(float);
+    case lsx_vulkan_resident_format_f32x2:
+      return 2u * sizeof(float);
     case lsx_vulkan_resident_format_f64:
       return sizeof(double);
     case lsx_vulkan_resident_format_dsd_u32:
@@ -262,6 +264,150 @@ int lsx_vulkan_resident_buffer_validate(
     lsx_fail("non-empty Vulkan resident buffer marked empty");
     return SOX_EOF;
   }
+  return SOX_SUCCESS;
+}
+
+static int create_resident_download(
+    lsx_vulkan_context_t *context, VkDeviceSize size)
+{
+  VkCommandBufferAllocateInfo command_info = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO
+  };
+  VkFenceCreateInfo fence_info = {
+    VK_STRUCTURE_TYPE_FENCE_CREATE_INFO
+  };
+
+  if (context->resident_download.size >= size)
+    return SOX_SUCCESS;
+  if (context->resident_download.buffer)
+    lsx_vulkan_buffer_destroy(
+        context, &context->resident_download);
+  if (lsx_vulkan_buffer_create(
+      context, &context->resident_download, size,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+      VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (!context->resident_download_command) {
+    command_info.commandPool = context->command_pool;
+    command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_info.commandBufferCount = 1;
+    if (lsx_vulkan_result(vkAllocateCommandBuffers(
+        context->device, &command_info,
+        &context->resident_download_command),
+        "vkAllocateCommandBuffers resident output") != SOX_SUCCESS ||
+        lsx_vulkan_result(vkCreateFence(
+        context->device, &fence_info, NULL,
+        &context->resident_download_fence),
+        "vkCreateFence resident output") != SOX_SUCCESS)
+      return SOX_EOF;
+  }
+  return SOX_SUCCESS;
+}
+
+int lsx_vulkan_download_resident_pcm(
+    lsx_vulkan_context_t *context,
+    lsx_vulkan_resident_buffer_t const *resident,
+    double *output, size_t output_samples)
+{
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkBufferMemoryBarrier source_barrier = {
+    VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER
+  };
+  VkMemoryBarrier host_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT
+  };
+  VkBufferCopy copy;
+  VkDeviceSize size;
+  size_t required_samples;
+  size_t element_size;
+  size_t frame;
+  uint32_t channel;
+
+  if (!context || !resident || !output ||
+      lsx_vulkan_resident_buffer_validate(resident) != SOX_SUCCESS ||
+      resident->domain == lsx_vulkan_resident_domain_dsd)
+    return SOX_EOF;
+  required_samples = resident->valid_elements * resident->channels;
+  if (resident->channels &&
+      required_samples / resident->channels != resident->valid_elements)
+    return SOX_EOF;
+  if (output_samples < required_samples)
+    return SOX_EOF;
+  size = lsx_vulkan_resident_buffer_size(resident);
+  if (create_resident_download(context, size) != SOX_SUCCESS)
+    return SOX_EOF;
+  source_barrier.srcAccessMask = resident->producer_access;
+  source_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  source_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  source_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  source_barrier.buffer = resident->buffer->buffer;
+  source_barrier.offset = resident->offset;
+  source_barrier.size = size;
+  copy.srcOffset = resident->offset;
+  copy.dstOffset = 0;
+  copy.size = size;
+  if (lsx_vulkan_result(vkResetCommandBuffer(
+      context->resident_download_command, 0),
+      "vkResetCommandBuffer resident output") != SOX_SUCCESS ||
+      lsx_vulkan_result(vkBeginCommandBuffer(
+      context->resident_download_command, &begin),
+      "vkBeginCommandBuffer resident output") != SOX_SUCCESS)
+    return SOX_EOF;
+  lsx_vulkan_label_begin(
+      context, context->resident_download_command,
+      "Resident PCM final output download");
+  vkCmdPipelineBarrier(
+      context->resident_download_command,
+      resident->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      0, 0, NULL, 1, &source_barrier, 0, NULL);
+  vkCmdCopyBuffer(
+      context->resident_download_command,
+      resident->buffer->buffer, context->resident_download.buffer,
+      1, &copy);
+  vkCmdPipelineBarrier(
+      context->resident_download_command,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+      0, 1, &host_barrier, 0, NULL, 0, NULL);
+  lsx_vulkan_label_end(
+      context, context->resident_download_command);
+  if (lsx_vulkan_result(vkEndCommandBuffer(
+      context->resident_download_command),
+      "vkEndCommandBuffer resident output") != SOX_SUCCESS ||
+      lsx_vulkan_submit_and_wait(
+      context, context->resident_download_command,
+      context->resident_download_fence,
+      lsx_vulkan_wait_resident_output) != SOX_SUCCESS)
+    return SOX_EOF;
+  element_size = resident->format == lsx_vulkan_resident_format_f32x2 ?
+      2u * sizeof(float) :
+      resident->format == lsx_vulkan_resident_format_f64 ?
+      sizeof(double) : sizeof(float);
+  for (frame = 0; frame < resident->valid_elements; ++frame)
+    for (channel = 0; channel < resident->channels; ++channel) {
+      size_t source = frame * resident->frame_stride_elements +
+          channel * resident->channel_stride_elements;
+      double value;
+
+      if (resident->format == lsx_vulkan_resident_format_f32x2) {
+        float const *pair = (float const *)
+            ((char const *)context->resident_download.mapped +
+            source * element_size);
+        value = (double)pair[0] + (double)pair[1];
+      }
+      else if (resident->format == lsx_vulkan_resident_format_f64)
+        value = ((double const *)
+            context->resident_download.mapped)[source];
+      else
+        value = ((float const *)
+            context->resident_download.mapped)[source];
+      output[frame * resident->channels + channel] = value;
+    }
   return SOX_SUCCESS;
 }
 
@@ -581,7 +727,11 @@ static lsx_vulkan_context_t *create_context(void)
   context->shader_float64 =
       available_features.shaderFloat64 ? sox_true : sox_false;
   context->profile = sox_globals.vulkan_profile;
-  context->numerical_family = context->shader_float64 ?
+  context->use_float64 =
+      context->shader_float64 &&
+      (context->profile == sox_vulkan_profile_strict ||
+       context->profile == sox_vulkan_profile_reference);
+  context->numerical_family = context->use_float64 ?
       lsx_vulkan_numerical_family_fp64 :
       lsx_vulkan_numerical_family_fp32_emulated;
   lsx_report(
@@ -602,14 +752,6 @@ static lsx_vulkan_context_t *create_context(void)
       !context->shader_float64) {
     lsx_fail(
         "Vulkan reference profile requires hardware shaderFloat64");
-    goto error;
-  }
-  if (!context->shader_float64 &&
-      context->profile == sox_vulkan_profile_strict) {
-    lsx_fail(
-        "Vulkan profile %s is not implemented for the FP32 emulated "
-        "numerical family",
-        lsx_vulkan_profile_name(context->profile));
     goto error;
   }
   device_info.pEnabledFeatures = &enabled_features;
@@ -682,6 +824,12 @@ void lsx_vulkan_context_destroy(void *opaque_context)
     return;
   if (context->device)
     vkDeviceWaitIdle(context->device);
+  if (context->device && context->resident_download_fence)
+    vkDestroyFence(
+        context->device, context->resident_download_fence, NULL);
+  if (context->device)
+    lsx_vulkan_buffer_destroy(
+        context, &context->resident_download);
   if (context->submit_count || context->host_wait_count)
     lsx_report(
         "Vulkan core execution: %llu submits, %llu host waits",
@@ -690,7 +838,7 @@ void lsx_vulkan_context_destroy(void *opaque_context)
   if (context->submit_count)
     lsx_report("Vulkan submit batch histogram: 1=%llu 2=%llu 3=%llu 4=%llu 5=%llu 6=%llu 7=%llu 8=%llu 9+=%llu", (unsigned long long)context->submit_batch_counts[1], (unsigned long long)context->submit_batch_counts[2], (unsigned long long)context->submit_batch_counts[3], (unsigned long long)context->submit_batch_counts[4], (unsigned long long)context->submit_batch_counts[5], (unsigned long long)context->submit_batch_counts[6], (unsigned long long)context->submit_batch_counts[7], (unsigned long long)context->submit_batch_counts[8], (unsigned long long)context->submit_batch_counts[9]);
   if (context->host_wait_count)
-    lsx_report("Vulkan wait reasons: fir_setup=%llu fir_sync=%llu fir_resident_flush=%llu rate_sync=%llu sdm_setup=%llu sdm_sync=%llu sdm_resident_flush=%llu packed_output=%llu", (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_rate_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_packed_output]);
+    lsx_report("Vulkan wait reasons: fir_setup=%llu fir_sync=%llu fir_resident_flush=%llu rate_sync=%llu sdm_setup=%llu sdm_sync=%llu sdm_resident_flush=%llu packed_output=%llu resident_output=%llu", (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_rate_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_packed_output], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_resident_output]);
   if (context->device && context->pipeline_cache)
     vkDestroyPipelineCache(
         context->device, context->pipeline_cache, NULL);

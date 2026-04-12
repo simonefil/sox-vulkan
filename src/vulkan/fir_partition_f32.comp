@@ -43,8 +43,10 @@ void main()
           parameters.spectrum_bins + bin];
 
       sum += vec2(
-          value.x * coefficient.x - value.y * coefficient.y,
-          value.x * coefficient.y + value.y * coefficient.x);
+          value.x * coefficient.x -
+          value.y * coefficient.y,
+          value.x * coefficient.y +
+          value.y * coefficient.x);
     }
     working.values[index] = sum;
   }

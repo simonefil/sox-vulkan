@@ -146,9 +146,11 @@ static int start(sox_effect_t * effp)
   p->shift = 1;
   parse(effp, 0, effp->in_signal.rate); /* Re-parse now rate is known */
   p->in_pos = p->bends_pos = 0;
-  for (i = 0; i < p->nbends; ++i)
-    if (p->bends[i].duration)
+  for (i = 0; i < p->nbends; ++i) {
+    if (p->bends[i].duration) {
       return SOX_SUCCESS;
+    }
+  }
   return SOX_EFF_NULL;
 }
 
@@ -198,7 +200,6 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
       }
 
       p->gRover = inFifoLatency;
-
       /* do windowing and re,im interleave */
       for (k = 0; k < p->fftFrameSize; k++) {
         window = -.5 * cos(2 * M_PI * k / (double) p->fftFrameSize) + .5;
@@ -297,10 +298,11 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
 static int stop(sox_effect_t * effp)
 {
   priv_t *p = (priv_t *) effp->priv;
+  unsigned pending = p->nbends - p->bends_pos;
 
-  if (p->bends_pos != p->nbends)
+  if (pending)
     lsx_warn("Input audio too short; bends not applied: %u",
-        p->nbends - p->bends_pos);
+        pending);
   return SOX_SUCCESS;
 }
 

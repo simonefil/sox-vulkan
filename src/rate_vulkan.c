@@ -12,12 +12,15 @@
 #include "rate_select_f64_spv.inc"
 #include "rate_select_f32_spv.inc"
 #include "rate_select_strict_f32_spv.inc"
+#include "rate_select_reference_dd_spv.inc"
 #include "rate_prepare_f64_spv.inc"
 #include "rate_prepare_f32_spv.inc"
 #include "rate_prepare_strict_f32_spv.inc"
+#include "rate_prepare_reference_dd_spv.inc"
 #include "rate_stream_append_f64_spv.inc"
 #include "rate_stream_append_f32_spv.inc"
 #include "rate_stream_append_strict_f32_spv.inc"
+#include "rate_stream_append_reference_dd_spv.inc"
 
 #define RATE_SELECT_BINDINGS 2u
 #define RATE_SELECT_LOCAL_SIZE 128u
@@ -108,6 +111,7 @@ struct lsx_rate_vulkan {
   uint32_t decimation_phase;
   sox_bool double_precision;
   sox_bool strict_fp32;
+  sox_bool reference_dd;
 };
 
 static int vk_result(VkResult result, char const *operation)
@@ -118,7 +122,9 @@ static int vk_result(VkResult result, char const *operation)
 static size_t resident_sample_size(
     lsx_rate_vulkan_t const *context)
 {
-  return context->strict_fp32 ?
+  return context->reference_dd ?
+      2u * sizeof(double) :
+      context->strict_fp32 ?
       2u * sizeof(float) :
       context->double_precision ? sizeof(double) : sizeof(float);
 }
@@ -126,7 +132,9 @@ static size_t resident_sample_size(
 static lsx_vulkan_resident_format_t resident_format(
     lsx_rate_vulkan_t const *context)
 {
-  return context->strict_fp32 ?
+  return context->reference_dd ?
+      lsx_vulkan_resident_format_f64x2 :
+      context->strict_fp32 ?
       lsx_vulkan_resident_format_f32x2 :
       context->double_precision ?
       lsx_vulkan_resident_format_f64 :
@@ -199,7 +207,13 @@ static int create_resident_output(lsx_rate_vulkan_t *context)
       context->vulkan->device, &layout_info, NULL,
       &context->resident_pipeline_layout),
       "vkCreatePipelineLayout rate select") != SOX_SUCCESS ||
-      (context->double_precision ?
+      (context->reference_dd ?
+      lsx_vulkan_create_compute_pipeline(
+      context->vulkan, rate_select_reference_dd_spv,
+      sizeof(rate_select_reference_dd_spv),
+      context->resident_pipeline_layout,
+      &context->resident_pipeline) :
+      context->double_precision ?
       lsx_vulkan_create_compute_pipeline(
       context->vulkan, rate_select_f64_spv,
       sizeof(rate_select_f64_spv),
@@ -286,7 +300,9 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_range;
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->prepare_pipeline_layout), "vkCreatePipelineLayout rate prepare") != SOX_SUCCESS ||
-      (context->double_precision ?
+      (context->reference_dd ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_reference_dd_spv, sizeof(rate_prepare_reference_dd_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
+       context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_f64_spv, sizeof(rate_prepare_f64_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
        context->strict_fp32 ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_strict_f32_spv, sizeof(rate_prepare_strict_f32_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
@@ -311,7 +327,13 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
   return vk_result(vkAllocateCommandBuffers(context->vulkan->device, &command_info, context->prepare_command_buffers), "vkAllocateCommandBuffers rate prepare");
 }
 
-lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, size_t taps, size_t post_peak, uint32_t up_factor, uint32_t down_factor, uint32_t channels)
+static lsx_rate_vulkan_t *create_rate(
+    lsx_vulkan_context_t *vulkan,
+    double const *coefficients,
+    double const *coefficient_lows,
+    size_t taps, size_t post_peak,
+    uint32_t up_factor, uint32_t down_factor,
+    uint32_t channels)
 {
   lsx_rate_vulkan_t *context;
   size_t block_frames =
@@ -325,6 +347,9 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double c
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
   context->double_precision = vulkan->use_float64;
+  context->reference_dd =
+      context->double_precision &&
+      vulkan->profile == sox_vulkan_profile_reference;
   context->strict_fp32 =
       !context->double_precision &&
       vulkan->profile == sox_vulkan_profile_strict;
@@ -333,7 +358,12 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double c
   context->up_factor = up_factor;
   context->down_factor = down_factor;
   context->channels = channels;
-  context->fir = lsx_fir_vulkan_create(vulkan, coefficients, taps, channels);
+  context->fir = coefficient_lows ?
+      lsx_fir_vulkan_create_reference_dd(
+          vulkan, coefficients, coefficient_lows,
+          taps, channels) :
+      lsx_fir_vulkan_create(
+          vulkan, coefficients, taps, channels);
   if (!context->fir)
     goto error;
   context->stage_input = lsx_calloc(block_frames * channels, sizeof(*context->stage_input));
@@ -346,6 +376,33 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double c
 error:
   lsx_rate_vulkan_destroy(context);
   return NULL;
+}
+
+lsx_rate_vulkan_t *lsx_rate_vulkan_create(
+    lsx_vulkan_context_t *vulkan,
+    double const *coefficients, size_t taps,
+    size_t post_peak, uint32_t up_factor,
+    uint32_t down_factor, uint32_t channels)
+{
+  return create_rate(
+      vulkan, coefficients, NULL, taps, post_peak,
+      up_factor, down_factor, channels);
+}
+
+lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd(
+    lsx_vulkan_context_t *vulkan,
+    double const *coefficient_highs,
+    double const *coefficient_lows, size_t taps,
+    size_t post_peak, uint32_t up_factor,
+    uint32_t down_factor, uint32_t channels)
+{
+  if (!coefficient_lows || !vulkan ||
+      vulkan->profile != sox_vulkan_profile_reference)
+    return NULL;
+  return create_rate(
+      vulkan, coefficient_highs, coefficient_lows,
+      taps, post_peak, up_factor, down_factor,
+      channels);
 }
 
 void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
@@ -763,7 +820,9 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_range;
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->stream_append_pipeline_layout), "vkCreatePipelineLayout rate stream append") != SOX_SUCCESS ||
-      (context->double_precision ?
+      (context->reference_dd ?
+       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_reference_dd_spv, sizeof(rate_stream_append_reference_dd_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
+       context->double_precision ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_f64_spv, sizeof(rate_stream_append_f64_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
        context->strict_fp32 ?
        lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_strict_f32_spv, sizeof(rate_stream_append_strict_f32_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :

@@ -14,6 +14,12 @@
 typedef struct lsx_rate_vulkan lsx_rate_vulkan_t;
 
 lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, size_t taps, size_t post_peak, uint32_t up_factor, uint32_t down_factor, uint32_t channels);
+lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd(
+    lsx_vulkan_context_t *vulkan,
+    double const *coefficient_highs,
+    double const *coefficient_lows, size_t taps,
+    size_t post_peak, uint32_t up_factor,
+    uint32_t down_factor, uint32_t channels);
 void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context);
 size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context);
 int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, double const **output, size_t *output_frames);

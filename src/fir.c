@@ -108,7 +108,8 @@ int lsx_fir_vulkan_try_fuse(
   int combined_post_peak;
 
   if (!first || !second ||
-      sox_globals.vulkan_profile != sox_vulkan_profile_fast ||
+      (sox_globals.vulkan_profile != sox_vulkan_profile_fast &&
+       sox_globals.vulkan_profile != sox_vulkan_profile_reference) ||
       strcmp(first->handler.name, "fir") ||
       strcmp(second->handler.name, "fir") ||
       first->in_signal.rate != second->in_signal.rate ||
@@ -120,10 +121,45 @@ int lsx_fir_vulkan_try_fuse(
   second_base = &second_private->base;
   if (!first_base->vulkan_source_taps ||
       !second_base->vulkan_source_taps ||
-      first_base->vulkan_context->shader_float64)
+      (first_base->vulkan_context->shader_float64 &&
+       sox_globals.vulkan_profile != sox_vulkan_profile_reference))
     return 0;
   first_count = first_base->vulkan_source_num_taps;
   second_count = second_base->vulkan_source_num_taps;
+  if (sox_globals.vulkan_profile == sox_vulkan_profile_reference) {
+    uint32_t source_count =
+        first_base->vulkan_fusion_source_count;
+
+    if (!source_count) {
+      first_base->vulkan_fusion_sources[0] = lsx_memdup(
+          first_base->vulkan_source_taps,
+          (size_t)first_count * sizeof(double));
+      first_base->vulkan_fusion_source_taps[0] =
+          (size_t)first_count;
+      source_count = 1u;
+    }
+    if (source_count >= 8u)
+      return 0;
+    first_base->vulkan_fusion_sources[source_count] =
+        lsx_memdup(
+            second_base->vulkan_source_taps,
+            (size_t)second_count * sizeof(double));
+    first_base->vulkan_fusion_source_taps[source_count] =
+        (size_t)second_count;
+    first_base->vulkan_fusion_source_count = source_count + 1u;
+    combined_count = first_count + second_count - 1;
+    combined_post_peak =
+        first_base->vulkan_source_post_peak +
+        second_base->vulkan_source_post_peak;
+    first_base->vulkan_source_num_taps = combined_count;
+    first_base->vulkan_source_post_peak = combined_post_peak;
+    first_base->vulkan_fusion_pending = sox_true;
+    lsx_report(
+        "Vulkan REFERENCE spectral fusion queued: "
+        "%u filters, %d effective taps",
+        source_count + 1u, combined_count);
+    return 1;
+  }
   if ((size_t)first_count + (size_t)second_count - 1u >
       FIR_FAST_FUSION_MAX_TAPS)
     return 0;

@@ -1,0 +1,58 @@
+/* Gather resident FP64x2 PCM without collapsing the compensated low part. */
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer InputSamples {
+  dvec2 values[];
+} input_samples;
+
+layout(std430, binding = 1) writeonly buffer StreamSamples {
+  dvec2 values[];
+} stream_samples;
+
+layout(std430, binding = 2) buffer ClipCounter {
+  uint clipped_samples[];
+};
+
+layout(push_constant) uniform Parameters {
+  uint input_base_element;
+  uint output_first_frame;
+  uint frames;
+  uint input_frame_stride;
+  uint input_channel_stride;
+  uint channels;
+  uint quantize_sox_sample;
+  uint clip_index;
+} parameters;
+
+void main()
+{
+  const uint frame = gl_GlobalInvocationID.x;
+  const uint channel = gl_GlobalInvocationID.y;
+
+  if (frame >= parameters.frames || channel >= parameters.channels)
+    return;
+
+  const uint input_index =
+      parameters.input_base_element +
+      frame * parameters.input_frame_stride +
+      channel * parameters.input_channel_stride;
+  const uint output_index =
+      (parameters.output_first_frame + frame) *
+      parameters.channels + channel;
+  dvec2 value = input_samples.values[input_index];
+
+  if (parameters.quantize_sox_sample != 0u) {
+    const double combined = value.x + value.y;
+    const double rounded = roundEven(combined);
+
+    if (rounded < -2147483648.0 || rounded > 2147483647.0)
+      atomicAdd(clipped_samples[parameters.clip_index], 1u);
+    value = dvec2(
+        clamp(rounded, -2147483648.0, 2147483647.0), 0.0);
+  }
+  stream_samples.values[output_index] = value;
+}

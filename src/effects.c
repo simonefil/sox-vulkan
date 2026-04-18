@@ -181,7 +181,8 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
   }
 #if HAVE_VULKAN
   if (chain->length &&
-      sox_globals.vulkan_profile == sox_vulkan_profile_fast) {
+      (sox_globals.vulkan_profile == sox_vulkan_profile_fast ||
+       sox_globals.vulkan_profile == sox_vulkan_profile_reference)) {
     int fused = lsx_fir_vulkan_try_fuse(
         chain->effects[chain->length - 1u], effp);
 

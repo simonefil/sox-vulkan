@@ -1,0 +1,63 @@
+/* Prepare overlap-save input while preserving resident FP64x2 samples. */
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+#include "double_double.glsl"
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer InputSamples {
+  dvec2 values[];
+} input_samples;
+
+layout(std430, binding = 1) writeonly buffer PreparedSamples {
+  dvec2 values[];
+} prepared_samples;
+
+layout(std430, binding = 2) buffer PreviousSamples {
+  dvec2 values[];
+} previous_samples;
+
+layout(push_constant) uniform Parameters {
+  uint block_frames;
+  uint input_frames;
+  uint input_frame_stride;
+  uint input_channel_stride;
+  uint prepared_channel_stride;
+  uint up_factor;
+  uint channels;
+  uint padding;
+} parameters;
+
+void main()
+{
+  const uint frame = gl_GlobalInvocationID.x;
+  const uint channel = gl_GlobalInvocationID.y;
+
+  if (frame >= parameters.block_frames ||
+      channel >= parameters.channels)
+    return;
+
+  const uint previous_index =
+      channel * parameters.block_frames + frame;
+  const uint prepared_index =
+      channel * parameters.prepared_channel_stride + frame;
+  dvec2 value = dvec2(0.0);
+
+  if (frame % parameters.up_factor == 0u) {
+    const uint input_frame = frame / parameters.up_factor;
+
+    if (input_frame < parameters.input_frames)
+      value = multiply_dd_scalar(
+          input_samples.values[
+              input_frame * parameters.input_frame_stride +
+              channel * parameters.input_channel_stride],
+          double(parameters.up_factor));
+  }
+  prepared_samples.values[prepared_index] =
+      previous_samples.values[previous_index];
+  prepared_samples.values[
+      prepared_index + parameters.block_frames] = value;
+  previous_samples.values[previous_index] = value;
+}

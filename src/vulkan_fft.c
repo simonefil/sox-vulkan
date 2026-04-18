@@ -8,6 +8,7 @@
 
 #include "sox_i.h"
 #include "vulkan_fft.h"
+#include "vulkan_fft_dd.h"
 
 #include <glslang/Include/glslang_c_interface.h>
 #include <vkFFT.h>
@@ -20,6 +21,7 @@ struct lsx_vulkan_fft {
   uint64_t buffer_size;
   sox_bool initialized;
   sox_bool compiler_acquired;
+  void *double_double;
 };
 
 static unsigned compiler_users;
@@ -60,15 +62,31 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   if (compiler_acquire() != SOX_SUCCESS)
     goto error;
   context->compiler_acquired = sox_true;
+  if (lsx_vulkan_result(
+      vkResetFences(vulkan->device, 1, fence),
+      "vkResetFences before initializeVkFFT") != SOX_SUCCESS)
+    goto error;
+  if (double_double_precision) {
+    int dd_result = 0;
+
+    context->double_double = lsx_vulkan_fft_dd_create(
+        &vulkan->device, &vulkan->physical_device, &vulkan->queue,
+        &vulkan->command_pool, &buffer->buffer, context->buffer_size,
+        length, batches, real_to_complex ? 1 : 0,
+        normalize_inverse ? 1 : 0, fence, &dd_result);
+    if (!context->double_double) {
+      lsx_fail(
+          "double-double initializeVkFFT failed with result %d",
+          dd_result);
+      goto error;
+    }
+    return context;
+  }
   configuration.FFTdim = 1;
   configuration.size[0] = length;
   configuration.numberBatches = batches;
-  configuration.doublePrecision =
-      double_precision && !double_double_precision ? 1u : 0u;
-  configuration.quadDoubleDoublePrecisionDoubleMemory =
-      double_double_precision ? 1u : 0u;
-  configuration.useLUT =
-      !double_precision || double_double_precision ? 1 : 0;
+  configuration.doublePrecision = double_precision ? 1u : 0u;
+  configuration.useLUT = !double_precision ? 1 : 0;
   configuration.performR2C = real_to_complex ? 1u : 0u;
   configuration.normalize = normalize_inverse ? 1u : 0u;
   configuration.device = &vulkan->device;
@@ -79,10 +97,6 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   configuration.buffer = &buffer->buffer;
   configuration.bufferSize = &context->buffer_size;
   configuration.isCompilerInitialized = 1;
-  if (lsx_vulkan_result(
-      vkResetFences(vulkan->device, 1, fence),
-      "vkResetFences before initializeVkFFT") != SOX_SUCCESS)
-    goto error;
   result = initializeVkFFT(&context->application, configuration);
   if (result != VKFFT_SUCCESS) {
     lsx_fail("initializeVkFFT failed with result %d", (int)result);
@@ -100,6 +114,8 @@ void lsx_vulkan_fft_destroy(lsx_vulkan_fft_t *context)
 {
   if (!context)
     return;
+  if (context->double_double)
+    lsx_vulkan_fft_dd_destroy(context->double_double);
   if (context->initialized)
     deleteVkFFT(&context->application);
   if (context->compiler_acquired)
@@ -114,7 +130,20 @@ int lsx_vulkan_fft_append(
   VkFFTLaunchParams launch = VKFFT_ZERO_INIT;
   VkFFTResult result;
 
-  if (!context || !context->initialized || !command_buffer)
+  if (!context || !command_buffer)
+    return SOX_EOF;
+  if (context->double_double) {
+    result = (VkFFTResult)lsx_vulkan_fft_dd_append(
+        context->double_double, command_buffer, inverse ? 1 : 0);
+    if (result != VKFFT_SUCCESS) {
+      lsx_fail(
+          "double-double VkFFT %s command recording failed with "
+          "result %d", inverse ? "inverse" : "forward", (int)result);
+      return SOX_EOF;
+    }
+    return SOX_SUCCESS;
+  }
+  if (!context->initialized)
     return SOX_EOF;
   launch.commandBuffer = &command_buffer;
   result = VkFFTAppend(

@@ -56,19 +56,37 @@ static int ensure_vulkan_fusion(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
   double *taps;
+  double *tap_lows = NULL;
+  size_t fused_taps = 0;
   int num_taps;
   int post_peak;
 
   if (!p->vulkan_fusion_pending)
     return SOX_SUCCESS;
-  taps = lsx_memdup(
-      p->vulkan_source_taps,
-      (size_t)p->vulkan_source_num_taps *
-      sizeof(*p->vulkan_source_taps));
-  num_taps = p->vulkan_source_num_taps;
+  if (p->vulkan_fusion_source_count) {
+    if (lsx_fir_vulkan_fuse_reference_coefficients(
+        p->vulkan_context,
+        (double const *const *)p->vulkan_fusion_sources,
+        p->vulkan_fusion_source_taps,
+        p->vulkan_fusion_source_count,
+        &taps, &tap_lows, &fused_taps) != SOX_SUCCESS ||
+        fused_taps > INT_MAX)
+      return SOX_EOF;
+    num_taps = (int)fused_taps;
+  }
+  else {
+    taps = lsx_memdup(
+        p->vulkan_source_taps,
+        (size_t)p->vulkan_source_num_taps *
+        sizeof(*p->vulkan_source_taps));
+    num_taps = p->vulkan_source_num_taps;
+  }
   post_peak = p->vulkan_source_post_peak;
-  if (lsx_dft_filter_restart_vulkan(
-      effp, taps, num_taps, post_peak) != SOX_SUCCESS)
+  if ((tap_lows ?
+      lsx_dft_filter_restart_vulkan_reference_dd(
+          effp, taps, tap_lows, num_taps, post_peak) :
+      lsx_dft_filter_restart_vulkan(
+          effp, taps, num_taps, post_peak)) != SOX_SUCCESS)
     return SOX_EOF;
   p->vulkan_fusion_pending = sox_false;
   return SOX_SUCCESS;
@@ -124,15 +142,30 @@ static int start(sox_effect_t * effp)
       p->vulkan_source_num_taps = f->num_taps;
       p->vulkan_source_post_peak = f->post_peak;
     }
-    p->vulkan = lsx_fir_vulkan_create(
-        vulkan, f->taps, (size_t)f->num_taps,
-        (uint32_t)effp->in_signal.channels);
+    p->vulkan = p->vulkan_reference_low_taps ?
+        lsx_fir_vulkan_create_reference_dd(
+            vulkan, f->taps,
+            p->vulkan_reference_low_taps,
+            (size_t)f->num_taps,
+            (uint32_t)effp->in_signal.channels) :
+        lsx_fir_vulkan_create(
+            vulkan, f->taps, (size_t)f->num_taps,
+            (uint32_t)effp->in_signal.channels);
     p->vulkan_context = vulkan;
     if (enable_resident)
-      p->vulkan_resident = lsx_rate_vulkan_create(
-          vulkan, f->taps, (size_t)f->num_taps,
-          (size_t)f->post_peak, 1u, 1u,
-          (uint32_t)effp->in_signal.channels);
+      p->vulkan_resident = p->vulkan_reference_low_taps ?
+          lsx_rate_vulkan_create_reference_dd(
+              vulkan, f->taps,
+              p->vulkan_reference_low_taps,
+              (size_t)f->num_taps,
+              (size_t)f->post_peak, 1u, 1u,
+              (uint32_t)effp->in_signal.channels) :
+          lsx_rate_vulkan_create(
+              vulkan, f->taps, (size_t)f->num_taps,
+              (size_t)f->post_peak, 1u, 1u,
+              (uint32_t)effp->in_signal.channels);
+    free(p->vulkan_reference_low_taps);
+    p->vulkan_reference_low_taps = NULL;
     free(f->taps);
     f->taps = NULL;
     if (!p->vulkan || (enable_resident && !p->vulkan_resident))
@@ -236,7 +269,9 @@ static void trim_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_
       resident->format == lsx_vulkan_resident_format_f32 ?
       sizeof(float) :
       resident->format == lsx_vulkan_resident_format_f32x2 ?
-      2u * sizeof(float) : sizeof(double);
+      2u * sizeof(float) :
+      resident->format == lsx_vulkan_resident_format_f64x2 ?
+      2u * sizeof(double) : sizeof(double);
 
   p->vulkan_skip_samples -= skip_frames * channels;
   resident->offset += (VkDeviceSize)skip_frames * element_size;
@@ -715,6 +750,8 @@ static int stop(sox_effect_t * effp)
 
 #if HAVE_VULKAN
   if (p->vulkan) {
+    uint32_t fusion_index;
+
     lsx_rate_vulkan_destroy(p->vulkan_resident);
     p->vulkan_resident = NULL;
     lsx_fir_vulkan_destroy(p->vulkan);
@@ -727,9 +764,19 @@ static int stop(sox_effect_t * effp)
     effp->internal_chain_endpoint = NULL;
     memset(p->filter_ptr, 0, sizeof(*p->filter_ptr));
     free(p->vulkan_source_taps);
+    free(p->vulkan_reference_low_taps);
     p->vulkan_source_taps = NULL;
+    p->vulkan_reference_low_taps = NULL;
     p->vulkan_source_num_taps = 0;
     p->vulkan_source_post_peak = 0;
+    for (fusion_index = 0;
+         fusion_index < p->vulkan_fusion_source_count;
+         ++fusion_index) {
+      free(p->vulkan_fusion_sources[fusion_index]);
+      p->vulkan_fusion_sources[fusion_index] = NULL;
+      p->vulkan_fusion_source_taps[fusion_index] = 0;
+    }
+    p->vulkan_fusion_source_count = 0;
     p->vulkan_fusion_pending = sox_false;
     return SOX_SUCCESS;
   }
@@ -762,6 +809,34 @@ int lsx_dft_filter_restart_vulkan(
   p->vulkan_source_post_peak = post_peak;
   lsx_set_dft_filter(
       p->filter_ptr, taps, num_taps, post_peak);
+  return start(effp);
+}
+
+int lsx_dft_filter_restart_vulkan_reference_dd(
+    sox_effect_t *effp, double *tap_highs,
+    double *tap_lows, int num_taps, int post_peak)
+{
+  priv_t *p;
+
+  if (!effp || !tap_highs || !tap_lows || num_taps < 1 ||
+      post_peak < 0 || post_peak >= num_taps) {
+    free(tap_lows);
+    free(tap_highs);
+    return SOX_EOF;
+  }
+  p = (priv_t *)effp->priv;
+  if (!p || !p->vulkan || stop(effp) != SOX_SUCCESS) {
+    free(tap_lows);
+    free(tap_highs);
+    return SOX_EOF;
+  }
+  p->vulkan_source_taps = lsx_memdup(
+      tap_highs, (size_t)num_taps * sizeof(*tap_highs));
+  p->vulkan_source_num_taps = num_taps;
+  p->vulkan_source_post_peak = post_peak;
+  p->vulkan_reference_low_taps = tap_lows;
+  lsx_set_dft_filter(
+      p->filter_ptr, tap_highs, num_taps, post_peak);
   return start(effp);
 }
 #endif

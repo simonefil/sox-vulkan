@@ -1,0 +1,57 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+#include "double_double.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) buffer Working {
+  DoubleDoubleComplex values[];
+} working;
+
+layout(set = 0, binding = 1, std430) buffer History {
+  DoubleDoubleComplex values[];
+} history;
+
+layout(set = 0, binding = 2, std430) readonly buffer Kernels {
+  DoubleDoubleComplex values[];
+} kernels;
+
+layout(push_constant) uniform Parameters {
+  uint spectrum_bins;
+  uint partitions;
+  uint channels;
+  uint current_slot;
+} parameters;
+
+void main()
+{
+  const uint index = gl_GlobalInvocationID.x;
+
+  if (index < parameters.channels * parameters.spectrum_bins) {
+    const uint bin = index % parameters.spectrum_bins;
+    const uint channel = index / parameters.spectrum_bins;
+    DoubleDoubleComplex sum;
+
+    sum.real_part = dvec2(0.0);
+    sum.imaginary_part = dvec2(0.0);
+    for (uint part = 0;
+         part < parameters.partitions; ++part) {
+      const uint slot =
+          (parameters.current_slot + parameters.partitions -
+           part) % parameters.partitions;
+      const DoubleDoubleComplex product = multiply_complex_dd(
+          history.values[
+          (channel * parameters.partitions + slot) *
+          parameters.spectrum_bins + bin],
+          kernels.values[
+          (part * parameters.channels + channel) *
+          parameters.spectrum_bins + bin]);
+
+      sum.real_part = add_dd(sum.real_part, product.real_part);
+      sum.imaginary_part = add_dd(
+          sum.imaginary_part, product.imaginary_part);
+    }
+    working.values[index] = sum;
+  }
+}

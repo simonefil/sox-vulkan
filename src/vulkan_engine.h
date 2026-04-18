@@ -26,6 +26,7 @@ typedef enum {
   lsx_vulkan_resident_format_f32,
   lsx_vulkan_resident_format_f32x2,
   lsx_vulkan_resident_format_f64,
+  lsx_vulkan_resident_format_f64x2,
   lsx_vulkan_resident_format_dsd_u32
 } lsx_vulkan_resident_format_t;
 
@@ -160,6 +161,22 @@ int lsx_vulkan_download_resident_pcm(
     lsx_vulkan_context_t *context,
     lsx_vulkan_resident_buffer_t const *resident,
     double *output, size_t output_samples);
+/* Every double-double resident sample has to become a single double before it
+ * can leave the engine, and that collapse is itself the measurement floor of
+ * the reference profile. The route is deterministic, so the pair is recovered
+ * from two runs instead of being plumbed through the effect chain: the first
+ * emits the rounded sum, the second the exact residual of that same sum, and
+ * the two add back to the original pair with no error at all. Every f64x2
+ * collapse in the engine must go through here, otherwise the two runs describe
+ * different quantities. */
+typedef enum {
+  lsx_vulkan_pair_output_sum = 0,
+  lsx_vulkan_pair_output_residual = 1,
+  lsx_vulkan_pair_output_low = 2
+} lsx_vulkan_pair_output_t;
+
+lsx_vulkan_pair_output_t lsx_vulkan_pair_output_mode(void);
+double lsx_vulkan_collapse_pair(double high, double low);
 int lsx_vulkan_create_compute_pipeline(
     lsx_vulkan_context_t *context, uint32_t const *spirv,
     size_t spirv_size, VkPipelineLayout layout, VkPipeline *pipeline);

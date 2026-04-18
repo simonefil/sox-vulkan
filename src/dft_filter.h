@@ -14,6 +14,10 @@ typedef struct {
   double     * vulkan_source_taps;
   int        vulkan_source_num_taps;
   int        vulkan_source_post_peak;
+  double     * vulkan_reference_low_taps;
+  double     * vulkan_fusion_sources[8];
+  size_t     vulkan_fusion_source_taps[8];
+  uint32_t   vulkan_fusion_source_count;
   sox_bool   vulkan_fusion_pending;
   struct lsx_fir_vulkan * vulkan;
   struct lsx_rate_vulkan * vulkan_resident;
@@ -33,6 +37,9 @@ void lsx_set_dft_filter(dft_filter_t * f, double * h, int n, int post_peak);
 int lsx_dft_filter_restart_vulkan(
     sox_effect_t *effp, double *taps,
     int num_taps, int post_peak);
+int lsx_dft_filter_restart_vulkan_reference_dd(
+    sox_effect_t *effp, double *tap_highs,
+    double *tap_lows, int num_taps, int post_peak);
 int lsx_fir_vulkan_try_fuse(
     sox_effect_t *first, sox_effect_t const *second);
 #endif

@@ -204,6 +204,12 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_split_f32.comp")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_precise_f64.comp")
+    set(VULKAN_DOUBLE_DOUBLE_HEADER
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/double_double.glsl")
+    set(FIR_VULKAN_PARTITION_REFERENCE_DD_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_reference_dd.comp")
+    set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_spectrum_multiply_reference_dd.comp")
     set(FIR_VULKAN_DIRECT_REFERENCE_F64_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_direct_reference_f64.comp")
     set(FIR_VULKAN_DIRECT_STRICT_F64_SOURCE
@@ -232,18 +238,24 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f32.comp")
     set(RATE_VULKAN_SELECT_STRICT_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_strict_f32.comp")
+    set(RATE_VULKAN_SELECT_REFERENCE_DD_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_reference_dd.comp")
     set(RATE_VULKAN_PREPARE_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f64.comp")
     set(RATE_VULKAN_PREPARE_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f32.comp")
     set(RATE_VULKAN_PREPARE_STRICT_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_strict_f32.comp")
+    set(RATE_VULKAN_PREPARE_REFERENCE_DD_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_reference_dd.comp")
     set(RATE_VULKAN_STREAM_APPEND_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f64.comp")
     set(RATE_VULKAN_STREAM_APPEND_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f32.comp")
     set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_strict_f32.comp")
+    set(RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_reference_dd.comp")
     set(SDM_VULKAN_FIR_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase.comp.spv")
     set(SDM_VULKAN_MASH_SPV
@@ -266,6 +278,10 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_split_f32.comp.spv")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64.comp.spv")
+    set(FIR_VULKAN_PARTITION_REFERENCE_DD_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd.comp.spv")
+    set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_spectrum_multiply_reference_dd.comp.spv")
     set(FIR_VULKAN_DIRECT_REFERENCE_F64_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_reference_f64.comp.spv")
     set(FIR_VULKAN_DIRECT_STRICT_F64_SPV
@@ -294,18 +310,24 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32.comp.spv")
     set(RATE_VULKAN_SELECT_STRICT_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_select_strict_f32.comp.spv")
+    set(RATE_VULKAN_SELECT_REFERENCE_DD_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_reference_dd.comp.spv")
     set(RATE_VULKAN_PREPARE_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64.comp.spv")
     set(RATE_VULKAN_PREPARE_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32.comp.spv")
     set(RATE_VULKAN_PREPARE_STRICT_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_strict_f32.comp.spv")
+    set(RATE_VULKAN_PREPARE_REFERENCE_DD_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_reference_dd.comp.spv")
     set(RATE_VULKAN_STREAM_APPEND_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64.comp.spv")
     set(RATE_VULKAN_STREAM_APPEND_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32.comp.spv")
     set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_strict_f32.comp.spv")
+    set(RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_reference_dd.comp.spv")
     set(SDM_VULKAN_FIR_INC
         "${CMAKE_CURRENT_BINARY_DIR}/sdm_polyphase_spv.inc")
     set(SDM_VULKAN_MASH_INC
@@ -328,6 +350,10 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_split_f32_spv.inc")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64_spv.inc")
+    set(FIR_VULKAN_PARTITION_REFERENCE_DD_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd_spv.inc")
+    set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/fir_spectrum_multiply_reference_dd_spv.inc")
     set(FIR_VULKAN_DIRECT_REFERENCE_F64_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_reference_f64_spv.inc")
     set(FIR_VULKAN_DIRECT_STRICT_F64_INC
@@ -356,18 +382,24 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32_spv.inc")
     set(RATE_VULKAN_SELECT_STRICT_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_select_strict_f32_spv.inc")
+    set(RATE_VULKAN_SELECT_REFERENCE_DD_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_reference_dd_spv.inc")
     set(RATE_VULKAN_PREPARE_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64_spv.inc")
     set(RATE_VULKAN_PREPARE_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32_spv.inc")
     set(RATE_VULKAN_PREPARE_STRICT_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_strict_f32_spv.inc")
+    set(RATE_VULKAN_PREPARE_REFERENCE_DD_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_reference_dd_spv.inc")
     set(RATE_VULKAN_STREAM_APPEND_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64_spv.inc")
     set(RATE_VULKAN_STREAM_APPEND_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32_spv.inc")
     set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_strict_f32_spv.inc")
+    set(RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_INC
+        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_reference_dd_spv.inc")
 
     add_executable(sox_embed_binary
         "${CMAKE_CURRENT_SOURCE_DIR}/embed_binary.c")
@@ -453,6 +485,24 @@ if(HAVE_VULKAN)
                 -o "${FIR_VULKAN_PARTITION_PRECISE_F64_SPV}"
                 "${FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE}"
         DEPENDS "${FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_REFERENCE_DD_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${FIR_VULKAN_PARTITION_REFERENCE_DD_SPV}"
+                "${FIR_VULKAN_PARTITION_REFERENCE_DD_SOURCE}"
+        DEPENDS "${FIR_VULKAN_PARTITION_REFERENCE_DD_SOURCE}"
+                "${VULKAN_DOUBLE_DOUBLE_HEADER}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV}"
+                "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE}"
+        DEPENDS "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE}"
+                "${VULKAN_DOUBLE_DOUBLE_HEADER}"
         VERBATIM
     )
     add_custom_command(
@@ -554,6 +604,15 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
+        OUTPUT "${RATE_VULKAN_SELECT_REFERENCE_DD_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${RATE_VULKAN_SELECT_REFERENCE_DD_SPV}"
+                "${RATE_VULKAN_SELECT_REFERENCE_DD_SOURCE}"
+        DEPENDS "${RATE_VULKAN_SELECT_REFERENCE_DD_SOURCE}"
+                "${VULKAN_DOUBLE_DOUBLE_HEADER}"
+        VERBATIM
+    )
+    add_custom_command(
         OUTPUT "${RATE_VULKAN_PREPARE_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_PREPARE_SPV}" "${RATE_VULKAN_PREPARE_SOURCE}"
         DEPENDS "${RATE_VULKAN_PREPARE_SOURCE}"
@@ -574,6 +633,15 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
+        OUTPUT "${RATE_VULKAN_PREPARE_REFERENCE_DD_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${RATE_VULKAN_PREPARE_REFERENCE_DD_SPV}"
+                "${RATE_VULKAN_PREPARE_REFERENCE_DD_SOURCE}"
+        DEPENDS "${RATE_VULKAN_PREPARE_REFERENCE_DD_SOURCE}"
+                "${VULKAN_DOUBLE_DOUBLE_HEADER}"
+        VERBATIM
+    )
+    add_custom_command(
         OUTPUT "${RATE_VULKAN_STREAM_APPEND_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_STREAM_APPEND_SPV}" "${RATE_VULKAN_STREAM_APPEND_SOURCE}"
         DEPENDS "${RATE_VULKAN_STREAM_APPEND_SOURCE}"
@@ -591,6 +659,14 @@ if(HAVE_VULKAN)
                 -o "${RATE_VULKAN_STREAM_APPEND_STRICT_F32_SPV}"
                 "${RATE_VULKAN_STREAM_APPEND_STRICT_F32_SOURCE}"
         DEPENDS "${RATE_VULKAN_STREAM_APPEND_STRICT_F32_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SPV}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
+                -o "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SPV}"
+                "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SOURCE}"
+        DEPENDS "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SOURCE}"
         VERBATIM
     )
     add_custom_command(
@@ -683,6 +759,26 @@ if(HAVE_VULKAN)
                 fir_partition_precise_f64_spv
         DEPENDS sox_embed_binary
                 "${FIR_VULKAN_PARTITION_PRECISE_F64_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_PARTITION_REFERENCE_DD_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${FIR_VULKAN_PARTITION_REFERENCE_DD_SPV}"
+                "${FIR_VULKAN_PARTITION_REFERENCE_DD_INC}"
+                fir_partition_reference_dd_spv
+        DEPENDS sox_embed_binary
+                "${FIR_VULKAN_PARTITION_REFERENCE_DD_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV}"
+                "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC}"
+                fir_spectrum_multiply_reference_dd_spv
+        DEPENDS sox_embed_binary
+                "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV}"
         VERBATIM
     )
     add_custom_command(
@@ -798,6 +894,16 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
+        OUTPUT "${RATE_VULKAN_SELECT_REFERENCE_DD_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${RATE_VULKAN_SELECT_REFERENCE_DD_SPV}"
+                "${RATE_VULKAN_SELECT_REFERENCE_DD_INC}"
+                rate_select_reference_dd_spv
+        DEPENDS sox_embed_binary
+                "${RATE_VULKAN_SELECT_REFERENCE_DD_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
         OUTPUT "${RATE_VULKAN_PREPARE_INC}"
         COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_PREPARE_SPV}" "${RATE_VULKAN_PREPARE_INC}" rate_prepare_f64_spv
         DEPENDS sox_embed_binary "${RATE_VULKAN_PREPARE_SPV}"
@@ -817,6 +923,16 @@ if(HAVE_VULKAN)
                 rate_prepare_strict_f32_spv
         DEPENDS sox_embed_binary
                 "${RATE_VULKAN_PREPARE_STRICT_F32_SPV}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_PREPARE_REFERENCE_DD_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${RATE_VULKAN_PREPARE_REFERENCE_DD_SPV}"
+                "${RATE_VULKAN_PREPARE_REFERENCE_DD_INC}"
+                rate_prepare_reference_dd_spv
+        DEPENDS sox_embed_binary
+                "${RATE_VULKAN_PREPARE_REFERENCE_DD_SPV}"
         VERBATIM
     )
     add_custom_command(
@@ -841,6 +957,16 @@ if(HAVE_VULKAN)
                 "${RATE_VULKAN_STREAM_APPEND_STRICT_F32_SPV}"
         VERBATIM
     )
+    add_custom_command(
+        OUTPUT "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_INC}"
+        COMMAND $<TARGET_FILE:sox_embed_binary>
+                "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SPV}"
+                "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_INC}"
+                rate_stream_append_reference_dd_spv
+        DEPENDS sox_embed_binary
+                "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SPV}"
+        VERBATIM
+    )
     add_custom_target(
         sdm_vulkan_shaders
         DEPENDS
@@ -855,6 +981,8 @@ if(HAVE_VULKAN)
             "${FIR_VULKAN_PARTITION_STRICT_F32_INC}"
             "${FIR_VULKAN_PARTITION_SPLIT_F32_INC}"
             "${FIR_VULKAN_PARTITION_PRECISE_F64_INC}"
+            "${FIR_VULKAN_PARTITION_REFERENCE_DD_INC}"
+            "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC}"
             "${FIR_VULKAN_DIRECT_REFERENCE_F64_INC}"
             "${FIR_VULKAN_DIRECT_STRICT_F64_INC}"
             "${FIR_VULKAN_DIRECT_ACCURATE_F32_INC}"
@@ -869,13 +997,21 @@ if(HAVE_VULKAN)
             "${RATE_VULKAN_SELECT_INC}"
             "${RATE_VULKAN_SELECT_F32_INC}"
             "${RATE_VULKAN_SELECT_STRICT_F32_INC}"
+            "${RATE_VULKAN_SELECT_REFERENCE_DD_INC}"
             "${RATE_VULKAN_PREPARE_INC}"
             "${RATE_VULKAN_PREPARE_F32_INC}"
             "${RATE_VULKAN_PREPARE_STRICT_F32_INC}"
+            "${RATE_VULKAN_PREPARE_REFERENCE_DD_INC}"
             "${RATE_VULKAN_STREAM_APPEND_INC}"
             "${RATE_VULKAN_STREAM_APPEND_F32_INC}"
             "${RATE_VULKAN_STREAM_APPEND_STRICT_F32_INC}"
+            "${RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_INC}"
     )
+    # The reference profile needs a VkFFT instantiation whose host scalar type
+    # is wider than double, which the shim in vulkan_dd/ provides in C++. Every
+    # VkFFT entry point is static inline, so this second instantiation stays
+    # internal to its own translation unit and leaves vulkan_fft.c untouched.
+    enable_language(CXX)
     list(APPEND LIBSOX_EFFECTS_SOURCES
         fir_vulkan.c
         rate_cubic_vulkan.c
@@ -883,8 +1019,12 @@ if(HAVE_VULKAN)
         rate_polyphase_vulkan.c
         sdm_vulkan.c
         vulkan_fft.c
+        vulkan_fft_dd.cpp
         vulkan_engine.c
     )
+    set_source_files_properties(vulkan_fft_dd.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_dd"
+        COMPILE_DEFINITIONS VKFFT_USE_DOUBLEDOUBLE_FP128)
     if(IS_WINDOWS)
         list(APPEND LIBSOX_EFFECTS_SOURCES glslang_dynamic.c)
     endif()

@@ -190,6 +190,8 @@ static VkDeviceSize resident_element_size(
       return 2u * sizeof(float);
     case lsx_vulkan_resident_format_f64:
       return sizeof(double);
+    case lsx_vulkan_resident_format_f64x2:
+      return 2u * sizeof(double);
     case lsx_vulkan_resident_format_dsd_u32:
       return sizeof(uint32_t);
   }
@@ -306,6 +308,44 @@ static int create_resident_download(
   return SOX_SUCCESS;
 }
 
+lsx_vulkan_pair_output_t lsx_vulkan_pair_output_mode(void)
+{
+  static int resolved;
+  static lsx_vulkan_pair_output_t mode;
+
+  if (!resolved) {
+    char const *selector = getenv("SOX_VULKAN_REFERENCE_LOW_RESIDUAL");
+    int value = selector && selector[0] ? atoi(selector) : 0;
+
+    /* Values above the raw low word select diagnostic taps inside individual
+     * effects; as far as the collapse is concerned they behave like the raw
+     * low word, because that is the half those taps are there to expose. */
+    mode = value == 1 ? lsx_vulkan_pair_output_residual :
+        value >= 2 ? lsx_vulkan_pair_output_low :
+        lsx_vulkan_pair_output_sum;
+    resolved = 1;
+  }
+  return mode;
+}
+
+double lsx_vulkan_collapse_pair(double high, double low)
+{
+  double sum = high + low;
+  double shifted;
+
+  switch (lsx_vulkan_pair_output_mode()) {
+  case lsx_vulkan_pair_output_low:
+    return low;
+  case lsx_vulkan_pair_output_residual:
+    /* Knuth's two-sum: the residual is exactly representable, so the pair is
+     * recovered as sum + residual without any rounding of its own. */
+    shifted = sum - high;
+    return (high - (sum - shifted)) + (low - shifted);
+  default:
+    return sum;
+  }
+}
+
 int lsx_vulkan_download_resident_pcm(
     lsx_vulkan_context_t *context,
     lsx_vulkan_resident_buffer_t const *resident,
@@ -386,6 +426,8 @@ int lsx_vulkan_download_resident_pcm(
     return SOX_EOF;
   element_size = resident->format == lsx_vulkan_resident_format_f32x2 ?
       2u * sizeof(float) :
+      resident->format == lsx_vulkan_resident_format_f64x2 ?
+      2u * sizeof(double) :
       resident->format == lsx_vulkan_resident_format_f64 ?
       sizeof(double) : sizeof(float);
   for (frame = 0; frame < resident->valid_elements; ++frame)
@@ -399,6 +441,12 @@ int lsx_vulkan_download_resident_pcm(
             ((char const *)context->resident_download.mapped +
             source * element_size);
         value = (double)pair[0] + (double)pair[1];
+      }
+      else if (resident->format == lsx_vulkan_resident_format_f64x2) {
+        double const *pair = (double const *)
+            ((char const *)context->resident_download.mapped +
+            source * element_size);
+        value = lsx_vulkan_collapse_pair(pair[0], pair[1]);
       }
       else if (resident->format == lsx_vulkan_resident_format_f64)
         value = ((double const *)

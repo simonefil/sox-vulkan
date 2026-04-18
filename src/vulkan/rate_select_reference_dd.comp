@@ -1,0 +1,50 @@
+/* Select a decimated FP64x2 rate-stage output without discarding its low part. */
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+#include "double_double.glsl"
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer InputSamples {
+  dvec2 values[];
+} input_samples;
+
+layout(std430, binding = 1) writeonly buffer OutputSamples {
+  dvec2 values[];
+} output_samples;
+
+layout(push_constant) uniform Parameters {
+  uint output_frames;
+  uint first_input_frame;
+  uint input_step;
+  uint input_channel_stride;
+  uint channels;
+  uint normalize;
+  uint padding1;
+  uint padding2;
+} parameters;
+
+const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+
+void main()
+{
+  const uint output_frame = gl_GlobalInvocationID.x;
+  const uint channel = gl_GlobalInvocationID.y;
+
+  if (output_frame >= parameters.output_frames ||
+      channel >= parameters.channels)
+    return;
+
+  const uint input_frame =
+      parameters.first_input_frame +
+      output_frame * parameters.input_step;
+  dvec2 value = input_samples.values[
+      channel * parameters.input_channel_stride + input_frame];
+
+  if (parameters.normalize != 0u)
+    value = multiply_dd_scalar(value, SOX_SAMPLE_SCALE);
+  output_samples.values[
+      output_frame * parameters.channels + channel] = value;
+}

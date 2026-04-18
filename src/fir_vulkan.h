@@ -16,6 +16,17 @@ typedef struct lsx_fir_vulkan lsx_fir_vulkan_t;
 lsx_fir_vulkan_t *lsx_fir_vulkan_create(
     lsx_vulkan_context_t *vulkan, double const *coefficients,
     size_t taps, uint32_t channels);
+lsx_fir_vulkan_t *lsx_fir_vulkan_create_reference_dd(
+    lsx_vulkan_context_t *vulkan,
+    double const *coefficient_highs,
+    double const *coefficient_lows,
+    size_t taps, uint32_t channels);
+int lsx_fir_vulkan_fuse_reference_coefficients(
+    lsx_vulkan_context_t *vulkan,
+    double const *const *coefficient_sets,
+    size_t const *tap_counts, size_t set_count,
+    double **result_highs, double **result_lows,
+    size_t *result_count);
 void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context);
 size_t lsx_fir_vulkan_block_frames(void);
 size_t lsx_fir_vulkan_block_frames_for(

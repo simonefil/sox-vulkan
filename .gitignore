@@ -40,3 +40,4 @@ README
 Docs.Features
 *.a
 tags
+__pycache__/

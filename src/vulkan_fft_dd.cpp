@@ -165,10 +165,13 @@ extern "C" void *lsx_vulkan_fft_dd_create(
     VkBuffer *buffer, uint64_t buffer_size,
     uint32_t length, uint32_t batches,
     int real_to_complex, int normalize_inverse,
-    VkFence *fence, int *result_code)
+    VkFence *fence, lsx_vulkan_fft_cache_key_t const *key,
+    int *result_code)
 {
   VkFFTConfiguration configuration = VKFFT_ZERO_INIT;
   dd_fft *context;
+  void const *cached = key ?
+      lsx_vulkan_fft_cache_lookup(key, NULL) : NULL;
   VkFFTResult result;
 
   if (result_code)
@@ -193,7 +196,25 @@ extern "C" void *lsx_vulkan_fft_dd_create(
   configuration.buffer = buffer;
   configuration.bufferSize = &context->buffer_size;
   configuration.isCompilerInitialized = 1;
+  /* The cached blob is VkFFT's own SPIR-V, and on load it goes back through
+   * the same vkCreateShaderModule that is redirected above, so the
+   * NoContraction decoration is reapplied to it exactly as if it had just
+   * been compiled.  What is cached is codegen plus glslang, not the
+   * decoration, and the reference profile's arithmetic is unaffected. */
+  if (cached) {
+    configuration.loadApplicationFromString = 1;
+    configuration.loadApplicationString = const_cast<void *>(cached);
+  } else if (key && lsx_vulkan_fft_cache_enabled())
+    configuration.saveApplicationToString = 1;
   result = initializeVkFFT(&context->application, configuration);
+  if (result != VKFFT_SUCCESS && cached) {
+    memset(&context->application, 0, sizeof(context->application));
+    configuration.loadApplicationFromString = 0;
+    configuration.loadApplicationString = 0;
+    configuration.saveApplicationToString = 1;
+    cached = NULL;
+    result = initializeVkFFT(&context->application, configuration);
+  }
   if (result != VKFFT_SUCCESS) {
     if (result_code)
       *result_code = (int)result;
@@ -201,6 +222,10 @@ extern "C" void *lsx_vulkan_fft_dd_create(
     return NULL;
   }
   context->initialized = true;
+  if (!cached)
+    lsx_vulkan_fft_cache_store(
+        key, context->application.saveApplicationString,
+        context->application.applicationStringSize);
   return context;
 }
 

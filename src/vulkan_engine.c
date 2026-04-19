@@ -8,6 +8,7 @@
 
 #include "sox_i.h"
 #include "vulkan_engine.h"
+#include "vulkan_fft_cache.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -872,6 +873,9 @@ void lsx_vulkan_context_destroy(void *opaque_context)
     return;
   if (context->device)
     vkDeviceWaitIdle(context->device);
+  /* The compiled VkFFT kernels outlive the individual FFT contexts on
+   * purpose, so they are released with the device that they were keyed on. */
+  lsx_vulkan_fft_cache_clear();
   if (context->device && context->resident_download_fence)
     vkDestroyFence(
         context->device, context->resident_download_fence, NULL);

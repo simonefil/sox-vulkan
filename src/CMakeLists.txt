@@ -1019,6 +1019,7 @@ if(HAVE_VULKAN)
         rate_polyphase_vulkan.c
         sdm_vulkan.c
         vulkan_fft.c
+        vulkan_fft_cache.c
         vulkan_fft_dd.cpp
         vulkan_engine.c
     )
@@ -1036,6 +1037,7 @@ if(HAVE_VULKAN)
         sdm_vulkan.h
         vulkan_effect_chain.h
         vulkan_fft.h
+        vulkan_fft_cache.h
         vulkan_engine.h
     )
 endif()

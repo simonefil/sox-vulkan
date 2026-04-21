@@ -1765,7 +1765,8 @@ static lsx_fir_vulkan_t *create_fir(
       vulkan->profile == sox_vulkan_profile_strict;
   context->accurate_fp32 =
       !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_accurate;
+      vulkan->profile == sox_vulkan_profile_accurate &&
+      !getenv("SOX_VULKAN_PLAIN_FP32_PARTITION");
   context->split_fp32 = sox_false;
   context->precise_fp64 =
       context->double_precision &&

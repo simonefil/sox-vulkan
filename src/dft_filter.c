@@ -23,6 +23,7 @@
 #if HAVE_VULKAN
 #include "fir_vulkan.h"
 #include "rate_vulkan.h"
+#include "vulkan_engine.h"
 #include "vulkan_effect_chain.h"
 #endif
 
@@ -142,34 +143,18 @@ static int start(sox_effect_t * effp)
       p->vulkan_source_num_taps = f->num_taps;
       p->vulkan_source_post_peak = f->post_peak;
     }
-    p->vulkan = p->vulkan_reference_low_taps ?
-        lsx_fir_vulkan_create_reference_dd(
-            vulkan, f->taps,
-            p->vulkan_reference_low_taps,
-            (size_t)f->num_taps,
-            (uint32_t)effp->in_signal.channels) :
-        lsx_fir_vulkan_create(
-            vulkan, f->taps, (size_t)f->num_taps,
-            (uint32_t)effp->in_signal.channels);
+    /* Neither FIR context is created here.  An effect registers both the
+     * producer and the transform callbacks, because which of the two it will
+     * play is not settled until the whole chain has started and the resident
+     * segment is laid out -- the first Vulkan effect feeds the segment, the
+     * rest transform inside it.  Creating both up front therefore built two
+     * contexts per effect and used one, sixteen for eight chained effects.
+     * Each is now built on its first call, from the coefficients that
+     * vulkan_source_taps already keeps for the fusion path. */
     p->vulkan_context = vulkan;
-    if (enable_resident)
-      p->vulkan_resident = p->vulkan_reference_low_taps ?
-          lsx_rate_vulkan_create_reference_dd(
-              vulkan, f->taps,
-              p->vulkan_reference_low_taps,
-              (size_t)f->num_taps,
-              (size_t)f->post_peak, 1u, 1u,
-              (uint32_t)effp->in_signal.channels) :
-          lsx_rate_vulkan_create(
-              vulkan, f->taps, (size_t)f->num_taps,
-              (size_t)f->post_peak, 1u, 1u,
-              (uint32_t)effp->in_signal.channels);
-    free(p->vulkan_reference_low_taps);
-    p->vulkan_reference_low_taps = NULL;
+    p->vulkan_resident_enabled = enable_resident;
     free(f->taps);
     f->taps = NULL;
-    if (!p->vulkan || (enable_resident && !p->vulkan_resident))
-      return SOX_EOF;
     block_samples =
         lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
         effp->in_signal.channels;
@@ -180,7 +165,7 @@ static int start(sox_effect_t * effp)
     p->vulkan_skip_samples =
         (size_t)(f->num_taps - 1 - f->post_peak) *
         effp->in_signal.channels;
-    effp->internal_chain_endpoint = p->vulkan_resident ?
+    effp->internal_chain_endpoint = enable_resident ?
         &vulkan_resident_endpoint :
         &vulkan_resident_producer_endpoint;
     return SOX_SUCCESS;
@@ -224,6 +209,54 @@ static void filter(priv_t * p)
 }
 
 #if HAVE_VULKAN
+/* Built on first use; see the note in start().  Both read the coefficients
+ * from vulkan_source_taps, which outlives f->taps for exactly this reason,
+ * and both are idempotent. */
+static int ensure_vulkan_producer(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+
+  if (p->vulkan)
+    return SOX_SUCCESS;
+  if (!p->vulkan_context || !p->vulkan_source_taps)
+    return SOX_EOF;
+  p->vulkan = p->vulkan_reference_low_taps ?
+      lsx_fir_vulkan_create_reference_dd(
+          p->vulkan_context, p->vulkan_source_taps,
+          p->vulkan_reference_low_taps,
+          (size_t)p->vulkan_source_num_taps,
+          (uint32_t)effp->in_signal.channels) :
+      lsx_fir_vulkan_create(
+          p->vulkan_context, p->vulkan_source_taps,
+          (size_t)p->vulkan_source_num_taps,
+          (uint32_t)effp->in_signal.channels);
+  return p->vulkan ? SOX_SUCCESS : SOX_EOF;
+}
+
+static int ensure_vulkan_resident(sox_effect_t *effp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+
+  if (p->vulkan_resident)
+    return SOX_SUCCESS;
+  if (!p->vulkan_context || !p->vulkan_source_taps ||
+      !p->vulkan_resident_enabled)
+    return SOX_EOF;
+  p->vulkan_resident = p->vulkan_reference_low_taps ?
+      lsx_rate_vulkan_create_reference_dd(
+          p->vulkan_context, p->vulkan_source_taps,
+          p->vulkan_reference_low_taps,
+          (size_t)p->vulkan_source_num_taps,
+          (size_t)p->vulkan_source_post_peak, 1u, 1u,
+          (uint32_t)effp->in_signal.channels) :
+      lsx_rate_vulkan_create(
+          p->vulkan_context, p->vulkan_source_taps,
+          (size_t)p->vulkan_source_num_taps,
+          (size_t)p->vulkan_source_post_peak, 1u, 1u,
+          (uint32_t)effp->in_signal.channels);
+  return p->vulkan_resident ? SOX_SUCCESS : SOX_EOF;
+}
+
 static void append_vulkan_output(
     sox_effect_t *effp, double const *output)
 {
@@ -246,6 +279,8 @@ static int process_vulkan_input(sox_effect_t *effp)
       lsx_fir_vulkan_block_frames_for(p->vulkan_context) *
       effp->in_signal.channels;
 
+  if (ensure_vulkan_producer(effp) != SOX_SUCCESS)
+    return SOX_EOF;
   while ((size_t)fifo_occupancy(
       &p->vulkan_input_fifo) >= block_samples) {
     double const *input = fifo_read(
@@ -302,6 +337,11 @@ static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const 
   while ((size_t)fifo_occupancy(&p->vulkan_input_fifo) >= block_samples) {
     double const *input = fifo_read(&p->vulkan_input_fifo, block_samples, NULL);
 
+    /* Here, not at the top: the scheduler calls this on every effect in the
+     * segment, and only the one that actually reaches a full block is the
+     * producer.  Deciding earlier would build a context for all of them. */
+    if (ensure_vulkan_producer(effp) != SOX_SUCCESS)
+      return SOX_EOF;
     if (lsx_fir_vulkan_process_resident(p->vulkan, input, effp->out_signal.rate, p->samples_out / channels, lsx_vulkan_resident_ready, resident) != SOX_SUCCESS)
       return SOX_EOF;
     trim_vulkan_resident_output(effp, resident);
@@ -310,8 +350,7 @@ static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const 
       *produced = sox_true;
       ++p->vulkan_resident_pending;
       if (p->vulkan_resident_pending >=
-          lsx_rate_vulkan_resident_batch_depth(
-              p->vulkan_resident)) {
+          lsx_vulkan_resident_batch_depth(p->vulkan_context)) {
         p->vulkan_resident_pending = 0;
         if (lsx_fir_vulkan_flush_resident(p->vulkan) !=
             SOX_SUCCESS)
@@ -342,6 +381,9 @@ static int drain_vulkan_resident_producer(sox_effect_t *effp, lsx_vulkan_residen
   while (remaining) {
     size_t pending = min(block_samples, (size_t)fifo_occupancy(&p->vulkan_input_fifo));
 
+    if (ensure_vulkan_producer(effp) != SOX_SUCCESS)
+      return SOX_EOF;
+
     memset(p->vulkan_drain_block, 0, block_samples * sizeof(*p->vulkan_drain_block));
     if (pending)
       fifo_read(&p->vulkan_input_fifo, pending, p->vulkan_drain_block);
@@ -356,8 +398,7 @@ static int drain_vulkan_resident_producer(sox_effect_t *effp, lsx_vulkan_residen
       *produced = sox_true;
       ++p->vulkan_resident_pending;
       if (p->vulkan_resident_pending >=
-          lsx_rate_vulkan_resident_batch_depth(
-              p->vulkan_resident)) {
+          lsx_vulkan_resident_batch_depth(p->vulkan_context)) {
         p->vulkan_resident_pending = 0;
         if (lsx_fir_vulkan_flush_resident(p->vulkan) !=
             SOX_SUCCESS)
@@ -404,7 +445,8 @@ static int transform_vulkan_resident(
   priv_t *p = (priv_t *)effp->priv;
   size_t channels = effp->in_signal.channels;
 
-  if (!p->vulkan_resident || !input_consumed || !input_clips ||
+  if (ensure_vulkan_resident(effp) != SOX_SUCCESS ||
+      !input_consumed || !input_clips ||
       !output || !output_produced || !active)
     return SOX_EOF;
   memset(output, 0, sizeof(*output));
@@ -503,7 +545,8 @@ static int consume_vulkan_resident(
   size_t emitted;
   unsigned attempt;
 
-  if (!p->vulkan_resident || !input_consumed || !input_clips ||
+  if (ensure_vulkan_resident(effp) != SOX_SUCCESS ||
+      !input_consumed || !input_clips ||
       !obuf || !osamp || !active)
     return SOX_EOF;
   capacity = *osamp;
@@ -576,8 +619,8 @@ static int drain_transform_vulkan_resident(
   uint64_t remaining = p->samples_in > p->samples_out ?
       p->samples_in - p->samples_out : 0;
 
-  if (!p->vulkan_resident || !input_clips || !output ||
-      !output_produced || !done)
+  if (ensure_vulkan_resident(effp) != SOX_SUCCESS ||
+      !input_clips || !output || !output_produced || !done)
     return SOX_EOF;
   memset(output, 0, sizeof(*output));
   *input_clips = lsx_rate_vulkan_resident_stream_clips(
@@ -661,6 +704,10 @@ static int drain_vulkan(
       p->samples_in > p->samples_out ?
       p->samples_in - p->samples_out : 0;
 
+  if (ensure_vulkan_producer(effp) != SOX_SUCCESS) {
+    *osamp = 0;
+    return SOX_EOF;
+  }
   while ((uint64_t)fifo_occupancy(
       &p->vulkan_output_fifo) < remaining) {
     size_t pending = min(
@@ -698,7 +745,9 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   double const * s;
 
 #if HAVE_VULKAN
-  if (p->vulkan)
+  /* The context, not the FIR: the FIR is built lazily and is still null
+   * before the first block reaches it. */
+  if (p->vulkan_context)
     return flow_vulkan(effp, ibuf, obuf, isamp, osamp);
 #endif
   odone = min(
@@ -727,7 +776,7 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
   double * buff;
 
 #if HAVE_VULKAN
-  if (p->vulkan)
+  if (p->vulkan_context)
     return drain_vulkan(effp, obuf, osamp);
 #endif
   buff = lsx_calloc(1024, sizeof(*buff));
@@ -749,7 +798,7 @@ static int stop(sox_effect_t * effp)
   priv_t * p = (priv_t *) effp->priv;
 
 #if HAVE_VULKAN
-  if (p->vulkan) {
+  if (p->vulkan_context) {
     uint32_t fusion_index;
 
     lsx_rate_vulkan_destroy(p->vulkan_resident);
@@ -760,6 +809,7 @@ static int stop(sox_effect_t * effp)
     free(p->vulkan_drain_block);
     p->vulkan = NULL;
     p->vulkan_context = NULL;
+    p->vulkan_resident_enabled = sox_false;
     p->vulkan_drain_block = NULL;
     effp->internal_chain_endpoint = NULL;
     memset(p->filter_ptr, 0, sizeof(*p->filter_ptr));
@@ -799,7 +849,7 @@ int lsx_dft_filter_restart_vulkan(
       post_peak < 0 || post_peak >= num_taps)
     return SOX_EOF;
   p = (priv_t *)effp->priv;
-  if (!p || !p->vulkan || stop(effp) != SOX_SUCCESS) {
+  if (!p || !p->vulkan_context || stop(effp) != SOX_SUCCESS) {
     free(taps);
     return SOX_EOF;
   }
@@ -825,7 +875,7 @@ int lsx_dft_filter_restart_vulkan_reference_dd(
     return SOX_EOF;
   }
   p = (priv_t *)effp->priv;
-  if (!p || !p->vulkan || stop(effp) != SOX_SUCCESS) {
+  if (!p || !p->vulkan_context || stop(effp) != SOX_SUCCESS) {
     free(tap_lows);
     free(tap_highs);
     return SOX_EOF;

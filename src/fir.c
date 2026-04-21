@@ -108,8 +108,7 @@ int lsx_fir_vulkan_try_fuse(
   int combined_post_peak;
 
   if (!first || !second ||
-      (sox_globals.vulkan_profile != sox_vulkan_profile_fast &&
-       sox_globals.vulkan_profile != sox_vulkan_profile_reference) ||
+      sox_globals.vulkan_profile == sox_vulkan_profile_none ||
       strcmp(first->handler.name, "fir") ||
       strcmp(second->handler.name, "fir") ||
       first->in_signal.rate != second->in_signal.rate ||
@@ -119,10 +118,22 @@ int lsx_fir_vulkan_try_fuse(
   second_private = (priv_t const *)second->priv;
   first_base = &first_private->base;
   second_base = &second_private->base;
+  /* Fusion is not an optimisation that trades accuracy for speed: applying
+   * the convolved filter once is the exact result, while chaining N stages
+   * discards each stage's warm-up before the next one can use it and
+   * truncates each stage's tail independently.  Measured against the fused
+   * filter applied as a single fir in FP64: the fused route matches to the
+   * 32-bit quantisation floor everywhere, the chained route deviates by
+   * -113 dBFS over the first 1000 samples and -45 dBFS over the last 300.
+   * It used to be enabled only for reference, and for fast on devices
+   * without shaderFloat64 -- which is why the same --vulkan-fast command
+   * behaved differently on an RTX 3080 and on an M5 Pro, and why accurate
+   * scored below fast on Apple Silicon: the two were not running the same
+   * computation. */
+  if (getenv("SOX_VULKAN_DISABLE_FIR_FUSION"))
+    return 0;
   if (!first_base->vulkan_source_taps ||
-      !second_base->vulkan_source_taps ||
-      (first_base->vulkan_context->shader_float64 &&
-       sox_globals.vulkan_profile != sox_vulkan_profile_reference))
+      !second_base->vulkan_source_taps)
     return 0;
   first_count = first_base->vulkan_source_num_taps;
   second_count = second_base->vulkan_source_num_taps;

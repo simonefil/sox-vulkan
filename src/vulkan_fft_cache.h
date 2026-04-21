@@ -35,11 +35,17 @@ extern "C" {
  * a literal in the generated GLSL.  Entries are therefore (profile) x
  * (channel count), at most 32 for four profiles and SoX's eight channels.
  *
+ * The buffer size is in the key because VkFFT derives its descriptor
+ * ranges, and with them specialization constants that reach the generated
+ * code, from it.  In practice it follows from the transform, so keying on it
+ * costs no extra entries and removes the question.
+ *
  * pipelineCacheUUID is deliberately absent: it identifies driver pipeline
  * binaries, whereas the blob here is SPIR-V and independent of the driver.
  * Including it would discard the cache on every driver update for nothing.
  */
 typedef struct {
+  uint64_t buffer_size;
   uint32_t vkfft_version;
   uint32_t vendor_id;
   uint32_t device_id;
@@ -52,13 +58,18 @@ typedef struct {
   uint8_t use_lut;
 } lsx_vulkan_fft_cache_key_t;
 
-/* Zero unless SOX_VULKAN_FFT_CACHE is set to 0, in which case every context
- * compiles its own kernels as before. */
+/* Nonzero unless SOX_VULKAN_FFT_CACHE is set to 0, in which case every
+ * context compiles its own kernels as before.  Two further variables affect
+ * only the on-disk half: SOX_VULKAN_FFT_DISK_CACHE=0 keeps the cache in the
+ * process, and SOX_VULKAN_FFT_CACHE_DIR replaces the default location
+ * (%LOCALAPPDATA%\sox\vkfft-cache, ~/Library/Caches/sox/vkfft-cache, or
+ * $XDG_CACHE_HOME/sox/vkfft-cache). */
 int lsx_vulkan_fft_cache_enabled(void);
 
 /* Borrowed pointer into the cache, valid until lsx_vulkan_fft_cache_clear();
  * NULL on a miss.  The caller hands it straight to loadApplicationString,
- * which only reads from it. */
+ * which only reads from it.  A miss consults the on-disk cache before
+ * reporting one, and a file found there is kept in memory too. */
 void const *lsx_vulkan_fft_cache_lookup(
     lsx_vulkan_fft_cache_key_t const *key, uint64_t *size);
 

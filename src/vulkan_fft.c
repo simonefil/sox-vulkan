@@ -47,11 +47,13 @@ static void compiler_release(void)
  * plan depends on; the double-double one is handed the finished key. */
 static void cache_key_init(
     lsx_vulkan_fft_cache_key_t *key, lsx_vulkan_context_t const *vulkan,
-    uint32_t length, uint32_t batches, sox_bool double_precision,
+    uint64_t buffer_size, uint32_t length, uint32_t batches,
+    sox_bool double_precision,
     sox_bool double_double_precision, sox_bool use_lut,
     sox_bool real_to_complex, sox_bool normalize_inverse)
 {
   memset(key, 0, sizeof(*key));
+  key->buffer_size = buffer_size;
   key->vkfft_version = (uint32_t)VkFFTGetVersion();
   key->vendor_id = vulkan->properties.vendorID;
   key->device_id = vulkan->properties.deviceID;
@@ -95,8 +97,8 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
 
     /* The double-double instantiation always uses the LUT. */
     cache_key_init(
-        &key, vulkan, length, batches, sox_false, sox_true, sox_true,
-        real_to_complex, normalize_inverse);
+        &key, vulkan, context->buffer_size, length, batches, sox_false,
+        sox_true, sox_true, real_to_complex, normalize_inverse);
     context->double_double = lsx_vulkan_fft_dd_create(
         &vulkan->device, &vulkan->physical_device, &vulkan->queue,
         &vulkan->command_pool, &buffer->buffer, context->buffer_size,
@@ -126,8 +128,9 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   configuration.bufferSize = &context->buffer_size;
   configuration.isCompilerInitialized = 1;
   cache_key_init(
-      &key, vulkan, length, batches, double_precision, sox_false,
-      configuration.useLUT != 0, real_to_complex, normalize_inverse);
+      &key, vulkan, context->buffer_size, length, batches,
+      double_precision, sox_false, configuration.useLUT != 0,
+      real_to_complex, normalize_inverse);
   cached = lsx_vulkan_fft_cache_lookup(&key, NULL);
   if (cached) {
     configuration.loadApplicationFromString = 1;

@@ -21,6 +21,7 @@ typedef struct {
   sox_bool   vulkan_fusion_pending;
   struct lsx_fir_vulkan * vulkan;
   struct lsx_rate_vulkan * vulkan_resident;
+  sox_bool   vulkan_resident_enabled;
   struct lsx_vulkan_context * vulkan_context;
   fifo_t     vulkan_input_fifo, vulkan_output_fifo;
   double     * vulkan_drain_block;

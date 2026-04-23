@@ -200,8 +200,6 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_accurate_f32.comp")
     set(FIR_VULKAN_PARTITION_STRICT_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_strict_f32.comp")
-    set(FIR_VULKAN_PARTITION_SPLIT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_split_f32.comp")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_precise_f64.comp")
     set(VULKAN_DOUBLE_DOUBLE_HEADER
@@ -210,12 +208,6 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_reference_dd.comp")
     set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_spectrum_multiply_reference_dd.comp")
-    set(FIR_VULKAN_DIRECT_REFERENCE_F64_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_direct_reference_f64.comp")
-    set(FIR_VULKAN_DIRECT_STRICT_F64_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_direct_strict_f64.comp")
-    set(FIR_VULKAN_DIRECT_ACCURATE_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_direct_accurate_f32.comp")
     set(RATE_VULKAN_POLYPHASE_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f64.comp")
     set(RATE_VULKAN_POLYPHASE_F32_SOURCE
@@ -274,20 +266,12 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_accurate_f32.comp.spv")
     set(FIR_VULKAN_PARTITION_STRICT_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_strict_f32.comp.spv")
-    set(FIR_VULKAN_PARTITION_SPLIT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_split_f32.comp.spv")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64.comp.spv")
     set(FIR_VULKAN_PARTITION_REFERENCE_DD_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd.comp.spv")
     set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_spectrum_multiply_reference_dd.comp.spv")
-    set(FIR_VULKAN_DIRECT_REFERENCE_F64_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_reference_f64.comp.spv")
-    set(FIR_VULKAN_DIRECT_STRICT_F64_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_strict_f64.comp.spv")
-    set(FIR_VULKAN_DIRECT_ACCURATE_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_accurate_f32.comp.spv")
     set(RATE_VULKAN_POLYPHASE_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64.comp.spv")
     set(RATE_VULKAN_POLYPHASE_F32_SPV
@@ -346,20 +330,12 @@ if(HAVE_VULKAN)
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_accurate_f32_spv.inc")
     set(FIR_VULKAN_PARTITION_STRICT_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_strict_f32_spv.inc")
-    set(FIR_VULKAN_PARTITION_SPLIT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_split_f32_spv.inc")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64_spv.inc")
     set(FIR_VULKAN_PARTITION_REFERENCE_DD_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd_spv.inc")
     set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_spectrum_multiply_reference_dd_spv.inc")
-    set(FIR_VULKAN_DIRECT_REFERENCE_F64_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_reference_f64_spv.inc")
-    set(FIR_VULKAN_DIRECT_STRICT_F64_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_strict_f64_spv.inc")
-    set(FIR_VULKAN_DIRECT_ACCURATE_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_direct_accurate_f32_spv.inc")
     set(RATE_VULKAN_POLYPHASE_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64_spv.inc")
     set(RATE_VULKAN_POLYPHASE_F32_INC
@@ -472,14 +448,6 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
-        OUTPUT "${FIR_VULKAN_PARTITION_SPLIT_F32_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${FIR_VULKAN_PARTITION_SPLIT_F32_SPV}"
-                "${FIR_VULKAN_PARTITION_SPLIT_F32_SOURCE}"
-        DEPENDS "${FIR_VULKAN_PARTITION_SPLIT_F32_SOURCE}"
-        VERBATIM
-    )
-    add_custom_command(
         OUTPUT "${FIR_VULKAN_PARTITION_PRECISE_F64_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
                 -o "${FIR_VULKAN_PARTITION_PRECISE_F64_SPV}"
@@ -503,30 +471,6 @@ if(HAVE_VULKAN)
                 "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE}"
         DEPENDS "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE}"
                 "${VULKAN_DOUBLE_DOUBLE_HEADER}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_DIRECT_REFERENCE_F64_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${FIR_VULKAN_DIRECT_REFERENCE_F64_SPV}"
-                "${FIR_VULKAN_DIRECT_REFERENCE_F64_SOURCE}"
-        DEPENDS "${FIR_VULKAN_DIRECT_REFERENCE_F64_SOURCE}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_DIRECT_STRICT_F64_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${FIR_VULKAN_DIRECT_STRICT_F64_SPV}"
-                "${FIR_VULKAN_DIRECT_STRICT_F64_SOURCE}"
-        DEPENDS "${FIR_VULKAN_DIRECT_STRICT_F64_SOURCE}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_DIRECT_ACCURATE_F32_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${FIR_VULKAN_DIRECT_ACCURATE_F32_SPV}"
-                "${FIR_VULKAN_DIRECT_ACCURATE_F32_SOURCE}"
-        DEPENDS "${FIR_VULKAN_DIRECT_ACCURATE_F32_SOURCE}"
         VERBATIM
     )
     add_custom_command(
@@ -742,16 +686,6 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
-        OUTPUT "${FIR_VULKAN_PARTITION_SPLIT_F32_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${FIR_VULKAN_PARTITION_SPLIT_F32_SPV}"
-                "${FIR_VULKAN_PARTITION_SPLIT_F32_INC}"
-                fir_partition_split_f32_spv
-        DEPENDS sox_embed_binary
-                "${FIR_VULKAN_PARTITION_SPLIT_F32_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
         OUTPUT "${FIR_VULKAN_PARTITION_PRECISE_F64_INC}"
         COMMAND $<TARGET_FILE:sox_embed_binary>
                 "${FIR_VULKAN_PARTITION_PRECISE_F64_SPV}"
@@ -779,36 +713,6 @@ if(HAVE_VULKAN)
                 fir_spectrum_multiply_reference_dd_spv
         DEPENDS sox_embed_binary
                 "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_DIRECT_REFERENCE_F64_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${FIR_VULKAN_DIRECT_REFERENCE_F64_SPV}"
-                "${FIR_VULKAN_DIRECT_REFERENCE_F64_INC}"
-                fir_direct_reference_f64_spv
-        DEPENDS sox_embed_binary
-                "${FIR_VULKAN_DIRECT_REFERENCE_F64_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_DIRECT_STRICT_F64_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${FIR_VULKAN_DIRECT_STRICT_F64_SPV}"
-                "${FIR_VULKAN_DIRECT_STRICT_F64_INC}"
-                fir_direct_strict_f64_spv
-        DEPENDS sox_embed_binary
-                "${FIR_VULKAN_DIRECT_STRICT_F64_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_DIRECT_ACCURATE_F32_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${FIR_VULKAN_DIRECT_ACCURATE_F32_SPV}"
-                "${FIR_VULKAN_DIRECT_ACCURATE_F32_INC}"
-                fir_direct_accurate_f32_spv
-        DEPENDS sox_embed_binary
-                "${FIR_VULKAN_DIRECT_ACCURATE_F32_SPV}"
         VERBATIM
     )
     add_custom_command(
@@ -979,13 +883,9 @@ if(HAVE_VULKAN)
             "${FIR_VULKAN_PARTITION_F32_INC}"
             "${FIR_VULKAN_PARTITION_ACCURATE_F32_INC}"
             "${FIR_VULKAN_PARTITION_STRICT_F32_INC}"
-            "${FIR_VULKAN_PARTITION_SPLIT_F32_INC}"
             "${FIR_VULKAN_PARTITION_PRECISE_F64_INC}"
             "${FIR_VULKAN_PARTITION_REFERENCE_DD_INC}"
             "${FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC}"
-            "${FIR_VULKAN_DIRECT_REFERENCE_F64_INC}"
-            "${FIR_VULKAN_DIRECT_STRICT_F64_INC}"
-            "${FIR_VULKAN_DIRECT_ACCURATE_F32_INC}"
             "${RATE_VULKAN_CUBIC_INC}"
             "${RATE_VULKAN_CUBIC_F32_INC}"
             "${RATE_VULKAN_CUBIC_STRICT_F32_INC}"

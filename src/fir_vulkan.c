@@ -286,15 +286,21 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
    * while costing memory linearly, which is what puts the deepest chains over
    * the device budget. The factor stays configurable because the earlier
    * sweep that chose sixteen was run while VkFFT was returning empty low
-   * words, and measured nothing about the double-double route. */
+   * words, and measured nothing about the double-double route.
+   *
+   * Re-swept once the double-double route was real: 1x 618.27 dB, 4x 618.29,
+   * 8x 622.32, 16x 624.77 -- the whole range inside 6.5 dB, on a profile
+   * sitting nearly 300 dB above the FP64 representation floor. The setup
+   * transform is meanwhile the whole of this profile's fixed cost, so the
+   * default is one. */
   {
     char const *selector =
         getenv("SOX_VULKAN_REFERENCE_FUSION_OVERSAMPLING");
     unsigned long requested =
-        selector && selector[0] ? strtoul(selector, NULL, 10) : 16ul;
+        selector && selector[0] ? strtoul(selector, NULL, 10) : 1ul;
 
     oversampling = requested >= 1ul && requested <= 64ul ?
-        (uint32_t)requested : 16u;
+        (uint32_t)requested : 1u;
   }
   if (combined_count > UINT32_MAX / oversampling)
     return SOX_EOF;

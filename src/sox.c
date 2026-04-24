@@ -253,13 +253,19 @@ static void cleanup(void)
 
   if (file_count) {
     if (ofile->ft) {
+      char *failed_output = NULL;
+
       if (!success && ofile->ft->io_type == lsx_io_file) {   /* If we failed part way through */
         struct stat st;                  /* writing a normal file, remove it. */
         if (!stat(ofile->ft->filename, &st) &&
             (st.st_mode & S_IFMT) == S_IFREG)
-          unlink(ofile->ft->filename);
+          failed_output = lsx_strdup(ofile->ft->filename);
       }
-      sox_close(ofile->ft); /* Assume we can unlink a file before closing it. */
+      sox_close(ofile->ft);
+      if (failed_output) {
+        unlink(failed_output);
+        free(failed_output);
+      }
     }
     free(ofile->codec_options);
     free(ofile->channel_layout);
@@ -3134,7 +3140,8 @@ int main(int argc, char **argv)
   for (;;) {
     err = process();
 
-    if (err == SOX_EOF || user_abort || current_input >= input_count)
+    if (err != SOX_SUCCESS || user_abort ||
+        current_input >= input_count)
       break;
 
     if (advance_eff_chain() == SOX_EOF)
@@ -3175,7 +3182,10 @@ int main(int argc, char **argv)
       fprintf(stderr, "Done.\n");
   }
 
-  success = 1; /* Signal success to cleanup so the output file isn't removed. */
+  /* SOX_EOF is also the normal end-of-stream signal.  Other statuses are
+   * execution failures and must leave success false so cleanup removes a
+   * partial output file. */
+  success = err == SOX_SUCCESS || err == SOX_EOF;
 
   cleanup();
 

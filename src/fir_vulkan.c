@@ -1832,8 +1832,7 @@ void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context)
 {
   if (!context)
     return;
-  if (context->vulkan && context->vulkan->device)
-    vkDeviceWaitIdle(context->vulkan->device);
+  vkDeviceWaitIdle(context->vulkan->device);
   if (context->process_calls)
     lsx_report(
         "Vulkan FIR processed %" PRIu64

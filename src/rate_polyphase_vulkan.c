@@ -393,8 +393,7 @@ void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context)
 {
   if (!context)
     return;
-  if (context->vulkan && context->vulkan->device)
-    vkDeviceWaitIdle(context->vulkan->device);
+  vkDeviceWaitIdle(context->vulkan->device);
   if (context->fence)
     vkDestroyFence(context->vulkan->device, context->fence, NULL);
   if (context->command_buffers[0])

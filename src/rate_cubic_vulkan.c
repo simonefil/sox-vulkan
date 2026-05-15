@@ -312,8 +312,7 @@ void lsx_rate_cubic_vulkan_destroy(
 {
   if (!context)
     return;
-  if (context->vulkan && context->vulkan->device)
-    vkDeviceWaitIdle(context->vulkan->device);
+  vkDeviceWaitIdle(context->vulkan->device);
   if (context->fence)
     vkDestroyFence(
         context->vulkan->device, context->fence, NULL);

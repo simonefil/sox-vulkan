@@ -464,8 +464,7 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
 {
   if (!context)
     return;
-  if (context->vulkan && context->vulkan->device)
-    vkDeviceWaitIdle(context->vulkan->device);
+  vkDeviceWaitIdle(context->vulkan->device);
   if (context->resident_fence)
     vkDestroyFence(
         context->vulkan->device, context->resident_fence, NULL);
@@ -483,8 +482,7 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
     vkDestroyDescriptorPool(context->vulkan->device, context->prepare_descriptor_pool, NULL);
   if (context->prepare_descriptor_layout)
     vkDestroyDescriptorSetLayout(context->vulkan->device, context->prepare_descriptor_layout, NULL);
-  if (context->vulkan)
-    lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_previous);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_previous);
   if (context->resident_stream_commands[0])
     vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, LSX_VULKAN_RESIDENT_BATCH_DEPTH * 2u, context->resident_stream_commands);
   if (context->stream_append_pipeline)
@@ -495,11 +493,9 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
     vkDestroyDescriptorPool(context->vulkan->device, context->stream_append_descriptor_pool, NULL);
   if (context->stream_append_descriptor_layout)
     vkDestroyDescriptorSetLayout(context->vulkan->device, context->stream_append_descriptor_layout, NULL);
-  if (context->vulkan) {
-    lsx_vulkan_buffer_destroy(context->vulkan, &context->stream_append_clips);
-    lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[1]);
-    lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[0]);
-  }
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->stream_append_clips);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[1]);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[0]);
   if (context->resident_pipeline)
     vkDestroyPipeline(
         context->vulkan->device, context->resident_pipeline, NULL);
@@ -515,9 +511,7 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
     vkDestroyDescriptorSetLayout(
         context->vulkan->device,
         context->resident_descriptor_layout, NULL);
-  if (context->vulkan)
-    lsx_vulkan_buffer_destroy(
-        context->vulkan, &context->resident_output);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_output);
   lsx_fir_vulkan_destroy(context->fir);
   free(context->stage_input);
   free(context->output);

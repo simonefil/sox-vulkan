@@ -1,0 +1,89 @@
+/* Double-double polyphase accumulation with normalized FP32 output. */
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+#include "double_double.glsl"
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer Coefficients {
+  dvec2 values[];
+} coefficients;
+
+layout(std430, binding = 1) readonly buffer InputSamples {
+  dvec2 values[];
+} input_samples;
+
+layout(std430, binding = 2) writeonly buffer OutputSamples {
+  float values[];
+} output_samples;
+
+layout(push_constant) uniform Parameters {
+  uint output_frames;
+  uint phase_count;
+  uint phase_step;
+  uint phase_start;
+  uint taps;
+  uint channels;
+  uint normalize;
+  uint symmetric_presum;
+} parameters;
+
+const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+
+void main()
+{
+  const uint output_frame = gl_GlobalInvocationID.x;
+  const uint channel = gl_GlobalInvocationID.y;
+
+  if (output_frame >= parameters.output_frames ||
+      channel >= parameters.channels)
+    return;
+
+  const uint position = parameters.phase_start +
+      output_frame * parameters.phase_step;
+  const uint input_base = position / parameters.phase_count;
+  const uint phase = position % parameters.phase_count;
+  dvec2 sum = dvec2(0.0);
+
+  if (parameters.symmetric_presum != 0u) {
+    const uint center = parameters.taps / 2u;
+    const dvec2 center_coefficient = coefficients.values[center];
+    const dvec2 center_input = input_samples.values[
+        (input_base + center) * parameters.channels + channel];
+
+    sum = multiply_dd(center_coefficient, center_input);
+    for (uint tap = 0u; tap < center; ++tap) {
+      const dvec2 coefficient = coefficients.values[tap];
+
+      if (coefficient.x != 0.0 || coefficient.y != 0.0) {
+        const dvec2 pair = add_dd(
+            input_samples.values[
+                (input_base + tap) *
+                parameters.channels + channel],
+            input_samples.values[
+                (input_base + parameters.taps - 1u - tap) *
+                parameters.channels + channel]);
+
+        sum = add_dd(sum, multiply_dd(coefficient, pair));
+      }
+    }
+  }
+  else {
+    for (uint tap = 0u; tap < parameters.taps; ++tap) {
+      const dvec2 coefficient = coefficients.values[
+          tap * parameters.phase_count + phase];
+      const dvec2 input_value = input_samples.values[
+          (input_base + tap) * parameters.channels + channel];
+
+      sum = add_dd(sum, multiply_dd(coefficient, input_value));
+    }
+  }
+  const dvec2 normalized =
+      multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
+  precise double combined = normalized.x + normalized.y;
+
+  output_samples.values[
+      output_frame * parameters.channels + channel] = float(combined);
+}

@@ -76,8 +76,11 @@ typedef enum {
  * The producer identified by owner retains allocation lifetime responsibility.
  * producer_stage and producer_access describe the dependency required before a
  * consumer reads the region.  capacity_elements and valid_elements are per
- * channel.  domain distinguishes raw SoX sample units from normalized PCM;
- * packed DSD words contain 32 frames.
+ * channel.  block_elements is the largest slice this producer will ever hand
+ * over, so a consumer can size itself once instead of guessing from the first
+ * slice; zero means the producer does not declare one.  domain distinguishes
+ * raw SoX sample units from normalized PCM; packed DSD words contain 32
+ * frames.
  */
 typedef struct {
   lsx_vulkan_buffer_t *buffer;
@@ -87,6 +90,7 @@ typedef struct {
   VkAccessFlags producer_access;
   size_t capacity_elements;
   size_t valid_elements;
+  size_t block_elements;
   size_t frame_stride_elements;
   size_t channel_stride_elements;
   uint64_t frame_offset;

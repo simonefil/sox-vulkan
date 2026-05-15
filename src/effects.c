@@ -723,7 +723,8 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
       interleave(effp->flows, obeg, chain->il_buf, sox_globals.bufsiz,
           effp->oend, effp->obuf + effp->oend);
   }
-  if (!obeg)   /* This is the only thing that drain has and flow hasn't */
+  /* This is the only thing that drain has and flow hasn't. */
+  if (!obeg && effstatus == SOX_SUCCESS)
     effstatus = SOX_EOF;
 
   effp->oend += obeg;

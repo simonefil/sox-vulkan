@@ -35,7 +35,6 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context);
 size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context);
 int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, double const **output, size_t *output_frames);
 int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident);
-int lsx_rate_vulkan_process_resident_input(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident);
 size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context);
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input);
 int lsx_rate_vulkan_append_resident_stream_quantized(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input);

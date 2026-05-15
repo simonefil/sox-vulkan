@@ -434,18 +434,6 @@ uint32_t lsx_rate_polyphase_vulkan_taps(lsx_rate_polyphase_vulkan_t const *conte
   return context ? context->parameters.taps : 0;
 }
 
-size_t lsx_rate_polyphase_vulkan_output_block_frames(
-    lsx_rate_polyphase_vulkan_t const *context)
-{
-  if (!context)
-    return 0;
-  return (size_t)(
-      ((uint64_t)RATE_POLYPHASE_BLOCK_FRAMES *
-       context->parameters.phase_count +
-       context->parameters.phase_step - 1u) /
-      context->parameters.phase_step);
-}
-
 int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, double const **output, size_t *output_frames, size_t *consumed_frames)
 {
   VkCommandBuffer command_buffer;
@@ -710,28 +698,4 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
 int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   return lsx_rate_polyphase_vulkan_process_resident_input_normalized(context, input, output, output_frames, rate, state, sox_false, resident);
-}
-
-int lsx_rate_polyphase_vulkan_resident_output(lsx_rate_polyphase_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
-{
-  if (!context || !resident)
-    return SOX_EOF;
-  memset(resident, 0, sizeof(*resident));
-  resident->buffer = &context->output;
-  resident->owner = context;
-  resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-  resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
-  resident->capacity_elements = context->max_output_frames;
-  resident->valid_elements = context->valid_output_frames;
-  resident->frame_stride_elements = context->parameters.channels;
-  resident->channel_stride_elements = 1u;
-  resident->frame_offset = frame_offset;
-  resident->rate = rate;
-  resident->channels = context->parameters.channels;
-  resident->frames_per_element = 1u;
-  resident->format = sample_format(context);
-  resident->domain = lsx_vulkan_resident_domain_sox_sample;
-  resident->layout = lsx_vulkan_resident_layout_interleaved;
-  resident->state = state;
-  return lsx_vulkan_resident_buffer_validate(resident);
 }

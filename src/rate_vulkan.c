@@ -1177,19 +1177,6 @@ int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-int lsx_rate_vulkan_process_resident_input(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
-{
-  lsx_vulkan_resident_buffer_t filtered;
-
-  if (!context || !resident || rate <= 0 || record_resident_prepare(context, input) != SOX_SUCCESS)
-    return SOX_EOF;
-  if (lsx_fir_vulkan_process_prepared_resident(context->fir, rate * context->down_factor, 0, state, &filtered) != SOX_SUCCESS)
-    return SOX_EOF;
-  return finish_resident_process(
-      context, &filtered, rate, frame_offset, state,
-      normalize, sox_false, resident);
-}
-
 int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
 {
   lsx_vulkan_resident_buffer_t filtered;

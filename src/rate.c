@@ -1689,7 +1689,6 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
     size_t processable_frames;
     size_t consumed_frames;
     size_t output_frames;
-    double const *input;
 
     if (occupancy_frames <= taps - 1u)
       return SOX_SUCCESS;

@@ -2121,15 +2121,12 @@ static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
 #endif
   first = p->sdm[0];
   if (!first->trellis_mask) {
-    size_t channels = p->channels;
-    size_t channel;
-
     if (!p->packet_bits || *osamp < channels) {
       *osamp = 0;
       return SOX_SUCCESS;
     }
 
-    for (channel = 0; channel < channels; ++channel)
+    for (channel = 0; channel < (ptrdiff_t)channels; ++channel)
       obuf[channel] = SOX_DSD_PACKED_BYTE(
           p->packet[channel] << (8 - p->packet_bits),
           p->packet_bits);

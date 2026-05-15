@@ -10,7 +10,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void fail(char const *message)
+/* Marking the bail-out path as non-returning keeps the checks below readable:
+ * without it every analyser assumes execution falls through a failed open or
+ * a short read and reports the buffers as possibly uninitialised. */
+#if defined(__GNUC__) || defined(__clang__)
+#define EMBED_NORETURN __attribute__((noreturn))
+#elif defined(_MSC_VER)
+#define EMBED_NORETURN __declspec(noreturn)
+#else
+#define EMBED_NORETURN
+#endif
+
+EMBED_NORETURN static void fail(char const *message)
 {
   fprintf(stderr, "embed_binary: %s\n", message);
   exit(EXIT_FAILURE);

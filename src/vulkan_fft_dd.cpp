@@ -151,6 +151,9 @@ VkResult create_decorated_shader_module(
 
 namespace {
 
+/* Allocated with calloc and released with free, so every member starts zeroed.
+ * Default member initialisers would be dead code here: the constructor is
+ * never run. */
 struct dd_fft {
   VkFFTApplication application;
   uint64_t buffer_size;

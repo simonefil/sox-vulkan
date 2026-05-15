@@ -108,11 +108,12 @@ sox_effects_chain_t * sox_create_effects_chain(
 
 void sox_delete_effects_chain(sox_effects_chain_t *ecp)
 {
-    if (ecp && ecp->length)
+    if (!ecp)
+        return;
+    if (ecp->length)
         sox_delete_effects(ecp);
 #if HAVE_VULKAN
-    if (ecp)
-        lsx_vulkan_context_destroy(ecp->global_info.vulkan_context);
+    lsx_vulkan_context_destroy(ecp->global_info.vulkan_context);
 #endif
     free(ecp->effects);
     free(ecp);

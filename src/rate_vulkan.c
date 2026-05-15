@@ -553,14 +553,14 @@ static void prepare_stage_input(
 
 int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, double const **output, size_t *output_frames)
 {
-  size_t block_frames =
-      lsx_fir_vulkan_block_frames_for(context->vulkan);
+  size_t block_frames;
   double const *filtered;
   size_t output_frame = 0;
   size_t frame;
 
   if (!context || !input || !output || !output_frames)
     return SOX_EOF;
+  block_frames = lsx_fir_vulkan_block_frames_for(context->vulkan);
   prepare_stage_input(context, input);
   if (lsx_fir_vulkan_process(context->fir, context->stage_input, &filtered) != SOX_SUCCESS)
     return SOX_EOF;

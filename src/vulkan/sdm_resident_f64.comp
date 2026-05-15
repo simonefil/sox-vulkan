@@ -1,5 +1,5 @@
 /*
- * Convert a resident FP32 interleaved stream to the planar FP32 layout used by the Vulkan SDM modulator.
+ * Convert a resident FP64 interleaved stream to the planar FP32 layout used by the Vulkan SDM modulator.
  *
  * Frames added for the fixed-size FSM blocks are explicit silence and do
  * not advance the logical stream.  The scale carries the producer's domain:
@@ -14,11 +14,12 @@
  */
 
 #version 450
+#extension GL_ARB_gpu_shader_fp64 : require
 
 layout(local_size_x = 128) in;
 
 layout(std430, binding = 0) readonly buffer InputSamples {
-  float input_samples[];
+  double input_samples[];
 };
 
 layout(std430, binding = 1) writeonly buffer OutputSamples {
@@ -47,9 +48,10 @@ void main()
 
   float value = 0.0;
   if (frame < parameters.input_frames) {
-    value = input_samples[
-        frame * parameters.channels + channel] *
-        parameters.scale;
+    double value64 = input_samples[
+        frame * parameters.channels + channel];
+
+    value = float(value64 * double(parameters.scale));
   }
   if (value < -1.0 || value > 1.0)
     atomicAdd(clipped_samples[0], 1u);

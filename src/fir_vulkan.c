@@ -775,17 +775,26 @@ static int initialize_strict_fp32_twiddles(
       context, lsx_vulkan_wait_fir_setup);
 }
 
+static double const *channel_coefficients(
+    double const *const *coefficients,
+    uint32_t coefficient_channels, uint32_t channel)
+{
+  return coefficients[coefficient_channels == 1u ? 0u : channel];
+}
+
 static int initialize_strict_fp32_kernels(
     lsx_fir_vulkan_t *context,
-    double const *coefficients, size_t taps)
+    double const *const *coefficients,
+    uint32_t coefficient_channels, size_t taps)
 {
-  double *spectrum = lsx_calloc(
-      FIR_FFT_SIZE, sizeof(*spectrum));
+  double *spectra = lsx_calloc(
+      (size_t)context->channels * FIR_FFT_SIZE,
+      sizeof(*spectra));
   uint32_t partition;
 
   if (initialize_strict_fp32_twiddles(context) !=
       SOX_SUCCESS) {
-    free(spectrum);
+    free(spectra);
     return SOX_EOF;
   }
   for (partition = 0;
@@ -801,16 +810,25 @@ static int initialize_strict_fp32_kernels(
     };
     uint32_t channel;
 
-    memset(
-        spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
-    memcpy(
-        spectrum, coefficients + first,
-        length * sizeof(*spectrum));
-    lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
     memset(upload, 0, (size_t)context->working.size);
     for (channel = 0; channel < context->channels; ++channel) {
+      double const *source = channel_coefficients(
+          coefficients, coefficient_channels, channel);
+      double *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
       uint32_t bin;
 
+      if (channel && source == channel_coefficients(
+          coefficients, coefficient_channels, channel - 1u))
+        memcpy(
+            spectrum, spectrum - FIR_FFT_SIZE,
+            FIR_FFT_SIZE * sizeof(*spectrum));
+      else {
+        memset(spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
+        memcpy(
+            spectrum, source + first,
+            length * sizeof(*spectrum));
+        lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
+      }
       for (bin = 0; bin < FIR_FFT_SIZE; ++bin) {
         uint32_t source_bin =
             bin <= FIR_FFT_SIZE / 2u ?
@@ -834,7 +852,7 @@ static int initialize_strict_fp32_kernels(
       }
     }
     if (begin_commands(context) != SOX_SUCCESS) {
-      free(spectrum);
+      free(spectra);
       return SOX_EOF;
     }
     vkCmdCopyBuffer(
@@ -842,20 +860,22 @@ static int initialize_strict_fp32_kernels(
         context->kernels.buffer, 1, &copy);
     if (submit_commands(
         context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS) {
-      free(spectrum);
+      free(spectra);
       return SOX_EOF;
     }
   }
-  free(spectrum);
+  free(spectra);
   return SOX_SUCCESS;
 }
 
 static int initialize_accurate_kernels(
     lsx_fir_vulkan_t *context,
-    double const *coefficients, size_t taps)
+    double const *const *coefficients,
+    uint32_t coefficient_channels, size_t taps)
 {
-  double *spectrum = lsx_calloc(
-      FIR_FFT_SIZE, sizeof(*spectrum));
+  double *spectra = lsx_calloc(
+      (size_t)context->channels * FIR_FFT_SIZE,
+      sizeof(*spectra));
   uint32_t partition;
 
   for (partition = 0;
@@ -865,12 +885,28 @@ static int initialize_accurate_kernels(
         (size_t)FIR_BLOCK_FRAMES, taps - first);
     uint32_t component;
 
-    memset(
-        spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
-    memcpy(
-        spectrum, coefficients + first,
-        length * sizeof(*spectrum));
-    lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
+    {
+      uint32_t channel;
+
+      for (channel = 0; channel < context->channels; ++channel) {
+        double const *source = channel_coefficients(
+            coefficients, coefficient_channels, channel);
+        double *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
+
+        if (channel && source == channel_coefficients(
+            coefficients, coefficient_channels, channel - 1u))
+          memcpy(
+              spectrum, spectrum - FIR_FFT_SIZE,
+              FIR_FFT_SIZE * sizeof(*spectrum));
+        else {
+          memset(spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
+          memcpy(
+              spectrum, source + first,
+              length * sizeof(*spectrum));
+          lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
+        }
+      }
+    }
     for (component = 0; component < 2u; ++component) {
       buffer_t *target =
           component ? &context->kernels_low : &context->kernels;
@@ -885,6 +921,8 @@ static int initialize_accurate_kernels(
           context->working_host, 0,
           (size_t)context->working.size);
       for (channel = 0; channel < context->channels; ++channel) {
+        double const *spectrum =
+            spectra + (size_t)channel * FIR_FFT_SIZE;
         float *output = (float *)context->working_host +
             (size_t)channel * (FIR_FFT_SIZE + 2u);
         uint32_t bin;
@@ -910,7 +948,7 @@ static int initialize_accurate_kernels(
           context->upload.mapped, context->working_host,
           (size_t)context->working.size);
       if (begin_commands(context) != SOX_SUCCESS) {
-        free(spectrum);
+        free(spectra);
         return SOX_EOF;
       }
       vkCmdCopyBuffer(
@@ -918,21 +956,23 @@ static int initialize_accurate_kernels(
           target->buffer, 1, &copy);
       if (submit_commands(
           context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS) {
-        free(spectrum);
+        free(spectra);
         return SOX_EOF;
       }
     }
   }
-  free(spectrum);
+  free(spectra);
   return SOX_SUCCESS;
 }
 
 static int initialize_precise_f64_kernels(
     lsx_fir_vulkan_t *context,
-    double const *coefficients, size_t taps)
+    double const *const *coefficients,
+    uint32_t coefficient_channels, size_t taps)
 {
-  double *spectrum = lsx_calloc(
-      FIR_FFT_SIZE, sizeof(*spectrum));
+  double *spectra = lsx_calloc(
+      (size_t)context->channels * FIR_FFT_SIZE,
+      sizeof(*spectra));
   uint32_t partition;
 
   for (partition = 0;
@@ -948,19 +988,28 @@ static int initialize_precise_f64_kernels(
     uint32_t channel;
 
     memset(
-        spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
-    memcpy(
-        spectrum, coefficients + first,
-        length * sizeof(*spectrum));
-    lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
-    memset(
         context->working_host, 0,
         (size_t)context->working.size);
     for (channel = 0; channel < context->channels; ++channel) {
+      double const *source = channel_coefficients(
+          coefficients, coefficient_channels, channel);
+      double *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
       double *output = (double *)context->working_host +
           (size_t)channel * (FIR_FFT_SIZE + 2u);
       uint32_t bin;
 
+      if (channel && source == channel_coefficients(
+          coefficients, coefficient_channels, channel - 1u))
+        memcpy(
+            spectrum, spectrum - FIR_FFT_SIZE,
+            FIR_FFT_SIZE * sizeof(*spectrum));
+      else {
+        memset(spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
+        memcpy(
+            spectrum, source + first,
+            length * sizeof(*spectrum));
+        lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
+      }
       for (bin = 0; bin <= FIR_FFT_SIZE / 2u; ++bin) {
         output[2u * bin] = bin == 0 ? spectrum[0] :
             bin == FIR_FFT_SIZE / 2u ?
@@ -974,7 +1023,7 @@ static int initialize_precise_f64_kernels(
         context->upload.mapped, context->working_host,
         (size_t)context->working.size);
     if (begin_commands(context) != SOX_SUCCESS) {
-      free(spectrum);
+      free(spectra);
       return SOX_EOF;
     }
     vkCmdCopyBuffer(
@@ -982,18 +1031,19 @@ static int initialize_precise_f64_kernels(
         context->kernels.buffer, 1, &copy);
     if (submit_commands(
         context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS) {
-      free(spectrum);
+      free(spectra);
       return SOX_EOF;
     }
   }
-  free(spectrum);
+  free(spectra);
   return SOX_SUCCESS;
 }
 
 static int initialize_kernels(
     lsx_fir_vulkan_t *context,
-    double const *coefficients,
-    double const *coefficient_lows, size_t taps)
+    double const *const *coefficients,
+    double const *const *coefficient_lows,
+    uint32_t coefficient_channels, size_t taps)
 {
   VkBufferCopy upload_copy = {
     0, 0, context->working.size
@@ -1004,13 +1054,13 @@ static int initialize_kernels(
 
   if (context->strict_fp32)
     return initialize_strict_fp32_kernels(
-        context, coefficients, taps);
+        context, coefficients, coefficient_channels, taps);
   if (context->accurate_fp32)
     return initialize_accurate_kernels(
-        context, coefficients, taps);
+        context, coefficients, coefficient_channels, taps);
   if (context->authoritative_fp64_kernels)
     return initialize_precise_f64_kernels(
-        context, coefficients, taps);
+        context, coefficients, coefficient_channels, taps);
   for (partition = 0;
        partition < context->partitions; ++partition) {
     size_t first = (size_t)partition * FIR_BLOCK_FRAMES;
@@ -1031,10 +1081,15 @@ static int initialize_kernels(
           context->working_host, 0,
           (size_t)context->working.size);
       for (channel = 0; channel < context->channels; ++channel) {
+        double const *channel_highs = channel_coefficients(
+            coefficients, coefficient_channels, channel);
+        double const *channel_lows = coefficient_lows ?
+            channel_coefficients(
+                coefficient_lows, coefficient_channels, channel) : NULL;
         size_t index;
 
         for (index = 0; index < length; ++index) {
-          double coefficient = coefficients[first + index];
+          double coefficient = channel_highs[first + index];
           size_t target_index =
               (size_t)channel * (FIR_FFT_SIZE + 2u) + index;
 
@@ -1043,8 +1098,7 @@ static int initialize_kernels(
                 2u * target_index] = coefficient;
             ((double *)context->working_host)[
                 2u * target_index + 1u] =
-                coefficient_lows ?
-                coefficient_lows[first + index] : 0.;
+                channel_lows ? channel_lows[first + index] : 0.;
           }
           else if (context->double_precision)
             ((double *)context->working_host)[
@@ -1603,17 +1657,29 @@ static int create_buffers(lsx_fir_vulkan_t *context)
 }
 
 static lsx_fir_vulkan_t *create_fir(
-    lsx_vulkan_context_t *vulkan, double const *coefficients,
-    double const *coefficient_lows,
+    lsx_vulkan_context_t *vulkan,
+    double const *const *coefficients,
+    double const *const *coefficient_lows,
+    uint32_t coefficient_channels,
     size_t taps, uint32_t channels)
 {
   lsx_fir_vulkan_t *context;
   double started = monotonic_seconds();
+  uint32_t channel;
 
   if (!vulkan || !coefficients || !taps || !channels ||
+      (coefficient_channels != 1u &&
+       coefficient_channels != channels) ||
       taps > UINT32_MAX - FIR_FAST_BLOCK_FRAMES) {
     lsx_fail("invalid Vulkan FIR configuration");
     return NULL;
+  }
+  for (channel = 0; channel < coefficient_channels; ++channel) {
+    if (!coefficients[channel] ||
+        (coefficient_lows && !coefficient_lows[channel])) {
+      lsx_fail("invalid Vulkan FIR channel coefficients");
+      return NULL;
+    }
   }
   if (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
@@ -1671,7 +1737,7 @@ static lsx_fir_vulkan_t *create_fir(
       create_partition_pipeline(context) != SOX_SUCCESS ||
       initialize_kernels(
           context, coefficients, coefficient_lows,
-          taps) != SOX_SUCCESS ||
+          coefficient_channels, taps) != SOX_SUCCESS ||
       clear_history(context) != SOX_SUCCESS ||
       record_process_commands(context) != SOX_SUCCESS)
     goto error;
@@ -1716,8 +1782,19 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create(
     lsx_vulkan_context_t *vulkan, double const *coefficients,
     size_t taps, uint32_t channels)
 {
+  double const *channel_coefficients[] = {coefficients};
+
   return create_fir(
-      vulkan, coefficients, NULL, taps, channels);
+      vulkan, channel_coefficients, NULL, 1u, taps, channels);
+}
+
+lsx_fir_vulkan_t *lsx_fir_vulkan_create_channels(
+    lsx_vulkan_context_t *vulkan,
+    double const *const *coefficients,
+    size_t taps, uint32_t channels)
+{
+  return create_fir(
+      vulkan, coefficients, NULL, channels, taps, channels);
 }
 
 lsx_fir_vulkan_t *lsx_fir_vulkan_create_reference_dd(
@@ -1726,12 +1803,29 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create_reference_dd(
     double const *coefficient_lows,
     size_t taps, uint32_t channels)
 {
+  double const *channel_highs[] = {coefficient_highs};
+  double const *channel_lows[] = {coefficient_lows};
+
+  if (!coefficient_lows || !vulkan ||
+      vulkan->profile != sox_vulkan_profile_reference)
+    return NULL;
+  return create_fir(
+      vulkan, channel_highs, channel_lows, 1u,
+      taps, channels);
+}
+
+lsx_fir_vulkan_t *lsx_fir_vulkan_create_reference_dd_channels(
+    lsx_vulkan_context_t *vulkan,
+    double const *const *coefficient_highs,
+    double const *const *coefficient_lows,
+    size_t taps, uint32_t channels)
+{
   if (!coefficient_lows || !vulkan ||
       vulkan->profile != sox_vulkan_profile_reference)
     return NULL;
   return create_fir(
       vulkan, coefficient_highs, coefficient_lows,
-      taps, channels);
+      channels, taps, channels);
 }
 
 void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context)

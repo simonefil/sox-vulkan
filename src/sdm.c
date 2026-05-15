@@ -1441,115 +1441,6 @@ static size_t sdm_process_simple_packed(const sdm_filter_t *f,
   return emitted;
 }
 
-static size_t sdm_process_double_packed(const sdm_filter_t *f,
-                                        double *state, double *prev_y,
-                                        uint8_t *packet,
-                                        unsigned packet_bits,
-                                        const double *ibuf,
-                                        sox_sample_t *obuf, size_t len,
-                                        size_t output_stride)
-{
-  double y = *prev_y;
-  const double scale = 0.5;
-  size_t emitted = 0;
-
-  if (f->order == 8) {
-    const double *a = f->a;
-    const double *g = f->g;
-    double s0 = state[0];
-    double s1 = state[1];
-    double s2 = state[2];
-    double s3 = state[3];
-    double s4 = state[4];
-    double s5 = state[5];
-    double s6 = state[6];
-    double s7 = state[7];
-
-#define SDM_DOUBLE_ORDER8_STEP(target) do {                                 \
-      double x = *ibuf++ * scale;                                           \
-      double d0 = s0 - g[0] * s1 + x - y;                                  \
-      double d1 = s1 + s0 - g[1] * s2;                                     \
-      double d2 = s2 + s1 - g[2] * s3;                                     \
-      double d3 = s3 + s2 - g[3] * s4;                                     \
-      double d4 = s4 + s3 - g[4] * s5;                                     \
-      double d5 = s5 + s4 - g[5] * s6;                                     \
-      double d6 = s6 + s5 - g[6] * s7;                                     \
-      double d7 = s7 + s6;                                                  \
-      double v01 = a[0] * d0 + a[1] * d1;                                  \
-      double v23 = a[2] * d2 + a[3] * d3;                                  \
-      double v45 = a[4] * d4 + a[5] * d5;                                  \
-      double v67 = a[6] * d6 + a[7] * d7;                                  \
-      double v = x + (v01 + v23) + (v45 + v67);                            \
-      y = signbit(v) ? -1.0 : 1.0;                                         \
-      (target) = (uint8_t)(((target) << 1) | (y > 0));                      \
-      s0 = d0, s1 = d1, s2 = d2, s3 = d3;                                 \
-      s4 = d4, s5 = d5, s6 = d6, s7 = d7;                                 \
-    } while (0)
-
-    while (packet_bits && len) {
-      SDM_DOUBLE_ORDER8_STEP(*packet);
-      packet_bits++;
-      len--;
-      if (packet_bits == 8) {
-        *obuf = SOX_DSD_PACKED_BYTE(*packet, 8);
-        obuf += output_stride;
-        packet_bits = 0;
-        *packet = 0;
-        emitted++;
-      }
-    }
-
-    while (len >= 8) {
-      uint8_t value = 0;
-      unsigned i;
-
-      for (i = 0; i < 8; ++i)
-        SDM_DOUBLE_ORDER8_STEP(value);
-      *obuf = SOX_DSD_PACKED_BYTE(value, 8);
-      obuf += output_stride;
-      emitted++;
-      len -= 8;
-    }
-
-    while (len--) {
-      SDM_DOUBLE_ORDER8_STEP(*packet);
-      packet_bits++;
-    }
-
-#undef SDM_DOUBLE_ORDER8_STEP
-
-    state[0] = s0;
-    state[1] = s1;
-    state[2] = s2;
-    state[3] = s3;
-    state[4] = s4;
-    state[5] = s5;
-    state[6] = s6;
-    state[7] = s7;
-  } else {
-    double next[MAX_FILTER_ORDER];
-
-    while (len--) {
-      double x = *ibuf++ * scale;
-      double v = sdm_filter_calc(state, next, f, x, y);
-
-      y = signbit(v) ? -1.0 : 1.0;
-      *packet = (uint8_t)((*packet << 1) | (y > 0));
-      if (++packet_bits == 8) {
-        *obuf = SOX_DSD_PACKED_BYTE(*packet, 8);
-        obuf += output_stride;
-        packet_bits = 0;
-        *packet = 0;
-        emitted++;
-      }
-      memcpy(state, next, (size_t)f->order * sizeof(*next));
-    }
-  }
-
-  *prev_y = y;
-  return emitted;
-}
-
 int sdm_process(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf,
                 size_t *ilen, size_t *olen)
 {
@@ -1773,22 +1664,10 @@ void sdm_close(sdm_t *p)
 
 typedef struct sdm_effect {
   sdm_t        **sdm;
-  sox_effect_t **rate;
-  sox_sample_t *rate_input;
-  double       *rate_output;
-  double       *rate_pending;
-  size_t        rate_input_capacity;
-  size_t        rate_output_capacity;
-  size_t        rate_pending_capacity;
-  size_t        rate_pending_count;
-  sox_bool      rate_drained;
-  size_t       *rate_consumed;
-  size_t       *rate_produced;
-  size_t       *rate_emitted;
+  size_t       *emitted;
   uint8_t       *packet;
   uint8_t       packet_bits;
   const char   *filter_name;
-  sox_rate_t    out_rate;
   uint32_t      channels;
   uint32_t      threads;
   uint32_t      trellis_order;
@@ -1796,7 +1675,8 @@ typedef struct sdm_effect {
   uint32_t      trellis_lat;
 #if HAVE_VULKAN
   lsx_sdm_vulkan_t *vulkan;
-  sox_effect_t  *vulkan_rate;
+  lsx_vulkan_context_t *vulkan_engine;
+  unsigned      vulkan_rate;
   float         *vulkan_input;
   size_t        vulkan_input_frames;
   size_t        vulkan_input_capacity;
@@ -1817,576 +1697,38 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
   NULL,
   NULL
 };
-#endif
 
-static void destroy_rate_effect(sox_effect_t *rate)
+/*
+ * The logical modulator batch follows whoever feeds it, so the context is
+ * built on first use: the resident producer's declared block when the chain
+ * pairs up, the default host batch otherwise.  The backend owns the small
+ * carry area needed for a partial FSM block between producer slices.
+ */
+static int ensure_vulkan_context(sdm_effect_t *p, size_t batch_frames)
 {
-  if (rate) {
-    rate->handler.stop(rate);
-    free(rate->priv);
-    free(rate);
-  }
-}
-
-static void sdm_effect_cleanup(sdm_effect_t *p)
-{
-  unsigned channel;
-  size_t state_count = p->channels;
-
-#if HAVE_VULKAN
-  lsx_sdm_vulkan_destroy(p->vulkan);
-  destroy_rate_effect(p->vulkan_rate);
-  free(p->vulkan_input);
-  p->vulkan = NULL;
-  p->vulkan_rate = NULL;
-  p->vulkan_input = NULL;
-#endif
-  if (p->rate)
-    for (channel = 0; channel < p->channels; ++channel)
-      destroy_rate_effect(p->rate[channel]);
-  for (channel = 0; channel < state_count; ++channel)
-    if (p->sdm && p->sdm[channel])
-      sdm_close(p->sdm[channel]);
-  free(p->rate_emitted);
-  free(p->rate_produced);
-  free(p->rate_consumed);
-  free(p->rate_output);
-  free(p->rate_pending);
-  free(p->rate_input);
-  free(p->rate);
-  free(p->packet);
-  free(p->sdm);
-  p->rate_emitted = NULL;
-  p->rate_produced = NULL;
-  p->rate_consumed = NULL;
-  p->rate_output = NULL;
-  p->rate_pending = NULL;
-  p->rate_input = NULL;
-  p->rate = NULL;
-  p->packet = NULL;
-  p->sdm = NULL;
-}
-
-static int getopts(sox_effect_t *effp, int argc, char **argv)
-{
-  sdm_effect_t *p = effp->priv;
-  lsx_getopt_t optstate;
-  int c;
-  
-  lsx_getopt_init(argc, argv, "+f:j:r:t:n:l:", NULL, lsx_getopt_flag_none,
-                  1, &optstate);
-  
-  while ((c = lsx_getopt(&optstate)) != -1) switch (c) {
-    case 'f': p->filter_name = optstate.arg; break;
-      GETOPT_NUMERIC(optstate, 'j', threads, 1, SDM_MAX_THREADS)
-    case 'r': {
-      char *end;
-      p->out_rate = lsx_parse_frequency(optstate.arg, &end);
-      if (p->out_rate <= 0 || *end)
-        return lsx_usage(effp);
-      effp->out_signal.rate = p->out_rate;
-      break;
-    }
-      GETOPT_NUMERIC(optstate, 't', trellis_order, 3, SDM_TRELLIS_MAX_ORDER)
-      GETOPT_NUMERIC(optstate, 'n', trellis_num, 4, SDM_TRELLIS_MAX_NUM)
-      GETOPT_NUMERIC(optstate, 'l', trellis_lat, 100, SDM_TRELLIS_MAX_LAT)
-    default: lsx_fail("invalid option `-%c'", optstate.opt); return lsx_usage(effp);
-  }
-  
-  return argc != optstate.ind ? lsx_usage(effp) : SOX_SUCCESS;
-}
-
-#if HAVE_VULKAN
-static sox_effect_t *create_vulkan_rate_effect(
-    sox_effect_t *effp, sox_rate_t output_rate)
-{
-  char rate_arg[32];
-  char *args[2] = { "-v", rate_arg };
-  sox_effect_t *rate =
-      sox_create_effect(lsx_rate_effect_fn());
-  int result;
-
-  rate->global_info = effp->global_info;
-  rate->in_signal = effp->in_signal;
-  rate->in_signal.mult = NULL;
-  rate->out_signal = rate->in_signal;
-  rate->out_signal.rate = output_rate;
-  snprintf(rate_arg, sizeof(rate_arg), "%.17g", output_rate);
-  result = sox_effect_options(rate, 2, args);
-  if (result == SOX_SUCCESS) {
-    lsx_rate_effect_use_dft_polyphase(rate);
-    result = rate->handler.start(rate);
-  }
-  if (result != SOX_SUCCESS) {
-    free(rate->priv);
-    free(rate);
-    return NULL;
-  }
-  return rate;
-}
-#endif
-
-static int start(sox_effect_t *effp)
-{
-  sdm_effect_t *p = effp->priv;
-  sox_rate_t sdm_rate = p->out_rate ? p->out_rate : effp->in_signal.rate;
-  unsigned channel;
-
-  p->channels = effp->in_signal.channels;
-#if HAVE_VULKAN
-  if (sox_globals.vulkan_profile != sox_vulkan_profile_none) {
-    size_t core_frames;
-    size_t lookahead = lsx_sdm_vulkan_lookahead();
-    lsx_vulkan_context_t *vulkan;
-    unsigned dsd_factor;
-    sox_bool use_fused_resampler;
-
-    if (!p->out_rate || p->out_rate == effp->in_signal.rate) {
-      lsx_fail("Vulkan SDM requires -r with a DSD64..DSD1024 output rate");
-      return SOX_EOF;
-    }
-    if (effp->in_signal.rate > UINT_MAX || p->out_rate > UINT_MAX ||
-        effp->in_signal.rate != (unsigned)effp->in_signal.rate ||
-        p->out_rate != (unsigned)p->out_rate) {
-      lsx_fail("Vulkan SDM requires integer input and output sample rates");
-      return SOX_EOF;
-    }
-    if (p->trellis_order || p->trellis_num || p->trellis_lat) {
-      lsx_fail("Vulkan SDM does not support trellis options");
-      return SOX_EOF;
-    }
-    if (p->filter_name)
-      lsx_warn("Vulkan SDM uses the conservative MASH-2/FSM; -f is ignored");
-    if (p->threads)
-      lsx_warn("Vulkan SDM schedules channels on the GPU; -j is ignored");
-    dsd_factor = (unsigned)p->out_rate / 44100u;
-    use_fused_resampler =
-        !getenv("SOX_VULKAN_USE_RESIDENT_RATE") &&
-        (dsd_factor < 512u ||
-         (effp->in_signal.rate != 44100. &&
-          effp->in_signal.rate != 48000.));
-    vulkan = lsx_vulkan_context_get(effp->global_info);
-    if (!vulkan)
-      return SOX_EOF;
-    if (!use_fused_resampler) {
-      p->vulkan_rate =
-          create_vulkan_rate_effect(effp, p->out_rate);
-      if (!p->vulkan_rate)
-        return SOX_EOF;
-      if (lsx_vulkan_configure_resident_batch_depth(
-          vulkan, effp->in_signal.rate, p->out_rate, p->channels,
-          effp->in_signal.length,
-          lsx_rate_effect_resident_topology(p->vulkan_rate)) !=
-          SOX_SUCCESS)
-        return SOX_EOF;
-    }
-    if (p->vulkan_rate &&
-        lsx_rate_effect_resident_supported(p->vulkan_rate)) {
-      p->vulkan = lsx_sdm_vulkan_create_resident(
-          vulkan, (unsigned)p->out_rate, p->channels,
-          lsx_rate_effect_resident_output_block_frames(
-              p->vulkan_rate));
-      if (!p->vulkan) {
-        destroy_rate_effect(p->vulkan_rate);
-        p->vulkan_rate = NULL;
-        return SOX_EOF;
-      }
-      lsx_report(
-          "Vulkan resident segment: rate -> SDM -> DSD packing");
-      if (lsx_rate_effect_resident_input_supported(p->vulkan_rate) && !getenv("SOX_VULKAN_DISABLE_RESIDENT_EFFECT_BOUNDARY"))
-        effp->internal_chain_endpoint = &vulkan_resident_endpoint;
-    }
-    else {
-      destroy_rate_effect(p->vulkan_rate);
-      p->vulkan_rate = NULL;
-      p->vulkan = lsx_sdm_vulkan_create(vulkan,
-          (unsigned)effp->in_signal.rate,
-          (unsigned)p->out_rate, p->channels);
-      if (!p->vulkan)
-        return SOX_EOF;
-      core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
-      p->vulkan_input_capacity = core_frames + lookahead;
-      p->vulkan_input = lsx_calloc(
-          p->vulkan_input_capacity * p->channels,
-          sizeof(*p->vulkan_input));
-      lsx_report(
-          use_fused_resampler ?
-          "Vulkan fused SDM resampler selected" :
-          "Vulkan resident rate segment unsupported; "
-          "using fused SDM resampler");
-      if (!getenv(
-          "SOX_VULKAN_DISABLE_RESIDENT_EFFECT_BOUNDARY"))
-        effp->internal_chain_endpoint =
-            &vulkan_resident_endpoint;
-    }
-    effp->out_signal.precision = 1;
-    effp->out_signal.rate = p->out_rate;
-    effp->out_signal.packing = SOX_DSD_PACKING_WORD;
+  if (p->vulkan)
     return SOX_SUCCESS;
-  }
-#endif
-  p->sdm = lsx_calloc(p->channels, sizeof(*p->sdm));
-  p->rate_emitted = lsx_calloc(p->channels,
-                               sizeof(*p->rate_emitted));
-  if (p->out_rate && p->out_rate != effp->in_signal.rate) {
-    p->rate = lsx_calloc(p->channels, sizeof(*p->rate));
-    p->rate_consumed = lsx_calloc(p->channels,
-                                  sizeof(*p->rate_consumed));
-    p->rate_produced = lsx_calloc(p->channels,
-                                  sizeof(*p->rate_produced));
-  }
-
-  for (channel = 0; channel < p->channels; ++channel) {
-    p->sdm[channel] = sdm_init(
-        p->filter_name, (unsigned)sdm_rate, p->trellis_order,
-        p->trellis_num, p->trellis_lat, p->threads);
-    if (!p->sdm[channel]) {
-      sdm_effect_cleanup(p);
-      return SOX_EOF;
-    }
-  }
-
-  if (p->rate) {
-    for (channel = 0; channel < p->channels; ++channel) {
-      char rate_arg[32];
-      char *args[2] = { "-v", rate_arg };
-      sox_effect_t *rate = sox_create_effect(lsx_rate_effect_fn());
-      int result;
-
-      rate->in_signal = effp->in_signal;
-      rate->in_signal.channels = 1;
-      if (channel)
-        rate->in_signal.mult = NULL;
-      rate->out_signal = rate->in_signal;
-      rate->out_signal.rate = p->out_rate;
-      snprintf(rate_arg, sizeof(rate_arg), "%.17g", p->out_rate);
-      result = sox_effect_options(rate, 2, args);
-      if (result == SOX_SUCCESS)
-        result = rate->handler.start(rate);
-      if (result != SOX_SUCCESS) {
-        free(rate->priv);
-        free(rate);
-        sdm_effect_cleanup(p);
-        return SOX_EOF;
-      }
-      p->rate[channel] = rate;
-    }
-  }
-
-  p->threads = p->sdm[0]->threads;
-  if (p->rate && p->sdm[0]->trellis_mask) {
-    lsx_fail("internal SDM resampling is not supported with trellis mode");
-    sdm_effect_cleanup(p);
+  p->vulkan = lsx_sdm_vulkan_create(
+      p->vulkan_engine, p->vulkan_rate, p->channels, batch_frames);
+  if (!p->vulkan)
     return SOX_EOF;
-  }
-  p->packet = lsx_calloc(p->channels, sizeof(*p->packet));
-  effp->out_signal.precision = 1;
-  effp->out_signal.rate = sdm_rate;
-  if (!p->sdm[0]->trellis_mask)
-    effp->out_signal.packing = SOX_DSD_PACKING_BYTE;
-  
   return SOX_SUCCESS;
 }
 
-static int resize_rate_buffers(sdm_effect_t *p, size_t input_frames,
-                               size_t output_frames)
+static int ensure_vulkan_host_input(sdm_effect_t *p)
 {
-  if (input_frames > SOX_SIZE_MAX / p->channels ||
-      output_frames > SOX_SIZE_MAX / p->channels) {
-    lsx_fail("SDM rate buffer size overflow");
+  if (ensure_vulkan_context(p, 0) != SOX_SUCCESS)
     return SOX_EOF;
-  }
-
-  if (input_frames > p->rate_input_capacity) {
-    p->rate_input = lsx_realloc_array(
-        p->rate_input, input_frames * p->channels,
-        sizeof(*p->rate_input));
-    p->rate_input_capacity = input_frames;
-  }
-  if (output_frames > p->rate_output_capacity) {
-    p->rate_output = lsx_realloc_array(
-        p->rate_output, output_frames * p->channels,
-        sizeof(*p->rate_output));
-    p->rate_output_capacity = output_frames;
-  }
-  if (p->channels == 1 &&
-      output_frames > p->rate_pending_capacity) {
-    p->rate_pending = lsx_realloc_array(
-        p->rate_pending, output_frames, sizeof(*p->rate_pending));
-    p->rate_pending_capacity = output_frames;
+  if (!p->vulkan_input) {
+    p->vulkan_input_capacity =
+        lsx_sdm_vulkan_input_capacity(p->vulkan);
+    p->vulkan_input = lsx_calloc(
+        p->vulkan_input_capacity * p->channels,
+        sizeof(*p->vulkan_input));
   }
   return SOX_SUCCESS;
 }
 
-static size_t process_mono_pending(sdm_effect_t *p, sox_sample_t *obuf,
-                                   size_t frames)
-{
-  sdm_t *sdm = p->sdm[0];
-  size_t emitted = sdm_process_double_packed(
-      sdm->filter, sdm->simple_state, &sdm->prev_y, p->packet,
-      p->packet_bits, p->rate_pending, obuf, frames, 1);
-
-  if (!sdm_simple_state_valid(sdm)) {
-    sdm->failed = 1;
-    return 0;
-  }
-  p->packet_bits = (uint8_t)((p->packet_bits + frames) & 7);
-  p->rate_pending_count -= frames;
-  if (p->rate_pending_count)
-    memmove(p->rate_pending, p->rate_pending + frames,
-            p->rate_pending_count * sizeof(*p->rate_pending));
-  return emitted;
-}
-
-static int flow_rate_mono(sdm_effect_t *p, const sox_sample_t *ibuf,
-                          sox_sample_t *obuf, size_t *isamp,
-                          size_t *osamp)
-{
-  size_t output_frames = *osamp * 8;
-  size_t consumed = *isamp;
-  size_t produced;
-  size_t emitted = 0;
-
-  if (output_frames < p->packet_bits) {
-    *isamp = *osamp = 0;
-    return SOX_SUCCESS;
-  }
-  output_frames -= p->packet_bits;
-
-  if (p->rate_pending_count > output_frames) {
-    emitted = process_mono_pending(p, obuf, output_frames);
-    *isamp = 0;
-    *osamp = emitted;
-    return SOX_SUCCESS;
-  }
-
-  if (resize_rate_buffers(p, *isamp, output_frames) != SOX_SUCCESS)
-    return SOX_EOF;
-  produced = output_frames;
-
-  if (!p->rate_pending_count) {
-    lsx_rate_flow_double(p->rate[0], ibuf, &consumed,
-                         p->rate_output, &produced);
-    {
-      double *swap = p->rate_pending;
-      p->rate_pending = p->rate_output;
-      p->rate_output = swap;
-    }
-    p->rate_pending_count = produced;
-    if (p->rate_pending_count) {
-      size_t prime = min(
-          p->rate_pending_count, (size_t)(8 - p->packet_bits));
-      emitted = process_mono_pending(p, obuf, prime);
-    }
-  } else {
-#if defined HAVE_OPENMP
-    #pragma omp parallel sections \
-        if(sox_globals.use_threads && p->threads > 1 && \
-           omp_get_max_threads() > 1) num_threads(2)
-    {
-      #pragma omp section
-#endif
-      {
-        lsx_rate_flow_double(p->rate[0], ibuf, &consumed,
-                             p->rate_output, &produced);
-      }
-#if defined HAVE_OPENMP
-      #pragma omp section
-#endif
-      {
-        emitted = process_mono_pending(
-            p, obuf, p->rate_pending_count);
-      }
-#if defined HAVE_OPENMP
-    }
-#endif
-    {
-      double *swap = p->rate_pending;
-      p->rate_pending = p->rate_output;
-      p->rate_output = swap;
-    }
-    p->rate_pending_count = produced;
-  }
-  *isamp = consumed;
-  *osamp = emitted;
-  return SOX_SUCCESS;
-}
-
-static int drain_rate_mono(sdm_effect_t *p, sox_sample_t *obuf,
-                           size_t *osamp)
-{
-  size_t output_frames = *osamp * 8;
-  size_t emitted = 0;
-
-  if (output_frames < p->packet_bits) {
-    *osamp = 0;
-    return SOX_SUCCESS;
-  }
-  output_frames -= p->packet_bits;
-
-  while (!emitted) {
-    size_t produced = output_frames;
-
-    if (p->rate_pending_count > output_frames) {
-      emitted = process_mono_pending(p, obuf, output_frames);
-      break;
-    }
-
-    if (!p->rate_pending_count && !p->rate_drained) {
-      if (resize_rate_buffers(p, 0, output_frames) != SOX_SUCCESS)
-        return SOX_EOF;
-      lsx_rate_drain_double(p->rate[0], p->rate_output, &produced);
-      if (!produced)
-        p->rate_drained = sox_true;
-      else {
-        double *swap = p->rate_pending;
-        p->rate_pending = p->rate_output;
-        p->rate_output = swap;
-        p->rate_pending_count = produced;
-      }
-      continue;
-    }
-
-    if (p->rate_pending_count) {
-      size_t pending = p->rate_pending_count;
-
-      if (resize_rate_buffers(p, 0, output_frames) != SOX_SUCCESS)
-        return SOX_EOF;
-      if (!p->rate_drained) {
-#if defined HAVE_OPENMP
-        #pragma omp parallel sections \
-            if(sox_globals.use_threads && p->threads > 1 && \
-               omp_get_max_threads() > 1) num_threads(2)
-        {
-          #pragma omp section
-#endif
-          {
-            lsx_rate_drain_double(p->rate[0], p->rate_output,
-                                  &produced);
-            if (!produced)
-              p->rate_drained = sox_true;
-          }
-#if defined HAVE_OPENMP
-          #pragma omp section
-#endif
-          {
-            emitted = process_mono_pending(p, obuf, pending);
-          }
-#if defined HAVE_OPENMP
-        }
-#endif
-      } else {
-        produced = 0;
-        emitted = process_mono_pending(p, obuf, pending);
-      }
-
-      {
-        double *swap = p->rate_pending;
-        p->rate_pending = p->rate_output;
-        p->rate_output = swap;
-      }
-      p->rate_pending_count = produced;
-      if (emitted)
-        break;
-      continue;
-    }
-
-    if (p->packet_bits && *osamp) {
-      obuf[0] = SOX_DSD_PACKED_BYTE(
-          p->packet[0] << (8 - p->packet_bits), p->packet_bits);
-      p->packet_bits = 0;
-      p->packet[0] = 0;
-      emitted = 1;
-    }
-    break;
-  }
-
-  *osamp = emitted;
-  return SOX_SUCCESS;
-}
-
-static int process_rate_output(sdm_effect_t *p, sox_sample_t *obuf,
-                               size_t input_frames, size_t output_frames,
-                               sox_bool draining, size_t *consumed,
-                               size_t *emitted)
-{
-  const size_t channels = p->channels;
-  size_t channel;
-  ptrdiff_t job;
-
-  if (resize_rate_buffers(p, input_frames, output_frames) != SOX_SUCCESS)
-    return SOX_EOF;
-  if (!output_frames) {
-    *consumed = 0;
-    *emitted = 0;
-    return SOX_SUCCESS;
-  }
-
-  for (channel = 0; channel < channels; ++channel) {
-    p->rate_consumed[channel] = input_frames;
-    p->rate_produced[channel] = output_frames;
-    p->rate_emitted[channel] = 0;
-  }
-
-#if defined HAVE_OPENMP
-  {
-    int thread_count = (int)min(
-        min(channels, (size_t)p->threads),
-        (size_t)omp_get_max_threads());
-    #pragma omp parallel for \
-        if(sox_globals.use_threads && thread_count > 1) \
-        num_threads(thread_count) schedule(static)
-#endif
-    for (job = 0; job < (ptrdiff_t)channels; ++job) {
-      const sox_sample_t *rate_input = input_frames ?
-          p->rate_input + (size_t)job * input_frames : NULL;
-      double *rate_output =
-          p->rate_output + (size_t)job * output_frames;
-
-      if (draining)
-        lsx_rate_drain_double(p->rate[job], rate_output,
-                              p->rate_produced + job);
-      else
-        lsx_rate_flow_double(p->rate[job], rate_input,
-                             p->rate_consumed + job, rate_output,
-                             p->rate_produced + job);
-      sdm_t *sdm = p->sdm[job];
-
-      p->rate_emitted[job] = sdm_process_double_packed(
-          sdm->filter, sdm->simple_state, &sdm->prev_y,
-          p->packet + job, p->packet_bits, rate_output, obuf + job,
-          p->rate_produced[job], channels);
-      if (!sdm_simple_state_valid(sdm))
-        sdm->failed = 1;
-    }
-#if defined HAVE_OPENMP
-  }
-#endif
-
-  for (channel = 1; channel < channels; ++channel) {
-    if (p->rate_consumed[channel] != p->rate_consumed[0] ||
-        p->rate_produced[channel] != p->rate_produced[0] ||
-        p->rate_emitted[channel] != p->rate_emitted[0]) {
-      lsx_fail("SDM channel resamplers flowed asymmetrically");
-      return SOX_EOF;
-    }
-  }
-
-  for (channel = 0; channel < channels; ++channel) {
-    if (p->sdm[channel]->failed) {
-      lsx_fail("SDM diverged on channel %zu", channel + 1);
-      return SOX_ECONVERGE;
-    }
-  }
-  *emitted = p->rate_emitted[0];
-  p->packet_bits = (uint8_t)(
-      (p->packet_bits + p->rate_produced[0]) & 7);
-
-  *consumed = p->rate_consumed[0];
-  return SOX_SUCCESS;
-}
-
-#if HAVE_VULKAN
 static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf,
                                size_t *osamp)
 {
@@ -2415,11 +1757,10 @@ static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf,
   *osamp = groups * p->channels;
 }
 
-static int process_vulkan_input(sdm_effect_t *p, size_t frames,
-                                size_t available_frames)
+static int process_vulkan_input(sdm_effect_t *p, size_t frames)
 {
   if (lsx_sdm_vulkan_process(
-      p->vulkan, p->vulkan_input, frames, available_frames,
+      p->vulkan, p->vulkan_input, frames,
       &p->vulkan_output, &p->vulkan_output_bytes,
       &p->vulkan_output_stride) != SOX_SUCCESS)
     return SOX_EOF;
@@ -2432,203 +1773,59 @@ static int process_vulkan_input(sdm_effect_t *p, size_t frames,
   return SOX_SUCCESS;
 }
 
-static int accept_vulkan_resident_input(
-    sdm_effect_t *p,
-    lsx_vulkan_resident_buffer_t const *input,
-    sox_bool *output_ready)
-{
-  if (lsx_sdm_vulkan_process_resident(
-      p->vulkan, input, output_ready,
-      &p->vulkan_output, &p->vulkan_output_bytes,
-      &p->vulkan_output_stride) != SOX_SUCCESS)
-    return SOX_EOF;
-  if (*output_ready &&
-      (p->vulkan_output_bytes % 4u ||
-      p->vulkan_output_stride % 4u)) {
-    lsx_fail("resident Vulkan DSD output is not word aligned");
-    return SOX_EOF;
-  }
-  p->vulkan_output_pos = 0;
-  return SOX_SUCCESS;
-}
-
 static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active)
 {
   sdm_effect_t *p = effp->priv;
-  lsx_vulkan_resident_buffer_t rate_output;
-  lsx_vulkan_resident_buffer_t const *current = input;
-  sox_bool consumed;
-  sox_bool produced;
   sox_bool output_ready;
 
   *input_consumed = sox_false;
   *input_clips = 0;
+  if (input && ensure_vulkan_context(
+      p, max(input->block_elements, input->valid_elements)) !=
+      SOX_SUCCESS) {
+    *osamp = 0;
+    return SOX_EINVAL;
+  }
+  if (!p->vulkan) {
+    *osamp = 0;
+    *active = sox_false;
+    return SOX_SUCCESS;
+  }
   if (p->vulkan_output) {
     emit_vulkan_output(p, obuf, osamp);
     *active = p->vulkan_output ||
-        (p->vulkan_rate ?
-        lsx_rate_effect_resident_input_ready(p->vulkan_rate) :
-        lsx_sdm_vulkan_specialized_resident_active(p->vulkan));
-    *input_clips = p->vulkan_rate ?
-        lsx_rate_effect_external_input_clips(p->vulkan_rate) :
-        lsx_sdm_vulkan_specialized_resident_clips(p->vulkan);
-    return SOX_SUCCESS;
-  }
-  if (!p->vulkan_rate) {
-    if (lsx_sdm_vulkan_process_specialized_resident(
-        p->vulkan, input, input_consumed, &output_ready,
-        &p->vulkan_output, &p->vulkan_output_bytes,
-        &p->vulkan_output_stride) != SOX_SUCCESS) {
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    p->vulkan_output_pos = 0;
-    if (output_ready &&
-        (p->vulkan_output_bytes % 4u ||
-        p->vulkan_output_stride % 4u)) {
-      lsx_fail(
-          "specialized resident Vulkan DSD output is not word aligned");
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    if (p->vulkan_output)
-      emit_vulkan_output(p, obuf, osamp);
-    else
-      *osamp = 0;
-    *active = p->vulkan_output ||
-        lsx_sdm_vulkan_specialized_resident_active(p->vulkan);
+        lsx_sdm_vulkan_resident_active(p->vulkan);
     *input_clips =
-        lsx_sdm_vulkan_specialized_resident_clips(p->vulkan);
+        lsx_sdm_vulkan_resident_clips(p->vulkan);
     return SOX_SUCCESS;
   }
-  for (;;) {
-    if (lsx_rate_effect_flow_resident_input(p->vulkan_rate, current, &consumed, &rate_output, &produced) != SOX_SUCCESS) {
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    if (consumed) {
-      *input_consumed = sox_true;
-      current = NULL;
-    }
-    if (!produced)
-      break;
-    if (accept_vulkan_resident_input(p, &rate_output, &output_ready) != SOX_SUCCESS) {
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    if (output_ready) {
-      *input_clips += lsx_rate_effect_external_input_clips_completed(p->vulkan_rate);
-      break;
-    }
+  if (lsx_sdm_vulkan_consume_resident(
+      p->vulkan, input, input_consumed, &output_ready,
+      &p->vulkan_output, &p->vulkan_output_bytes,
+      &p->vulkan_output_stride) != SOX_SUCCESS) {
+    *osamp = 0;
+    return SOX_EINVAL;
+  }
+  p->vulkan_output_pos = 0;
+  if (output_ready &&
+      (p->vulkan_output_bytes % 4u ||
+      p->vulkan_output_stride % 4u)) {
+    lsx_fail("resident Vulkan DSD output is not word aligned");
+    *osamp = 0;
+    return SOX_EOF;
   }
   if (p->vulkan_output)
     emit_vulkan_output(p, obuf, osamp);
   else
     *osamp = 0;
-  *active = p->vulkan_output || lsx_rate_effect_resident_input_ready(p->vulkan_rate);
-  *input_clips += lsx_rate_effect_external_input_clips(p->vulkan_rate);
+  *active = p->vulkan_output ||
+      lsx_sdm_vulkan_resident_active(p->vulkan);
+  *input_clips =
+      lsx_sdm_vulkan_resident_clips(p->vulkan);
   return SOX_SUCCESS;
 }
 
-static int flow_vulkan_resident(
-    sdm_effect_t *p, sox_sample_t const *ibuf,
-    sox_sample_t *obuf, size_t *isamp, size_t *osamp)
-{
-  lsx_vulkan_resident_buffer_t resident;
-  sox_bool produced;
-  sox_bool output_ready;
-  size_t available = *isamp;
-  size_t consumed = 0;
-
-  if (p->vulkan_output) {
-    *isamp = 0;
-    emit_vulkan_output(p, obuf, osamp);
-    return SOX_SUCCESS;
-  }
-  for (;;) {
-    size_t current = available;
-
-    if (lsx_rate_effect_flow_resident(p->vulkan_rate, ibuf, &current, &resident, &produced) != SOX_SUCCESS) {
-      *isamp = consumed;
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    if (current) {
-      consumed = current;
-      available = 0;
-    }
-    if (!produced) {
-      *isamp = consumed;
-      *osamp = 0;
-      return SOX_SUCCESS;
-    }
-    if (accept_vulkan_resident_input(p, &resident, &output_ready) != SOX_SUCCESS) {
-      *isamp = consumed;
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    if (output_ready)
-      break;
-    available = 0;
-  }
-  *isamp = consumed;
-  emit_vulkan_output(p, obuf, osamp);
-  return SOX_SUCCESS;
-}
-
-static int drain_vulkan_resident(
-    sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
-{
-  lsx_vulkan_resident_buffer_t resident;
-  sox_bool produced;
-  sox_bool rate_done;
-  sox_bool output_ready;
-
-  if (p->vulkan_output) {
-    emit_vulkan_output(p, obuf, osamp);
-    return SOX_SUCCESS;
-  }
-  for (;;) {
-    if (lsx_rate_effect_drain_resident(p->vulkan_rate, &resident, &produced, &rate_done) != SOX_SUCCESS) {
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    if (produced) {
-      if (accept_vulkan_resident_input(p, &resident, &output_ready) != SOX_SUCCESS) {
-        *osamp = 0;
-        return SOX_EOF;
-      }
-      if (output_ready) {
-        emit_vulkan_output(p, obuf, osamp);
-        return SOX_SUCCESS;
-      }
-      continue;
-    }
-    if (!rate_done) {
-      *osamp = 0;
-      return SOX_SUCCESS;
-    }
-    if (lsx_sdm_vulkan_drain_resident(p->vulkan, &output_ready, &p->vulkan_output, &p->vulkan_output_bytes, &p->vulkan_output_stride) != SOX_SUCCESS) {
-      *osamp = 0;
-      return SOX_EOF;
-    }
-    p->vulkan_output_pos = 0;
-    if (output_ready) {
-      if (p->vulkan_output_bytes % 4u ||
-          p->vulkan_output_stride % 4u) {
-        lsx_fail("resident Vulkan DSD output is not word aligned");
-        *osamp = 0;
-        return SOX_EOF;
-      }
-      emit_vulkan_output(p, obuf, osamp);
-      return SOX_SUCCESS;
-    }
-    *osamp = 0;
-    return SOX_SUCCESS;
-  }
-}
-
-static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
+static int flow_vulkan(sdm_effect_t *p,
     sox_sample_t const *ibuf, sox_sample_t *obuf,
     size_t *isamp, size_t *osamp)
 {
@@ -2637,12 +1834,24 @@ static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
   size_t consumed;
   size_t frame;
   size_t channel;
-  size_t core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
-  size_t lookahead = lsx_sdm_vulkan_lookahead();
+  size_t core_frames;
 
-  if (p->vulkan_rate)
-    return flow_vulkan_resident(
-        p, ibuf, obuf, isamp, osamp);
+  /*
+   * A priming call with nothing in it must not build the context: the
+   * batch belongs to whoever feeds the modulator, and a resident producer
+   * may still be about to claim it.
+   */
+  if (!p->vulkan && !input_frames && !p->vulkan_output) {
+    *isamp = 0;
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
+  if (ensure_vulkan_host_input(p) != SOX_SUCCESS) {
+    *isamp = 0;
+    *osamp = 0;
+    return SOX_EOF;
+  }
+  core_frames = lsx_sdm_vulkan_input_capacity(p->vulkan);
   if (p->vulkan_output) {
     *isamp = 0;
     emit_vulkan_output(p, obuf, osamp);
@@ -2663,25 +1872,21 @@ static int flow_vulkan(sox_effect_t *effp, sdm_effect_t *p,
     *osamp = 0;
     return SOX_SUCCESS;
   }
-  if (process_vulkan_input(p, core_frames,
-      core_frames + lookahead) != SOX_SUCCESS) {
+  if (process_vulkan_input(p, core_frames) != SOX_SUCCESS) {
     *osamp = 0;
     return SOX_EOF;
   }
-  /* Retain the future half of the centred FIR as the next chunk's look-ahead. */
-  memmove(
-      p->vulkan_input,
-      p->vulkan_input + core_frames * p->channels,
-      lookahead * p->channels * sizeof(*p->vulkan_input));
-  p->vulkan_input_frames = lookahead;
+  p->vulkan_input_frames = 0;
   emit_vulkan_output(p, obuf, osamp);
   return SOX_SUCCESS;
 }
 
 static int drain_vulkan(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
 {
-  if (p->vulkan_rate)
-    return drain_vulkan_resident(p, obuf, osamp);
+  if (!p->vulkan) {
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
   if (p->vulkan_output) {
     emit_vulkan_output(p, obuf, osamp);
     return SOX_SUCCESS;
@@ -2689,7 +1894,7 @@ static int drain_vulkan(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
   if (p->vulkan_input_frames) {
     size_t frames = p->vulkan_input_frames;
 
-    if (process_vulkan_input(p, frames, frames) != SOX_SUCCESS) {
+    if (process_vulkan_input(p, frames) != SOX_SUCCESS) {
       *osamp = 0;
       return SOX_EOF;
     }
@@ -2702,6 +1907,115 @@ static int drain_vulkan(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
 }
 #endif
 
+static void sdm_effect_cleanup(sdm_effect_t *p)
+{
+  unsigned channel;
+  size_t state_count = p->channels;
+
+#if HAVE_VULKAN
+  lsx_sdm_vulkan_destroy(p->vulkan);
+  free(p->vulkan_input);
+  p->vulkan = NULL;
+  p->vulkan_input = NULL;
+#endif
+  for (channel = 0; channel < state_count; ++channel)
+    if (p->sdm && p->sdm[channel])
+      sdm_close(p->sdm[channel]);
+  free(p->emitted);
+  free(p->packet);
+  free(p->sdm);
+  p->emitted = NULL;
+  p->packet = NULL;
+  p->sdm = NULL;
+}
+
+static int getopts(sox_effect_t *effp, int argc, char **argv)
+{
+  sdm_effect_t *p = effp->priv;
+  lsx_getopt_t optstate;
+  int c;
+
+  lsx_getopt_init(argc, argv, "+f:t:n:l:", NULL, lsx_getopt_flag_none,
+                  1, &optstate);
+
+  while ((c = lsx_getopt(&optstate)) != -1) switch (c) {
+    case 'f': p->filter_name = optstate.arg; break;
+      GETOPT_NUMERIC(optstate, 't', trellis_order, 3, SDM_TRELLIS_MAX_ORDER)
+      GETOPT_NUMERIC(optstate, 'n', trellis_num, 4, SDM_TRELLIS_MAX_NUM)
+      GETOPT_NUMERIC(optstate, 'l', trellis_lat, 100, SDM_TRELLIS_MAX_LAT)
+    default: lsx_fail("invalid option `-%c'", optstate.opt); return lsx_usage(effp);
+  }
+
+  return argc != optstate.ind ? lsx_usage(effp) : SOX_SUCCESS;
+}
+
+static int start(sox_effect_t *effp)
+{
+  sdm_effect_t *p = effp->priv;
+  sox_rate_t sdm_rate = effp->in_signal.rate;
+  unsigned channel;
+
+  p->channels = effp->in_signal.channels;
+#if HAVE_VULKAN
+  if (sox_globals.vulkan_profile != sox_vulkan_profile_none) {
+    lsx_vulkan_context_t *vulkan;
+
+    /*
+     * The modulator does not resample: it consumes whatever arrives at the
+     * DSD rate, so the chain must carry a rate effect ahead of it.
+     */
+    if (sdm_rate > UINT_MAX || sdm_rate != (unsigned)sdm_rate) {
+      lsx_fail("Vulkan SDM requires an integer input sample rate");
+      return SOX_EOF;
+    }
+    if (!lsx_sdm_vulkan_dsd_rate_supported((unsigned)sdm_rate)) {
+      lsx_fail(
+          "Vulkan SDM needs its input already at a DSD rate; put a rate "
+          "effect ahead of it, for instance `rate 2822400' for DSD64 "
+          "(DSD64..DSD1024 is 2822400 to 45158400)");
+      return SOX_EOF;
+    }
+    if (p->filter_name || p->trellis_order || p->trellis_num ||
+        p->trellis_lat)
+      lsx_warn(
+          "Vulkan SDM uses the conservative MASH-2/FSM; "
+          "-f, -t, -n and -l are ignored");
+    vulkan = lsx_vulkan_context_get(effp->global_info);
+    if (!vulkan)
+      return SOX_EOF;
+    p->vulkan_engine = vulkan;
+    p->vulkan_rate = (unsigned)sdm_rate;
+    if (!getenv("SOX_VULKAN_DISABLE_RESIDENT_EFFECT_BOUNDARY"))
+      effp->internal_chain_endpoint = &vulkan_resident_endpoint;
+    effp->out_signal.precision = 1;
+    effp->out_signal.rate = sdm_rate;
+    effp->out_signal.packing = SOX_DSD_PACKING_WORD;
+    return SOX_SUCCESS;
+  }
+#endif
+  p->sdm = lsx_calloc(p->channels, sizeof(*p->sdm));
+  p->emitted = lsx_calloc(p->channels, sizeof(*p->emitted));
+
+  for (channel = 0; channel < p->channels; ++channel) {
+    p->sdm[channel] = sdm_init(
+        p->filter_name, (unsigned)sdm_rate, p->trellis_order,
+        p->trellis_num, p->trellis_lat, p->threads);
+    if (!p->sdm[channel]) {
+      sdm_effect_cleanup(p);
+      return SOX_EOF;
+    }
+  }
+
+  p->threads = p->sdm[0]->threads;
+  p->packet = lsx_calloc(p->channels, sizeof(*p->packet));
+  effp->out_signal.precision = 1;
+  effp->out_signal.rate = sdm_rate;
+  if (!p->sdm[0]->trellis_mask)
+    effp->out_signal.packing = SOX_DSD_PACKING_BYTE;
+
+  return SOX_SUCCESS;
+}
+
 static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
                 sox_sample_t *obuf, size_t *isamp, size_t *osamp)
 {
@@ -2712,49 +2026,10 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
   ptrdiff_t job;
 
 #if HAVE_VULKAN
-  if (p->vulkan)
-    return flow_vulkan(effp, p, ibuf, obuf, isamp, osamp);
+  if (p->vulkan_engine)
+    return flow_vulkan(p, ibuf, obuf, isamp, osamp);
 #endif
   first = p->sdm[0];
-  if (p->rate && channels == 1) {
-    int result = flow_rate_mono(p, ibuf, obuf, isamp, osamp);
-    if (p->sdm[0]->failed) {
-      *osamp = 0;
-      lsx_fail("SDM diverged on channel 1");
-      return SOX_ECONVERGE;
-    }
-    return result;
-  }
-
-  if (p->rate) {
-    size_t input_frames = *isamp / channels;
-    size_t output_frames = (*osamp / channels) * 8;
-    size_t consumed;
-    size_t emitted;
-    size_t channel;
-    size_t frame;
-
-    if (output_frames < p->packet_bits) {
-      *isamp = *osamp = 0;
-      return SOX_SUCCESS;
-    }
-    output_frames -= p->packet_bits;
-
-    if (resize_rate_buffers(p, input_frames, output_frames) != SOX_SUCCESS)
-      return SOX_EOF;
-    for (channel = 0; channel < channels; ++channel)
-      for (frame = 0; frame < input_frames; ++frame)
-        p->rate_input[channel * input_frames + frame] =
-            ibuf[frame * channels + channel];
-
-    if (process_rate_output(p, obuf, input_frames, output_frames,
-                            sox_false, &consumed, &emitted) != SOX_SUCCESS)
-      return SOX_EOF;
-    *isamp = consumed * channels;
-    *osamp = emitted * channels;
-    return SOX_SUCCESS;
-  }
-
   if (first->trellis_mask) {
     wide = min(*isamp, *osamp) / channels;
     *isamp = wide * channels;
@@ -2809,7 +2084,7 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
           sdm->filter, sdm->simple_state, &sdm->prev_y,
           p->packet + job, p->packet_bits, ibuf + job, obuf + job,
           wide, channels, channels);
-      p->rate_emitted[job] = channel_emitted;
+      p->emitted[job] = channel_emitted;
       if (!sdm_simple_state_valid(sdm))
         sdm->failed = 1;
     }
@@ -2819,7 +2094,7 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
         lsx_fail("SDM diverged on channel %td", job + 1);
         return SOX_ECONVERGE;
       }
-      if (p->rate_emitted[job] != emitted) {
+      if (p->emitted[job] != emitted) {
         *osamp = 0;
         lsx_fail("SDM channels packed asymmetrically");
         return SOX_EOF;
@@ -2841,39 +2116,10 @@ static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
   ptrdiff_t channel;
 
 #if HAVE_VULKAN
-  if (p->vulkan)
+  if (p->vulkan_engine)
     return drain_vulkan(p, obuf, osamp);
 #endif
   first = p->sdm[0];
-  if (p->rate && channels == 1) {
-    int result = drain_rate_mono(p, obuf, osamp);
-    if (p->sdm[0]->failed) {
-      *osamp = 0;
-      lsx_fail("SDM diverged on channel 1");
-      return SOX_ECONVERGE;
-    }
-    return result;
-  }
-
-  if (p->rate) {
-    size_t output_frames = (*osamp / channels) * 8;
-    size_t consumed;
-    size_t emitted;
-
-    if (output_frames < p->packet_bits) {
-      *osamp = 0;
-      return SOX_SUCCESS;
-    }
-    output_frames -= p->packet_bits;
-    if (process_rate_output(p, obuf, 0, output_frames, sox_true,
-                            &consumed, &emitted) != SOX_SUCCESS)
-      return SOX_EOF;
-    if (emitted) {
-      *osamp = emitted * channels;
-      return SOX_SUCCESS;
-    }
-  }
-
   if (!first->trellis_mask) {
     size_t channels = p->channels;
     size_t channel;
@@ -2930,20 +2176,17 @@ static int stop(sox_effect_t *effp)
 const sox_effect_handler_t *lsx_sdm_effect_fn(void)
 {
   static sox_effect_handler_t handler = {
-    "sdm", "[-f filter] [-j threads] [-r rate]"
-    " [-t order] [-n num] [-l latency]"
+    "sdm", "[-f filter] [-t order] [-n num] [-l latency]"
     "\n  -f       Noise-shaping filter:"
     "\n           sdm-4..sdm-8, clans-4..clans-8"
     "\n           All orders: DSD64 through DSD1024"
     "\n           DSD rates use the 44.1-kHz family"
-    "\n  -j       Maximum worker threads (defaults to OpenMP maximum)"
-    "\n  -r       Resample internally with rate -v and pass double"
-    "\n           samples directly to the packed SDM path"
+    "\n           sdm modulates at its input rate; put a rate effect"
+    "\n           ahead of it to reach the DSD rate"
     "\n           Advanced options:"
     "\n  -t       Override trellis order"
     "\n  -n       Override number of trellis paths"
-    "\n  -l       Override trellis latency"
-    "\n           Trellis mode is not supported with -r",
+    "\n  -l       Override trellis latency",
     SOX_EFF_PREC | SOX_EFF_RATE | SOX_EFF_MCHAN,
     getopts, start, flow, drain, stop, 0, sizeof(sdm_effect_t),
   };

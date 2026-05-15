@@ -418,7 +418,7 @@ This lists all formats enabled in the current build. Look for:
 # Encode PCM to DSD512
 ./output/sox --multi-threaded --buffer 524288 input.wav \
   -r 22579200 output.dsf \
-  sdm -f sdm-8 -r 22579200
+  rate -v 22579200 sdm -f sdm-8
 
 # Generate a five-second test tone
 ./output/sox -n test.wav synth 5 sine 440
@@ -429,7 +429,7 @@ On Windows, enable the NVIDIA Vulkan encode path explicitly:
 ```powershell
 .\output\sox.exe --multi-threaded --vulkan --buffer 524288 input.wav `
   -r 22579200 output.dsf `
-  sdm -r 22579200
+  rate -v 22579200 sdm
 ```
 
 Use the Vulkan FIR backend for long coefficient files:
@@ -458,21 +458,56 @@ Run `sox --help-format FORMAT` for the sample rates, channel layouts, compressio
 
 #### DSD modulation
 
-The `sdm` effect performs PCM-to-DSD sigma-delta modulation; DSF and DSDIFF writers only pack the resulting one-bit stream. `-r RATE` fuses the very-high-quality resampler with the modulator and passes normalized double-precision samples directly to it. Channels are processed concurrently when multithreading is enabled; use `-j N` to cap workers, or omit it to use the OpenMP runtime limit. Each individual channel retains the full-rate causal SDM recurrence.
+The `sdm` effect performs PCM-to-DSD sigma-delta modulation; it does not
+resample. Put a separate `rate` effect before it, as in
+`rate -v 22579200 sdm`, and use the normal `rate` options to choose quality,
+bandwidth, phase, rejection, and aliasing behavior. DSF and DSDIFF writers
+only pack the resulting one-bit stream. On CPU, channels are processed with
+the OpenMP runtime limit and `sdm` retains the upstream `-f`, `-t`, `-n`, and
+`-l` options. Each channel retains the full-rate causal SDM recurrence.
 
-On Windows builds compiled with Vulkan support, the global `--vulkan` option selects the NVIDIA Vulkan encode path for `sdm -r`. It accepts one through six channels and PCM input rates that are integer multiples of either 44.1 or 48 kHz. Output is restricted to the fixed DSD64, DSD128, DSD256, DSD512, and DSD1024 rates in the 44.1 kHz family. The backend performs rational `L/M` conversion with a 257-tap-per-phase Kaiser-windowed FIR on the GPU, using a 20 kHz passband edge and the lower of the source and output Nyquist frequencies as the stopband edge, followed by the conservative MASH-2 finite-state modulator at a fixed −3 dB input gain. CPU filter selections (`-f`), `-j`, and trellis options do not alter this path; trellis is rejected and the other two options are reported as ignored. DSF and DSDIFF output use a channel-major packed-word path, so the final duration is rounded up by at most 31 DSD samples to complete the last 32-bit word. DSD decoding remains on the normal CPU path.
+On builds compiled with Vulkan support, a global Vulkan profile joins an
+adjacent `rate -> sdm` pair into a resident device segment. `rate` keeps its
+CPU planner and all of its normal options, while the selected Vulkan profile
+controls the numerical executor. The SDM consumes the resulting stream at
+DSD64 through DSD1024 without another interpolation filter or a host PCM
+round-trip. It accepts one through six channels, uses the conservative
+MASH-2 finite-state modulator at a fixed −3 dB input gain, and reports
+`-f`, `-t`, `-n`, and `-l` as ignored because those CPU modulator controls do
+not alter the GPU implementation. DSF and DSDIFF output use a channel-major
+packed-word path; padding is applied only once at the logical end, so the
+duration is rounded up by at most 31 DSD samples. DSD decoding remains on the
+normal CPU path.
 
 Vulkan shaders are compiled to SPIR-V and embedded in the executable at build time, so no shader or data files are installed beside `sox.exe`. The system `vulkan-1.dll` loader is supplied with the Vulkan-capable display driver. VkFFT runtime shader compilation uses the official dynamic `glslang.dll` copied from the Vulkan SDK and distributed beside `sox.exe`; it is not compiled or linked statically. The Microsoft Visual C++ Redistributable is required by glslang and by the OpenMP runtime. The release gate was validated on Windows with an NVIDIA RTX 3080 using 30-second mono, stereo, and 5.1 inputs across DSD64 through DSD1024; the integrated DSF output was bit-identical to the standalone reference for signed 32-bit PCM input.
 
 #### Vulkan FIR
 
-On Windows builds compiled with Vulkan support, `--vulkan` selects the
-partitioned VkFFT backend for the classic `fir` effect. It accepts one through
-six channels and preserves the coefficient file, output length, drain, and
-signed 32-bit SoX boundary used by the CPU implementation. The current command
-applies the same coefficient file independently to every channel; GPU kernel
-and history storage remain per-channel so future channel-to-file mapping does
-not require an algorithm change.
+On builds compiled with Vulkan support, the `--vulkan-fast`,
+`--vulkan-accurate`, `--vulkan-strict`, and `--vulkan-reference` profiles
+select the partitioned VkFFT backend for the classic `fir` effect. It accepts
+one through six channels and preserves the coefficient file, output length,
+drain, and signed 32-bit SoX boundary used by the CPU implementation. A
+channel map uses 1-based channel numbers, comma-separated lists, and inclusive
+ranges:
+
+```text
+fir 1,2=front.txt 3=center.txt 4=sub.txt
+fir 1-6=room-correction.txt
+```
+
+Channels omitted from the map pass through and are delayed with the mapped
+channels so the stream remains synchronized. SoX reports each omitted channel
+as a warning. Repeated or overlapping assignments cascade in command-line
+order; for example, `fir 1,2=a.txt 2=b.txt` applies `a` to channel 1 and
+`a * b` to channel 2. Adjacent mapped `fir` effects remain eligible for Vulkan
+fusion even when their maps differ.
+
+Coefficient arrays with different lengths are padded to a shared pre-peak and
+post-peak reference before execution. This preserves the relative delay
+encoded by each filter while giving the CPU flows and batched Vulkan executor
+the same tap count and alignment. At verbosity level 3, SoX reports each
+resolved channel, source file, original tap count and normalized alignment.
 
 The backend uses FP64, a 32768-point R2C/C2R transform, and 16384-tap uniform
 partitions. Qualification covers the supplied 1,048,576-tap filter at 384 kHz

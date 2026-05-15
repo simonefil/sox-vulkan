@@ -41,3 +41,6 @@ Docs.Features
 *.a
 tags
 __pycache__/
+
+# Internal development and qualification tools
+/tools/

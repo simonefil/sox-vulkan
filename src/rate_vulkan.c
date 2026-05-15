@@ -329,8 +329,9 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
 
 static lsx_rate_vulkan_t *create_rate(
     lsx_vulkan_context_t *vulkan,
-    double const *coefficients,
-    double const *coefficient_lows,
+    double const *const *coefficients,
+    double const *const *coefficient_lows,
+    uint32_t coefficient_channels,
     size_t taps, size_t post_peak,
     uint32_t up_factor, uint32_t down_factor,
     uint32_t channels)
@@ -340,7 +341,11 @@ static lsx_rate_vulkan_t *create_rate(
       lsx_fir_vulkan_block_frames_for(vulkan);
   size_t output_capacity;
 
-  if (!vulkan || !coefficients || !taps || post_peak >= taps || !up_factor || !down_factor || !channels || block_frames % up_factor) {
+  if (!vulkan || !coefficients || !taps || post_peak >= taps ||
+      !up_factor || !down_factor || !channels ||
+      (coefficient_channels != 1u &&
+       coefficient_channels != channels) ||
+      block_frames % up_factor) {
     lsx_fail("unsupported Vulkan rate stage");
     return NULL;
   }
@@ -354,16 +359,28 @@ static lsx_rate_vulkan_t *create_rate(
       !context->double_precision &&
       vulkan->profile == sox_vulkan_profile_strict;
   context->input_frames = block_frames / up_factor;
-  context->skip_frames = taps - 1u - post_peak / up_factor * up_factor;
+  /* The skip is counted in output frames, so it carries post_peak exactly.
+   * Rounding it down to a multiple of up_factor -- which mirrored the input
+   * frame granularity of the CPU preload -- left the remainder unaccounted
+   * for on every filter whose peak is not a multiple of up_factor, that is on
+   * every phase other than linear. */
+  context->skip_frames = taps - 1u - post_peak;
   context->up_factor = up_factor;
   context->down_factor = down_factor;
   context->channels = channels;
   context->fir = coefficient_lows ?
-      lsx_fir_vulkan_create_reference_dd(
-          vulkan, coefficients, coefficient_lows,
-          taps, channels) :
-      lsx_fir_vulkan_create(
-          vulkan, coefficients, taps, channels);
+      (coefficient_channels == 1u ?
+       lsx_fir_vulkan_create_reference_dd(
+           vulkan, coefficients[0], coefficient_lows[0],
+           taps, channels) :
+       lsx_fir_vulkan_create_reference_dd_channels(
+           vulkan, coefficients, coefficient_lows,
+           taps, channels)) :
+      (coefficient_channels == 1u ?
+       lsx_fir_vulkan_create(
+           vulkan, coefficients[0], taps, channels) :
+       lsx_fir_vulkan_create_channels(
+           vulkan, coefficients, taps, channels));
   if (!context->fir)
     goto error;
   context->stage_input = lsx_calloc(block_frames * channels, sizeof(*context->stage_input));
@@ -371,6 +388,12 @@ static lsx_rate_vulkan_t *create_rate(
   context->output_capacity = output_capacity;
   context->output = lsx_malloc(output_capacity * channels * sizeof(*context->output));
   lsx_report("Vulkan rate: %u/%u, %lu taps, %u channel%s", up_factor, down_factor, (unsigned long)taps, channels, channels == 1u ? "" : "s");
+  lsx_report(
+      "Vulkan rate resident helpers precision: %s "
+      "(fixed-format sample movement)",
+      context->reference_dd ? "FP64x2" :
+      context->double_precision ? "FP64" :
+      context->strict_fp32 ? "FP32x2" : "FP32");
   return context;
 
 error:
@@ -384,8 +407,21 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create(
     size_t post_peak, uint32_t up_factor,
     uint32_t down_factor, uint32_t channels)
 {
+  double const *channel_coefficients[] = {coefficients};
+
   return create_rate(
-      vulkan, coefficients, NULL, taps, post_peak,
+      vulkan, channel_coefficients, NULL, 1u, taps, post_peak,
+      up_factor, down_factor, channels);
+}
+
+lsx_rate_vulkan_t *lsx_rate_vulkan_create_channels(
+    lsx_vulkan_context_t *vulkan,
+    double const *const *coefficients, size_t taps,
+    size_t post_peak, uint32_t up_factor,
+    uint32_t down_factor, uint32_t channels)
+{
+  return create_rate(
+      vulkan, coefficients, NULL, channels, taps, post_peak,
       up_factor, down_factor, channels);
 }
 
@@ -396,11 +432,30 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd(
     size_t post_peak, uint32_t up_factor,
     uint32_t down_factor, uint32_t channels)
 {
+  double const *channel_highs[] = {coefficient_highs};
+  double const *channel_lows[] = {coefficient_lows};
+
   if (!coefficient_lows || !vulkan ||
       vulkan->profile != sox_vulkan_profile_reference)
     return NULL;
   return create_rate(
-      vulkan, coefficient_highs, coefficient_lows,
+      vulkan, channel_highs, channel_lows, 1u,
+      taps, post_peak, up_factor, down_factor,
+      channels);
+}
+
+lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd_channels(
+    lsx_vulkan_context_t *vulkan,
+    double const *const *coefficient_highs,
+    double const *const *coefficient_lows, size_t taps,
+    size_t post_peak, uint32_t up_factor,
+    uint32_t down_factor, uint32_t channels)
+{
+  if (!coefficient_lows || !vulkan ||
+      vulkan->profile != sox_vulkan_profile_reference)
+    return NULL;
+  return create_rate(
+      vulkan, coefficient_highs, coefficient_lows, channels,
       taps, post_peak, up_factor, down_factor,
       channels);
 }
@@ -678,6 +733,8 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
   resident->capacity_elements = context->output_capacity;
   resident->valid_elements = output_frames;
+  /* The output buffer bounds every slice this stage can hand over. */
+  resident->block_elements = context->output_capacity;
   resident->frame_stride_elements = context->channels;
   resident->channel_stride_elements = 1u;
   resident->frame_offset = frame_offset;
@@ -953,6 +1010,25 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   context->resident_stream_descriptor_index = (context->resident_stream_descriptor_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
   context->resident_stream_occupancy += input->valid_elements;
   return SOX_SUCCESS;
+}
+
+size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context)
+{
+  if (!context)
+    return 0;
+  /*
+   * The stream is allocated by the first append, so before that the room
+   * is the capacity it will be given.  Reporting zero here would stop the
+   * append that creates it.
+   */
+  if (!context->resident_stream[0].buffer)
+    return lsx_fir_vulkan_block_frames_for(context->vulkan) +
+        context->input_frames;
+  if (context->resident_stream_occupancy >
+      context->resident_stream_capacity)
+    return 0;
+  return context->resident_stream_capacity -
+      context->resident_stream_occupancy;
 }
 
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)

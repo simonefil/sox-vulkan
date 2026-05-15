@@ -324,6 +324,10 @@ int lsx_fir_vulkan_try_fuse(
       free(first_base->vulkan_channels[channel].source_taps);
       first_base->vulkan_channels[channel].source_taps = combined;
     }
+    /* Every channel convolves the same tap counts, so the fused length is
+     * fixed by the two inputs and stays defined even for a zero-channel
+     * signal, where the loop above never runs. */
+    combined_count = first_count + second_count - 1;
     combined_post_peak =
         first_base->vulkan_source_post_peak +
         second_base->vulkan_source_post_peak;
@@ -498,7 +502,7 @@ static int read_coefficients(
   while ((converted = fscanf(file, " #%*[^\n]%c", &character)) >= 0) {
     if (converted >= 1)
       continue;
-    if ((converted = fscanf(file, "%lf", &value)) > 0) {
+    if (fscanf(file, "%lf", &value) > 0) {
       if (*tap_count == INT_MAX) {
         lsx_fail("too many coefficients in `%s'", filename);
         if (file != stdin)

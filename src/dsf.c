@@ -394,6 +394,8 @@ static size_t dsf_write_packed(sox_format_t *ft,
 	unsigned channels = dsf->chan_num;
 	size_t consumed = 0;
 
+	if (!channels)
+		return 0;
 	while (len >= channels) {
 		unsigned valid = SOX_DSD_PACKED_VALID_BITS(buf[0]);
 		unsigned i, j;
@@ -466,12 +468,13 @@ static size_t dsf_write_packed_words(sox_format_t *ft,
 {
 	struct dsf *dsf = ft->priv;
 	unsigned channels = dsf->chan_num;
-	size_t total_groups = len / channels;
+	size_t total_groups;
 	size_t consumed_groups = 0;
 
 	if (dsf->bit_pos || dsf->block_pos % 4 ||
 	    !channels || len % channels)
 		return 0;
+	total_groups = len / channels;
 	while (consumed_groups < total_groups) {
 		size_t groups = min(
 			total_groups - consumed_groups,

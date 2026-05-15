@@ -1917,8 +1917,9 @@ size_t lsx_fir_vulkan_block_frames_for(
 size_t lsx_fir_vulkan_prepared_stride(
     lsx_fir_vulkan_t const *context)
 {
-  return context && context->strict_fp32 ?
-      FIR_FFT_SIZE : FIR_FFT_SIZE + 2u;
+  if (!context)
+    return 0;
+  return context->strict_fp32 ? FIR_FFT_SIZE : FIR_FFT_SIZE + 2u;
 }
 
 lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *context)

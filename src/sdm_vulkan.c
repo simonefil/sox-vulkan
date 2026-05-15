@@ -735,6 +735,11 @@ static void record_scan(
 {
   uint32_t level;
 
+  /* scan_storage_count always produces at least one level, but the down-sweep
+   * below counts backwards from level_count - 1: a zero here would wrap the
+   * unsigned counter and index offsets[] far out of bounds. */
+  if (!context->level_count)
+    return;
   lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "MASH prefix scan");
   parameters->mode = MODE_SCAN;
   /* Up-sweep: scan each 256-element workgroup and recursively scan its sums. */

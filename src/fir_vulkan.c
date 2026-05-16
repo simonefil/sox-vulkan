@@ -583,6 +583,8 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
   uint32_t binding_count =
       context->strict_fp32 ? 6u :
       context->accurate_fp32 ? 4u : 3u;
+  uint32_t const *partition_spirv;
+  size_t partition_size;
   VkDescriptorSetLayoutBinding bindings[6];
   VkDescriptorSetLayoutCreateInfo layout_info = {
     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
@@ -677,34 +679,32 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
   vkUpdateDescriptorSets(
       context->vulkan->device, binding_count, writes, 0, NULL);
   pipeline_layout_info.pSetLayouts = &context->descriptor_layout;
+  /* Pick the partition kernel once, so the SPIR-V blob and its size can never
+   * disagree.  Selection order matters: reference_dd and precise_fp64 both
+   * imply double_precision, and precise_fp64 is also set for reference, so the
+   * reference test has to come first.  On the FP32 side strict outranks
+   * accurate, which the SOX_VULKAN_PLAIN_FP32_PARTITION knob can switch off. */
+  if (context->double_precision) {
+    if (context->reference_dd)
+      partition_spirv = fir_partition_reference_dd_spv, partition_size = sizeof(fir_partition_reference_dd_spv);
+    else if (context->precise_fp64)
+      partition_spirv = fir_partition_precise_f64_spv, partition_size = sizeof(fir_partition_precise_f64_spv);
+    else
+      partition_spirv = fir_partition_f64_spv, partition_size = sizeof(fir_partition_f64_spv);
+  } else {
+    if (context->strict_fp32)
+      partition_spirv = fir_partition_strict_f32_spv, partition_size = sizeof(fir_partition_strict_f32_spv);
+    else if (context->accurate_fp32)
+      partition_spirv = fir_partition_accurate_f32_spv, partition_size = sizeof(fir_partition_accurate_f32_spv);
+    else
+      partition_spirv = fir_partition_f32_spv, partition_size = sizeof(fir_partition_f32_spv);
+  }
   if (vk_result(vkCreatePipelineLayout(
       context->vulkan->device, &pipeline_layout_info, NULL,
       &context->pipeline_layout),
       "vkCreatePipelineLayout") != SOX_SUCCESS ||
       lsx_vulkan_create_compute_pipeline(
-      context->vulkan,
-      context->double_precision ?
-          (context->reference_dd ?
-           fir_partition_reference_dd_spv :
-           context->precise_fp64 ?
-           fir_partition_precise_f64_spv :
-           fir_partition_f64_spv) :
-          (context->strict_fp32 ?
-           fir_partition_strict_f32_spv :
-           context->accurate_fp32 ?
-           fir_partition_accurate_f32_spv :
-           fir_partition_f32_spv),
-      context->double_precision ?
-          (context->reference_dd ?
-           sizeof(fir_partition_reference_dd_spv) :
-           context->precise_fp64 ?
-           sizeof(fir_partition_precise_f64_spv) :
-           sizeof(fir_partition_f64_spv)) :
-          (context->strict_fp32 ?
-           sizeof(fir_partition_strict_f32_spv) :
-           context->accurate_fp32 ?
-           sizeof(fir_partition_accurate_f32_spv) :
-           sizeof(fir_partition_f32_spv)),
+      context->vulkan, partition_spirv, partition_size,
       context->pipeline_layout,
       &context->pipeline) != SOX_SUCCESS)
     return SOX_EOF;

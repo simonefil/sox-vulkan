@@ -65,6 +65,10 @@ ENABLE_ID3TAG=ON
 ENABLE_PNG=ON
 ENABLE_MAGIC=ON
 ENABLE_FFMPEG=ON
+# Off by default: unlike the Windows script, which requires VULKAN_SDK up front,
+# a Unix host is not guaranteed to provide a loader, glslang and glslc.  Opt in
+# with --vulkan once those are installed.
+ENABLE_VULKAN=OFF
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS (platform-specific defaults)
@@ -110,6 +114,11 @@ FILE_VERSION="5.45"
 LIBTOOL_VERSION="2.4.7"
 LIBAO_VERSION="1.2.2"
 FFMPEG_VERSION="8.1.2"
+VKFFT_VERSION="1.3.4"
+# VkFFT ships no release tarball checksum of its own; this is the digest of the
+# GitHub-generated archive for the tag above, kept identical to the one pinned
+# in build_static_libs.ps1 so both platforms install the same headers.
+VKFFT_SHA256="b61055393adb3adc79009fe12401cbfbbdfba584e665e9c35fcbf4b32fb31f30"
 
 # Colors for output
 RED='\033[0;31m'
@@ -255,6 +264,44 @@ get_cmake_flags() {
 # ------------------------------------------------------------------------------
 # Build functions for each library
 # ------------------------------------------------------------------------------
+
+# VkFFT is header-only: nothing is compiled here, the headers are just staged
+# under the static prefix where CMake's VKFFT_INCLUDE_DIR probe looks for them.
+install_vkfft() {
+    log_info "========== Installing VkFFT ${VKFFT_VERSION} =========="
+
+    local url="https://github.com/DTolm/VkFFT/archive/refs/tags/v${VKFFT_VERSION}.tar.gz"
+    local archive="${DOWNLOAD_DIR}/VkFFT-${VKFFT_VERSION}.tar.gz"
+    local src="${SRC_DIR}/VkFFT-${VKFFT_VERSION}"
+    local actual
+
+    download_file "$url" "$archive"
+
+    if command -v sha256sum &> /dev/null; then
+        actual="$(sha256sum "$archive" | cut -d' ' -f1)"
+    elif command -v shasum &> /dev/null; then
+        actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+    else
+        log_error "Neither sha256sum nor shasum found; cannot verify VkFFT"
+        exit 1
+    fi
+
+    if [ "$actual" != "${VKFFT_SHA256}" ]; then
+        log_error "VkFFT archive checksum mismatch: ${actual}"
+        exit 1
+    fi
+
+    if [ ! -d "$src" ]; then
+        extract_archive "$archive" "$SRC_DIR"
+    fi
+
+    mkdir -p "${STATIC_LIBS_DIR}/include" \
+        "${STATIC_LIBS_DIR}/share/licenses/VkFFT"
+    cp -R "${src}/vkFFT" "${STATIC_LIBS_DIR}/include/"
+    cp "${src}/LICENSE" "${STATIC_LIBS_DIR}/share/licenses/VkFFT/"
+
+    log_success "VkFFT headers installed"
+}
 
 build_zlib() {
     log_info "========== Building zlib ${ZLIB_VERSION} =========="
@@ -876,6 +923,9 @@ show_help() {
     echo "  --no-png              Exclude PNG spectrogram support"
     echo "  --no-magic            Exclude file type detection (libmagic)"
     echo "  --no-ffmpeg           Exclude FFmpeg codec and container support"
+    echo "  --vulkan              Enable the Vulkan FIR/DSD backend (needs a"
+    echo "                        Vulkan loader, glslc and glslang headers)"
+    echo "  --no-vulkan           Disable the Vulkan FIR/DSD backend (default)"
     echo ""
     echo "Audio Driver Options:"
     echo "  Platform defaults:"
@@ -952,6 +1002,14 @@ main() {
                 ;;
             --no-sndfile)
                 ENABLE_SNDFILE=OFF
+                shift
+                ;;
+            --vulkan)
+                ENABLE_VULKAN=ON
+                shift
+                ;;
+            --no-vulkan)
+                ENABLE_VULKAN=OFF
                 shift
                 ;;
             --no-amr)
@@ -1060,6 +1118,7 @@ main() {
     echo "    PNG:        ${ENABLE_PNG}"
     echo "    Magic:      ${ENABLE_MAGIC}"
     echo "    FFmpeg:     ${ENABLE_FFMPEG}"
+    echo "    Vulkan:     ${ENABLE_VULKAN}"
     echo "  Audio Drivers:"
     echo "    ALSA:       ${ENABLE_ALSA}"
     echo "    CoreAudio:  ${ENABLE_COREAUDIO}"
@@ -1140,6 +1199,10 @@ main() {
         build_libao
     fi
 
+    if [ "${ENABLE_VULKAN}" = "ON" ]; then
+        install_vkfft
+    fi
+
     echo ""
     log_success "All libraries built successfully!"
     echo ""
@@ -1190,6 +1253,7 @@ main() {
         -DWITH_OSS=${ENABLE_OSS} \
         -DWITH_AO=${ENABLE_AO} \
         -DWITH_PULSEAUDIO=${ENABLE_PULSEAUDIO} \
+        -DWITH_VULKAN=${ENABLE_VULKAN} \
         "${OPENMP_CMAKE_ARGS[@]}"
 
     cmake --build . --config Release -j${JOBS}

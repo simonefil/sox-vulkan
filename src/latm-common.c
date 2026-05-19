@@ -1,13 +1,8 @@
 #include "sox_i.h"
+#include "ffmpeg-codec.h"
 #include "latm-common.h"
 
 #ifdef HAVE_FFMPEG_CODECS
-
-typedef struct {
-  uint8_t const * data;
-  size_t size_bits;
-  size_t position;
-} bit_reader_t;
 
 static int read_exact(
     sox_format_t * ft,
@@ -33,30 +28,8 @@ static int read_exact(
   return 1;
 }
 
-static int read_bits(
-    bit_reader_t * reader,
-    unsigned count,
-    uint32_t * value)
-{
-  uint32_t result = 0;
-  unsigned i;
-
-  if (count > 32 || reader->position > reader->size_bits ||
-      count > reader->size_bits - reader->position)
-    return SOX_EOF;
-  for (i = 0; i < count; ++i) {
-    size_t position = reader->position++;
-
-    result = (result << 1) |
-        ((reader->data[position / 8] >> (7 - position % 8)) & 1);
-  }
-  if (value != NULL)
-    *value = result;
-  return SOX_SUCCESS;
-}
-
-static int read_latm_value(
-    bit_reader_t * reader,
+int lsx_latm_read_value(
+    lsx_bit_reader_t * reader,
     uint32_t * value)
 {
   uint32_t bytes_for_value;
@@ -64,10 +37,10 @@ static int read_latm_value(
   uint32_t byte;
   unsigned i;
 
-  if (read_bits(reader, 2, &bytes_for_value) != SOX_SUCCESS)
+  if (lsx_bit_read(reader, 2, &bytes_for_value) != SOX_SUCCESS)
     return SOX_EOF;
   for (i = 0; i <= bytes_for_value; ++i) {
-    if (read_bits(reader, 8, &byte) != SOX_SUCCESS)
+    if (lsx_bit_read(reader, 8, &byte) != SOX_SUCCESS)
       return SOX_EOF;
     result = (result << 8) | byte;
   }
@@ -115,7 +88,7 @@ int lsx_latm_config_object_type(
     size_t packet_size,
     uint32_t * object_type)
 {
-  bit_reader_t reader;
+  lsx_bit_reader_t reader;
   size_t declared_size;
   size_t available_size;
   uint32_t value;
@@ -135,32 +108,32 @@ int lsx_latm_config_object_type(
   reader.size_bits = available_size * 8;
   reader.position = 0;
 
-  if (read_bits(&reader, 1, &value) != SOX_SUCCESS)
+  if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS)
     return SOX_EOF;
   if (value)
     return 0;
-  if (read_bits(&reader, 1, &audio_mux_version) != SOX_SUCCESS)
+  if (lsx_bit_read(&reader, 1, &audio_mux_version) != SOX_SUCCESS)
     return SOX_EOF;
   if (audio_mux_version) {
-    if (read_bits(&reader, 1, &value) != SOX_SUCCESS || value != 0 ||
-        read_latm_value(&reader, &value) != SOX_SUCCESS)
+    if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS || value != 0 ||
+        lsx_latm_read_value(&reader, &value) != SOX_SUCCESS)
       return SOX_EOF;
   }
-  if (read_bits(&reader, 1, &value) != SOX_SUCCESS || value != 1 ||
-      read_bits(&reader, 6, &value) != SOX_SUCCESS || value != 0 ||
-      read_bits(&reader, 4, &value) != SOX_SUCCESS || value != 0 ||
-      read_bits(&reader, 3, &value) != SOX_SUCCESS || value != 0)
+  if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS || value != 1 ||
+      lsx_bit_read(&reader, 6, &value) != SOX_SUCCESS || value != 0 ||
+      lsx_bit_read(&reader, 4, &value) != SOX_SUCCESS || value != 0 ||
+      lsx_bit_read(&reader, 3, &value) != SOX_SUCCESS || value != 0)
     return SOX_EOF;
   if (audio_mux_version &&
-      (read_latm_value(&reader, &asc_bits) != SOX_SUCCESS ||
+      (lsx_latm_read_value(&reader, &asc_bits) != SOX_SUCCESS ||
        asc_bits < 5))
     return SOX_EOF;
 
   asc_start = reader.position;
-  if (read_bits(&reader, 5, object_type) != SOX_SUCCESS)
+  if (lsx_bit_read(&reader, 5, object_type) != SOX_SUCCESS)
     return SOX_EOF;
   if (*object_type == 31) {
-    if (read_bits(&reader, 6, &value) != SOX_SUCCESS)
+    if (lsx_bit_read(&reader, 6, &value) != SOX_SUCCESS)
       return SOX_EOF;
     *object_type = 32 + value;
   }

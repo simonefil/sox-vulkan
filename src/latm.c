@@ -27,35 +27,8 @@ typedef struct {
   unsigned config_counter;
 } priv_t;
 
-typedef struct {
-  uint8_t * data;
-  size_t size_bits;
-  size_t position;
-} bit_writer_t;
-
-static int write_bits(
-    bit_writer_t * writer,
-    unsigned count,
-    uint32_t value)
-{
-  unsigned i;
-
-  if (count > 32 || writer->position > writer->size_bits ||
-      count > writer->size_bits - writer->position)
-    return SOX_EOF;
-  for (i = 0; i < count; ++i) {
-    size_t position = writer->position++;
-    uint32_t bit = (value >> (count - i - 1)) & 1;
-
-    if (bit)
-      writer->data[position / 8] |=
-          (uint8_t)(1U << (7 - position % 8));
-  }
-  return SOX_SUCCESS;
-}
-
 static int copy_bits(
-    bit_writer_t * writer,
+    lsx_bit_writer_t * writer,
     uint8_t const * source,
     size_t count)
 {
@@ -68,14 +41,14 @@ static int copy_bits(
     uint32_t bit =
         (source[i / 8] >> (7 - i % 8)) & 1;
 
-    if (write_bits(writer, 1, bit) != SOX_SUCCESS)
+    if (lsx_bit_write(writer, 1, bit) != SOX_SUCCESS)
       return SOX_EOF;
   }
   return SOX_SUCCESS;
 }
 
 static int write_latm_value(
-    bit_writer_t * writer,
+    lsx_bit_writer_t * writer,
     uint32_t value)
 {
   unsigned bytes = 1;
@@ -87,10 +60,10 @@ static int write_latm_value(
     bytes = 3;
   else if (value > 0xff)
     bytes = 2;
-  if (write_bits(writer, 2, bytes - 1) != SOX_SUCCESS)
+  if (lsx_bit_write(writer, 2, bytes - 1) != SOX_SUCCESS)
     return SOX_EOF;
   for (i = bytes; i; --i)
-    if (write_bits(writer, 8,
+    if (lsx_bit_write(writer, 8,
           value >> ((i - 1) * 8)) != SOX_SUCCESS)
       return SOX_EOF;
   return SOX_SUCCESS;
@@ -180,7 +153,7 @@ static int prepare_latm_encoder(AVCodecContext * context)
 }
 
 static int write_stream_mux_config(
-    bit_writer_t * writer,
+    lsx_bit_writer_t * writer,
     AVCodecContext const * context)
 {
   uint32_t asc_bits =
@@ -188,19 +161,19 @@ static int write_stream_mux_config(
 
   /* audioMuxVersion 1 makes the AudioSpecificConfig length explicit, so
    * the complete encoder configuration, including any PCE, is preserved. */
-  if (write_bits(writer, 1, 1) != SOX_SUCCESS ||
-      write_bits(writer, 1, 0) != SOX_SUCCESS ||
+  if (lsx_bit_write(writer, 1, 1) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 1, 0) != SOX_SUCCESS ||
       write_latm_value(writer, 0) != SOX_SUCCESS ||
-      write_bits(writer, 1, 1) != SOX_SUCCESS ||
-      write_bits(writer, 6, 0) != SOX_SUCCESS ||
-      write_bits(writer, 4, 0) != SOX_SUCCESS ||
-      write_bits(writer, 3, 0) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 1, 1) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 6, 0) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 4, 0) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 3, 0) != SOX_SUCCESS ||
       write_latm_value(writer, asc_bits) != SOX_SUCCESS ||
       copy_bits(writer, context->extradata, asc_bits) != SOX_SUCCESS ||
-      write_bits(writer, 3, 0) != SOX_SUCCESS ||
-      write_bits(writer, 8, 0xff) != SOX_SUCCESS ||
-      write_bits(writer, 1, 0) != SOX_SUCCESS ||
-      write_bits(writer, 1, 0) != SOX_SUCCESS)
+      lsx_bit_write(writer, 3, 0) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 8, 0xff) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 1, 0) != SOX_SUCCESS ||
+      lsx_bit_write(writer, 1, 0) != SOX_SUCCESS)
     return SOX_EOF;
   return SOX_SUCCESS;
 }
@@ -211,7 +184,7 @@ static int write_latm_packet(
     AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
-  bit_writer_t writer;
+  lsx_bit_writer_t writer;
   uint32_t object_type;
   size_t remaining;
   size_t body_size;
@@ -247,7 +220,7 @@ static int write_latm_packet(
   writer.size_bits = LSX_LOAS_MAX_FRAME_SIZE * 8;
   writer.position = 0;
   write_config = p->config_counter == 0;
-  if (write_bits(&writer, 1, !write_config) != SOX_SUCCESS ||
+  if (lsx_bit_write(&writer, 1, !write_config) != SOX_SUCCESS ||
       (write_config &&
        write_stream_mux_config(&writer, context) != SOX_SUCCESS)) {
     lsx_fail_errno(ft, SOX_EFMT,
@@ -257,11 +230,11 @@ static int write_latm_packet(
 
   remaining = (size_t)packet->size;
   while (remaining >= 255) {
-    if (write_bits(&writer, 8, 255) != SOX_SUCCESS)
+    if (lsx_bit_write(&writer, 8, 255) != SOX_SUCCESS)
       goto too_large;
     remaining -= 255;
   }
-  if (write_bits(&writer, 8, (uint32_t)remaining) != SOX_SUCCESS)
+  if (lsx_bit_write(&writer, 8, (uint32_t)remaining) != SOX_SUCCESS)
     goto too_large;
 
   if (packet->size && (packet->data[0] & 0xe1) == 0x81) {

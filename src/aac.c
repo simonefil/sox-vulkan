@@ -22,25 +22,13 @@
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
   sox_bool adts_configured;
-  unsigned object_type;
-  unsigned rate_index;
-  unsigned channel_configuration;
+  uint32_t object_type;
+  uint32_t rate_index;
+  uint32_t channel_configuration;
   uint8_t pce[AAC_MAX_PCE_SIZE];
   size_t pce_size;
   sox_bool pce_pending;
 } priv_t;
-
-typedef struct {
-  uint8_t const * data;
-  size_t size_bits;
-  size_t position;
-} bit_reader_t;
-
-typedef struct {
-  uint8_t * data;
-  size_t size_bits;
-  size_t position;
-} bit_writer_t;
 
 static int read_exact(
     sox_format_t * ft,
@@ -169,66 +157,26 @@ static int sampling_frequency_index(int rate)
   return -1;
 }
 
-static int read_bits(
-    bit_reader_t * reader,
-    unsigned count,
-    unsigned * value)
-{
-  unsigned result = 0;
-  unsigned i;
-
-  if (count > 16 || reader->position > reader->size_bits ||
-      count > reader->size_bits - reader->position)
-    return SOX_EOF;
-  for (i = 0; i < count; ++i) {
-    size_t position = reader->position++;
-
-    result = (result << 1) |
-        ((reader->data[position / 8] >> (7 - position % 8)) & 1);
-  }
-  if (value != NULL)
-    *value = result;
-  return SOX_SUCCESS;
-}
-
-static int write_bits(
-    bit_writer_t * writer,
-    unsigned count,
-    unsigned value)
-{
-  unsigned i;
-
-  if (count > 16 || writer->position > writer->size_bits ||
-      count > writer->size_bits - writer->position)
-    return SOX_EOF;
-  for (i = 0; i < count; ++i) {
-    size_t position = writer->position++;
-    unsigned bit = (value >> (count - i - 1)) & 1;
-
-    if (bit)
-      writer->data[position / 8] |=
-          (uint8_t)(1U << (7 - position % 8));
-  }
-  return SOX_SUCCESS;
-}
-
+/* Move count bits from the AudioSpecificConfig to the Program Config Element
+ * being assembled, reporting them as well when the caller needs the value to
+ * decide what comes next. */
 static int copy_bits(
-    bit_reader_t * reader,
-    bit_writer_t * writer,
+    lsx_bit_reader_t * reader,
+    lsx_bit_writer_t * writer,
     unsigned count,
-    unsigned * value)
+    uint32_t * value)
 {
-  unsigned copied;
+  uint32_t copied;
 
-  if (read_bits(reader, count, &copied) != SOX_SUCCESS ||
-      write_bits(writer, count, copied) != SOX_SUCCESS)
+  if (lsx_bit_read(reader, count, &copied) != SOX_SUCCESS ||
+      lsx_bit_write(writer, count, copied) != SOX_SUCCESS)
     return SOX_EOF;
   if (value != NULL)
     *value = copied;
   return SOX_SUCCESS;
 }
 
-static int align_reader(bit_reader_t * reader)
+static int align_reader(lsx_bit_reader_t * reader)
 {
   size_t aligned = (reader->position + 7) & ~(size_t)7;
 
@@ -238,32 +186,32 @@ static int align_reader(bit_reader_t * reader)
   return SOX_SUCCESS;
 }
 
-static int align_writer(bit_writer_t * writer)
+static int align_writer(lsx_bit_writer_t * writer)
 {
   while (writer->position & 7)
-    if (write_bits(writer, 1, 0) != SOX_SUCCESS)
+    if (lsx_bit_write(writer, 1, 0) != SOX_SUCCESS)
       return SOX_EOF;
   return SOX_SUCCESS;
 }
 
 static int extract_pce(
-    bit_reader_t * reader,
+    lsx_bit_reader_t * reader,
     uint8_t * destination,
     size_t * destination_size)
 {
-  bit_writer_t writer = {
+  lsx_bit_writer_t writer = {
     destination,
     AAC_MAX_PCE_SIZE * 8,
     0
   };
-  unsigned five_bit_elements;
-  unsigned four_bit_elements;
-  unsigned count;
-  unsigned flag;
-  unsigned comment_size;
+  uint32_t five_bit_elements;
+  uint32_t four_bit_elements;
+  uint32_t count;
+  uint32_t flag;
+  uint32_t comment_size;
 
   memset(destination, 0, AAC_MAX_PCE_SIZE);
-  if (write_bits(&writer, 3, 5) != SOX_SUCCESS ||
+  if (lsx_bit_write(&writer, 3, 5) != SOX_SUCCESS ||
       copy_bits(reader, &writer, 10, NULL) != SOX_SUCCESS ||
       copy_bits(reader, &writer, 4, &five_bit_elements) != SOX_SUCCESS ||
       copy_bits(reader, &writer, 4, &count) != SOX_SUCCESS)
@@ -295,7 +243,7 @@ static int extract_pce(
 
   count = five_bit_elements * 5 + four_bit_elements * 4;
   while (count) {
-    unsigned chunk = min(count, 16U);
+    unsigned chunk = (unsigned)min(count, 16U);
 
     if (copy_bits(reader, &writer, chunk, NULL) != SOX_SUCCESS)
       return SOX_EOF;
@@ -319,10 +267,10 @@ static int configure_adts(
     AVCodecContext const * context,
     priv_t * p)
 {
-  bit_reader_t reader;
-  unsigned frame_length_flag;
-  unsigned depends_on_core_coder;
-  unsigned extension_flag;
+  lsx_bit_reader_t reader;
+  uint32_t frame_length_flag;
+  uint32_t depends_on_core_coder;
+  uint32_t extension_flag;
   int expected_rate_index = sampling_frequency_index(context->sample_rate);
 
   if (context->extradata == NULL || context->extradata_size < 2) {
@@ -333,19 +281,19 @@ static int configure_adts(
   reader.data = context->extradata;
   reader.size_bits = (size_t)context->extradata_size * 8;
   reader.position = 0;
-  if (read_bits(&reader, 5, &p->object_type) != SOX_SUCCESS ||
-      read_bits(&reader, 4, &p->rate_index) != SOX_SUCCESS ||
-      read_bits(&reader, 4, &p->channel_configuration) != SOX_SUCCESS ||
-      read_bits(&reader, 1, &frame_length_flag) != SOX_SUCCESS ||
-      read_bits(&reader, 1, &depends_on_core_coder) != SOX_SUCCESS ||
-      read_bits(&reader, 1, &extension_flag) != SOX_SUCCESS) {
+  if (lsx_bit_read(&reader, 5, &p->object_type) != SOX_SUCCESS ||
+      lsx_bit_read(&reader, 4, &p->rate_index) != SOX_SUCCESS ||
+      lsx_bit_read(&reader, 4, &p->channel_configuration) != SOX_SUCCESS ||
+      lsx_bit_read(&reader, 1, &frame_length_flag) != SOX_SUCCESS ||
+      lsx_bit_read(&reader, 1, &depends_on_core_coder) != SOX_SUCCESS ||
+      lsx_bit_read(&reader, 1, &extension_flag) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR,
         "Invalid AAC AudioSpecificConfig from encoder");
     return SOX_EOF;
   }
   if (p->object_type < 1 || p->object_type > 4 ||
       expected_rate_index < 0 || p->rate_index > 12 ||
-      p->rate_index != (unsigned)expected_rate_index ||
+      p->rate_index != (uint32_t)expected_rate_index ||
       p->channel_configuration > 7 ||
       frame_length_flag || depends_on_core_coder || extension_flag) {
     lsx_fail_errno(ft, SOX_EFMT,

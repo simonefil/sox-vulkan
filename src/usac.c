@@ -36,56 +36,8 @@ typedef struct {
   sox_bool configured;
 } priv_t;
 
-typedef struct {
-  uint8_t const * data;
-  size_t size_bits;
-  size_t position;
-} bit_reader_t;
-
-static int read_bits(
-    bit_reader_t * reader,
-    unsigned count,
-    uint32_t * value)
-{
-  uint32_t result = 0;
-  unsigned i;
-
-  if (count > 32 || reader->position > reader->size_bits ||
-      count > reader->size_bits - reader->position)
-    return SOX_EOF;
-  for (i = 0; i < count; ++i) {
-    size_t position = reader->position++;
-
-    result = (result << 1) |
-        ((reader->data[position / 8] >> (7 - position % 8)) & 1);
-  }
-  if (value != NULL)
-    *value = result;
-  return SOX_SUCCESS;
-}
-
-static int read_latm_value(
-    bit_reader_t * reader,
-    uint32_t * value)
-{
-  uint32_t bytes_for_value;
-  uint32_t result = 0;
-  uint32_t byte;
-  unsigned i;
-
-  if (read_bits(reader, 2, &bytes_for_value) != SOX_SUCCESS)
-    return SOX_EOF;
-  for (i = 0; i <= bytes_for_value; ++i) {
-    if (read_bits(reader, 8, &byte) != SOX_SUCCESS)
-      return SOX_EOF;
-    result = (result << 8) | byte;
-  }
-  *value = result;
-  return SOX_SUCCESS;
-}
-
 static int copy_bits(
-    bit_reader_t * reader,
+    lsx_bit_reader_t * reader,
     uint8_t * destination,
     size_t count)
 {
@@ -110,15 +62,15 @@ static int audio_object_type(
     size_t config_bits,
     uint32_t * object_type)
 {
-  bit_reader_t reader = {config, config_bits, 0};
+  lsx_bit_reader_t reader = {config, config_bits, 0};
   uint32_t value;
 
-  if (read_bits(&reader, 5, &value) != SOX_SUCCESS)
+  if (lsx_bit_read(&reader, 5, &value) != SOX_SUCCESS)
     return SOX_EOF;
   if (value == 31) {
     uint32_t extension;
 
-    if (read_bits(&reader, 6, &extension) != SOX_SUCCESS)
+    if (lsx_bit_read(&reader, 6, &extension) != SOX_SUCCESS)
       return SOX_EOF;
     value = 32 + extension;
   }
@@ -129,7 +81,7 @@ static int audio_object_type(
 static int parse_stream_mux_config(
     sox_format_t * ft,
     priv_t * p,
-    bit_reader_t * reader,
+    lsx_bit_reader_t * reader,
     sox_bool * config_changed)
 {
   uint8_t config[USAC_MAX_CONFIG_SIZE];
@@ -139,19 +91,19 @@ static int parse_stream_mux_config(
   size_t config_size;
   sox_bool was_configured = p->configured;
 
-  if (read_bits(reader, 1, &value) != SOX_SUCCESS || value != 1 ||
-      read_bits(reader, 1, &value) != SOX_SUCCESS || value != 0 ||
-      read_latm_value(reader, &value) != SOX_SUCCESS ||
-      read_bits(reader, 1, &value) != SOX_SUCCESS || value != 1 ||
-      read_bits(reader, 6, &value) != SOX_SUCCESS || value != 0 ||
-      read_bits(reader, 4, &value) != SOX_SUCCESS || value != 0 ||
-      read_bits(reader, 3, &value) != SOX_SUCCESS || value != 0) {
+  if (lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 1 ||
+      lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 0 ||
+      lsx_latm_read_value(reader, &value) != SOX_SUCCESS ||
+      lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 1 ||
+      lsx_bit_read(reader, 6, &value) != SOX_SUCCESS || value != 0 ||
+      lsx_bit_read(reader, 4, &value) != SOX_SUCCESS || value != 0 ||
+      lsx_bit_read(reader, 3, &value) != SOX_SUCCESS || value != 0) {
     lsx_fail_errno(ft, SOX_EHDR,
         "Unsupported xHE-AAC LATM configuration; expected one "
         "synchronous program and layer with audioMuxVersion 1");
     return SOX_EOF;
   }
-  if (read_latm_value(reader, &asc_bits) != SOX_SUCCESS ||
+  if (lsx_latm_read_value(reader, &asc_bits) != SOX_SUCCESS ||
       asc_bits == 0 ||
       asc_bits > USAC_MAX_CONFIG_SIZE * 8U) {
     lsx_fail_errno(ft, SOX_EHDR,
@@ -172,23 +124,23 @@ static int parse_stream_mux_config(
     return SOX_EOF;
   }
 
-  if (read_bits(reader, 3, &value) != SOX_SUCCESS || value != 0 ||
-      read_bits(reader, 8, &value) != SOX_SUCCESS) {
+  if (lsx_bit_read(reader, 3, &value) != SOX_SUCCESS || value != 0 ||
+      lsx_bit_read(reader, 8, &value) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR,
         "Unsupported xHE-AAC LATM frame length configuration");
     return SOX_EOF;
   }
-  if (read_bits(reader, 1, &value) != SOX_SUCCESS || value != 0) {
+  if (lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 0) {
     lsx_fail_errno(ft, SOX_EHDR,
         "xHE-AAC LATM otherData is unsupported");
     return SOX_EOF;
   }
-  if (read_bits(reader, 1, &value) != SOX_SUCCESS) {
+  if (lsx_bit_read(reader, 1, &value) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR,
         "Truncated xHE-AAC StreamMuxConfig");
     return SOX_EOF;
   }
-  if (value && read_bits(reader, 8, NULL) != SOX_SUCCESS) {
+  if (value && lsx_bit_read(reader, 8, NULL) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR,
         "Truncated xHE-AAC StreamMuxConfig CRC");
     return SOX_EOF;
@@ -213,7 +165,7 @@ static int parse_audio_mux_element(
     sox_bool * config_changed,
     size_t frame_size)
 {
-  bit_reader_t reader = {
+  lsx_bit_reader_t reader = {
     p->loas_frame + LSX_LOAS_HEADER_SIZE,
     (frame_size - LSX_LOAS_HEADER_SIZE) * 8,
     0
@@ -222,7 +174,7 @@ static int parse_audio_mux_element(
   size_t payload_size = 0;
 
   *config_changed = sox_false;
-  if (read_bits(&reader, 1, &value) != SOX_SUCCESS) {
+  if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC AudioMuxElement");
     return SOX_EOF;
   }
@@ -238,7 +190,7 @@ static int parse_audio_mux_element(
   }
 
   do {
-    if (read_bits(&reader, 8, &value) != SOX_SUCCESS ||
+    if (lsx_bit_read(&reader, 8, &value) != SOX_SUCCESS ||
         payload_size > LSX_LOAS_MAX_FRAME_SIZE - value) {
       lsx_fail_errno(ft, SOX_EHDR,
           "Invalid xHE-AAC LATM payload length");

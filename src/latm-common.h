@@ -2,6 +2,7 @@
 #define LSX_LATM_COMMON_H
 
 #include "sox.h"
+#include "ffmpeg-codec.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,6 +19,12 @@ int lsx_loas_read_packet(
     size_t * packet_size,
     sox_bool clean_eof,
     char const * codec_name);
+
+/* Read a LATM variable-length integer: a two-bit count of the bytes that
+ * follow, then that many bytes, most significant first. */
+int lsx_latm_read_value(
+    lsx_bit_reader_t * reader,
+    uint32_t * value);
 
 int lsx_latm_config_object_type(
     uint8_t const * packet,

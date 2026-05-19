@@ -21,6 +21,49 @@
 #include <stdlib.h>
 #include <string.h>
 
+int lsx_bit_read(
+    lsx_bit_reader_t * reader,
+    unsigned count,
+    uint32_t * value)
+{
+  uint32_t result = 0;
+  unsigned i;
+
+  if (count > 32 || reader->position > reader->size_bits ||
+      count > reader->size_bits - reader->position)
+    return SOX_EOF;
+  for (i = 0; i < count; ++i) {
+    size_t position = reader->position++;
+
+    result = (result << 1) |
+        ((reader->data[position / 8] >> (7 - position % 8)) & 1);
+  }
+  if (value != NULL)
+    *value = result;
+  return SOX_SUCCESS;
+}
+
+int lsx_bit_write(
+    lsx_bit_writer_t * writer,
+    unsigned count,
+    uint32_t value)
+{
+  unsigned i;
+
+  if (count > 32 || writer->position > writer->size_bits ||
+      count > writer->size_bits - writer->position)
+    return SOX_EOF;
+  for (i = 0; i < count; ++i) {
+    size_t position = writer->position++;
+    uint32_t bit = (value >> (count - i - 1)) & 1;
+
+    if (bit)
+      writer->data[position / 8] |=
+          (uint8_t)(1U << (7 - position % 8));
+  }
+  return SOX_SUCCESS;
+}
+
 #define INPUT_BUFFER_SIZE 16384
 
 struct lsx_ffmpeg_codec_t {

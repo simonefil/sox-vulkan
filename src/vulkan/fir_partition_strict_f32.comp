@@ -45,9 +45,7 @@ vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
   precise float right_virtual = high - left;
-  precise float low =
-      (left - (high - right_virtual)) +
-      (right - right_virtual);
+  precise float low = (left - (high - right_virtual)) + (right - right_virtual);
 
   return vec2(high, low);
 }
@@ -76,26 +74,19 @@ vec2 ds_subtract(vec2 left, vec2 right)
 vec2 ds_multiply(vec2 left, vec2 right)
 {
   precise float product = left.x * right.x;
-  precise float residual =
-      fma(left.x, right.x, -product) +
-      left.x * right.y +
-      left.y * right.x;
+  precise float residual = fma(left.x, right.x, -product) + left.x * right.y + left.y * right.x;
 
   return quick_two_sum(product, residual);
 }
 
 vec4 complex_add(vec4 left, vec4 right)
 {
-  return vec4(
-      ds_add(left.xy, right.xy),
-      ds_add(left.zw, right.zw));
+  return vec4(ds_add(left.xy, right.xy), ds_add(left.zw, right.zw));
 }
 
 vec4 complex_subtract(vec4 left, vec4 right)
 {
-  return vec4(
-      ds_subtract(left.xy, right.xy),
-      ds_subtract(left.zw, right.zw));
+  return vec4(ds_subtract(left.xy, right.xy), ds_subtract(left.zw, right.zw));
 }
 
 vec4 complex_multiply(vec4 left, vec4 right)
@@ -105,9 +96,7 @@ vec4 complex_multiply(vec4 left, vec4 right)
   precise vec2 ad = ds_multiply(left.xy, right.zw);
   precise vec2 bc = ds_multiply(left.zw, right.xy);
 
-  return vec4(
-      ds_subtract(ac, bd),
-      ds_add(ad, bc));
+  return vec4(ds_subtract(ac, bd), ds_add(ad, bc));
 }
 
 uint reverse_bits_15(uint value)
@@ -118,8 +107,7 @@ uint reverse_bits_15(uint value)
 
 vec4 load_working(uint index)
 {
-  return parameters.source_is_a != 0u ?
-      working_a.values[index] : working_b.values[index];
+  return parameters.source_is_a != 0u ? working_a.values[index] : working_b.values[index];
 }
 
 void store_working(uint index, vec4 value)
@@ -142,8 +130,7 @@ void butterfly()
     const uint span = half_span << 1u;
     const uint group = butterfly_index / half_span;
     const uint within = butterfly_index % half_span;
-    const uint first =
-        channel * fft_size + group * span + within;
+    const uint first = channel * fft_size + group * span + within;
     const uint second = first + half_span;
     const uint twiddle_index = within * fft_size / span;
     vec4 twiddle = twiddles.values[twiddle_index];
@@ -151,8 +138,7 @@ void butterfly()
     if (parameters.inverse == 0u)
       twiddle.zw = -twiddle.zw;
     precise vec4 even = load_working(first);
-    precise vec4 odd =
-        complex_multiply(load_working(second), twiddle);
+    precise vec4 odd = complex_multiply(load_working(second), twiddle);
     precise vec4 first_value = complex_add(even, odd);
     precise vec4 second_value = complex_subtract(even, odd);
 
@@ -174,23 +160,14 @@ void accumulate_partitions()
     const uint bin = index % fft_size;
     precise vec4 sum = vec4(0.0);
 
-    for (uint part = 0u;
-         part < parameters.partitions; ++part) {
-      const uint slot =
-          (parameters.current_slot + parameters.partitions -
-           part) % parameters.partitions;
-      const vec4 value = history.values[
-          (channel * parameters.partitions + slot) *
-          fft_size + bin];
-      const vec4 coefficient = kernels.values[
-          (part * parameters.channels + channel) *
-          fft_size + bin];
+    for (uint part = 0u; part < parameters.partitions; ++part) {
+      const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
+      const vec4 value = history.values[(channel * parameters.partitions + slot) * fft_size + bin];
+      const vec4 coefficient = kernels.values[(part * parameters.channels + channel) * fft_size + bin];
 
-      sum = complex_add(
-          sum, complex_multiply(value, coefficient));
+      sum = complex_add(sum, complex_multiply(value, coefficient));
     }
-    working_a.values[
-        channel * fft_size + reverse_bits_15(bin)] = sum;
+    working_a.values[channel * fft_size + reverse_bits_15(bin)] = sum;
   }
 }
 
@@ -201,8 +178,7 @@ void pack_output()
   if (index < parameters.channels * block_frames) {
     const uint channel = index / block_frames;
     const uint frame = index % block_frames;
-    const vec4 value = working_b.values[
-        channel * fft_size + block_frames + frame];
+    const vec4 value = working_b.values[channel * fft_size + block_frames + frame];
 
     output_samples.values[index] = value.xy;
   }

@@ -123,8 +123,7 @@ uint scan_base()
 
 uint table_base()
 {
-    return channel_index() *
-        params.block_count * params.state_count;
+    return channel_index() * params.block_count * params.state_count;
 }
 
 uint block_base()
@@ -150,8 +149,7 @@ uint phase_add(uint first, uint second)
 uint quantize_input(float sample_value)
 {
     /* Q8.24 phase makes both MASH accumulators associative modulo 2^24. */
-    float normalized =
-        0.5 * (clamp(sample_value * params.input_gain, -1.0, 1.0) + 1.0);
+    float normalized = 0.5 * (clamp(sample_value * params.input_gain, -1.0, 1.0) + 1.0);
     return uint(roundEven(normalized * float(PHASE_SCALE)));
 }
 
@@ -183,8 +181,7 @@ void initialize_input()
     uint index = gl_GlobalInvocationID.x;
     uint base = sample_base();
     if (index < params.sample_count)
-        scan_values.values[scan_base() + index] =
-            quantize_input(input_samples.values[base + index]);
+        scan_values.values[scan_base() + index] = quantize_input(input_samples.values[base + index]);
 }
 
 void scan_level()
@@ -193,8 +190,7 @@ void scan_level()
     uint index = gl_WorkGroupID.x * LOCAL_SIZE + lane;
     uint base = scan_base();
     uint value = index < params.element_count
-        ? scan_values.values[
-            base + params.source_offset + index] : 0u;
+        ? scan_values.values[base + params.source_offset + index] : 0u;
     scan_shared[lane] = value;
     barrier();
 
@@ -208,14 +204,9 @@ void scan_level()
     }
 
     if (index < params.element_count)
-        scan_values.values[
-            base + params.source_offset + index] =
-            scan_shared[lane];
-    if (lane == LOCAL_SIZE - 1u ||
-        index + 1u == params.element_count)
-        scan_values.values[
-            base + params.target_offset + gl_WorkGroupID.x] =
-                scan_shared[lane];
+        scan_values.values[base + params.source_offset + index] = scan_shared[lane];
+    if (lane == LOCAL_SIZE - 1u || index + 1u == params.element_count)
+        scan_values.values[base + params.target_offset + gl_WorkGroupID.x] = scan_shared[lane];
 }
 
 void add_parent_prefix()
@@ -225,11 +216,9 @@ void add_parent_prefix()
     uint base = scan_base();
     if (index >= params.element_count || block == 0u)
         return;
-    uint parent = scan_values.values[
-        base + params.parent_offset + block - 1u];
+    uint parent = scan_values.values[base + params.parent_offset + block - 1u];
     uint slot = base + params.source_offset + index;
-    scan_values.values[slot] =
-        phase_add(scan_values.values[slot], parent);
+    scan_values.values[slot] = phase_add(scan_values.values[slot], parent);
 }
 
 void add_initial_phase()
@@ -257,11 +246,8 @@ void finalize_stage1()
     uint previous_phase = index == 0u
         ? persistent_state.values[persistent]
         : scan_values.values[scan + index - 1u];
-    uint first_output =
-        carry(previous_phase,
-            quantize_input(input_samples.values[base + index]));
-    stage1_values.values[base + index] =
-        phase | (first_output << PHASE_BITS);
+    uint first_output = carry(previous_phase, quantize_input(input_samples.values[base + index]));
+    stage1_values.values[base + index] = phase | (first_output << PHASE_BITS);
 }
 
 void initialize_stage2()
@@ -269,8 +255,7 @@ void initialize_stage2()
     uint index = gl_GlobalInvocationID.x;
     uint base = sample_base();
     if (index < params.sample_count)
-        scan_values.values[scan_base() + index] =
-            stage1_values.values[base + index] & PHASE_MASK;
+        scan_values.values[scan_base() + index] = stage1_values.values[base + index] & PHASE_MASK;
 }
 
 uint stage2_output(uint index)
@@ -281,8 +266,7 @@ uint stage2_output(uint index)
     uint previous_phase = index == 0u
         ? persistent_state.values[persistent + 1u]
         : scan_values.values[scan + index - 1u];
-    uint increment =
-        stage1_values.values[base + index] & PHASE_MASK;
+    uint increment = stage1_values.values[base + index] & PHASE_MASK;
     return carry(previous_phase, increment);
 }
 
@@ -293,14 +277,12 @@ void finalize_stage2()
     uint persistent = persistent_base();
     if (index >= params.sample_count)
         return;
-    int first_output =
-        int(stage1_values.values[base + index] >> PHASE_BITS);
+    int first_output = int(stage1_values.values[base + index] >> PHASE_BITS);
     int second_output = int(stage2_output(index));
     int previous_second = index == 0u
         ? int(persistent_state.values[persistent + 2u])
         : int(stage2_output(index - 1u));
-    mash_values.values[base + index] =
-        first_output + second_output - previous_second;
+    mash_values.values[base + index] = first_output + second_output - previous_second;
 }
 
 void update_mash_state()
@@ -312,13 +294,10 @@ void update_mash_state()
     uint persistent = persistent_base();
     uint last = params.sample_count - 1u;
     if (params.stage_index == 0u)
-        persistent_state.values[persistent] =
-            stage1_values.values[base + last] & PHASE_MASK;
+        persistent_state.values[persistent] = stage1_values.values[base + last] & PHASE_MASK;
     else {
-        persistent_state.values[persistent + 1u] =
-            scan_values.values[scan + last];
-        persistent_state.values[persistent + 2u] =
-            stage2_output(last);
+        persistent_state.values[persistent + 1u] = scan_values.values[scan + last];
+        persistent_state.values[persistent + 2u] = stage2_output(last);
     }
 }
 
@@ -338,9 +317,7 @@ void build_tables()
     uint ignored;
     /* Map every possible source state across this independent block. */
     for (uint sample_index = begin; sample_index < end; ++sample_index)
-        state = reduction_step(
-            state, mash_values.values[samples + sample_index],
-            ignored);
+        state = reduction_step(state, mash_values.values[samples + sample_index], ignored);
     tables_a.values[tables + item] = state_index(state);
 }
 
@@ -365,8 +342,7 @@ void compose_tables()
             uint previous = tables_a.values[
                 tables + (block - params.compose_offset) *
                     params.state_count + source_state];
-            result = tables_a.values[
-                tables + block * params.state_count + previous];
+            result = tables_a.values[tables + block * params.state_count + previous];
         }
         tables_b.values[tables + item] = result;
     } else {
@@ -375,8 +351,7 @@ void compose_tables()
             uint previous = tables_b.values[
                 tables + (block - params.compose_offset) *
                     params.state_count + source_state];
-            result = tables_b.values[
-                tables + block * params.state_count + previous];
+            result = tables_b.values[tables + block * params.state_count + previous];
         }
         tables_a.values[tables + item] = result;
     }
@@ -390,16 +365,13 @@ void select_seeds()
     uint persistent = persistent_base();
     if (block >= params.block_count)
         return;
-    uint initial_state =
-        persistent_state.values[persistent + 3u];
+    uint initial_state = persistent_state.values[persistent + 3u];
     if (block == 0u) {
         block_seeds.values[blocks + block] = initial_state;
         return;
     }
-    uint item = tables +
-        (block - 1u) * params.state_count + initial_state;
-    block_seeds.values[blocks + block] =
-        params.table_source == 0u
+    uint item = tables + (block - 1u) * params.state_count + initial_state;
+    block_seeds.values[blocks + block] = params.table_source == 0u
         ? tables_a.values[item] : tables_b.values[item];
 }
 
@@ -414,8 +386,7 @@ void replay_blocks()
         return;
     uint begin = block * params.block_samples;
     uint end = min(begin + params.block_samples, params.sample_count);
-    ivec2 state =
-        states.values[block_seeds.values[blocks + block]];
+    ivec2 state = states.values[block_seeds.values[blocks + block]];
     uint packed = 0u;
     uint packed_index = words + (begin >> 5u);
     /*
@@ -424,9 +395,7 @@ void replay_blocks()
      */
     for (uint sample_index = begin; sample_index < end; ++sample_index) {
         uint output_bit;
-        state = reduction_step(
-            state, mash_values.values[samples + sample_index],
-            output_bit);
+        state = reduction_step(state, mash_values.values[samples + sample_index], output_bit);
         packed |= output_bit << (sample_index & 31u);
         if ((sample_index & 31u) == 31u) {
             output_words.values[packed_index++] = packed;
@@ -436,8 +405,7 @@ void replay_blocks()
     if ((end & 31u) != 0u)
         output_words.values[packed_index] = packed;
     if (block + 1u == params.block_count)
-        persistent_state.values[persistent + 3u] =
-            state_index(state);
+        persistent_state.values[persistent + 3u] = state_index(state);
 }
 
 void main()

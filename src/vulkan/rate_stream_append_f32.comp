@@ -40,9 +40,7 @@ void main()
       parameters.input_base_element +
       frame * parameters.input_frame_stride +
       channel * parameters.input_channel_stride;
-  uint output_index =
-      (parameters.output_first_frame + frame) *
-      parameters.channels + channel;
+  uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
   float value = input_samples[input_index];
   if (parameters.quantize_sox_sample != 0u) {
     value = roundEven(value);

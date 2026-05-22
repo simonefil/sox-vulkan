@@ -33,18 +33,13 @@ void main()
   const uint output_frame = gl_GlobalInvocationID.x;
   const uint channel = gl_GlobalInvocationID.y;
 
-  if (output_frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
-  const uint input_frame =
-      parameters.first_input_frame +
-      output_frame * parameters.input_step;
-  dvec2 value = input_samples.values[
-      channel * parameters.input_channel_stride + input_frame];
+  const uint input_frame = parameters.first_input_frame + output_frame * parameters.input_step;
+  dvec2 value = input_samples.values[channel * parameters.input_channel_stride + input_frame];
 
   if (parameters.normalize != 0u)
     value = multiply_dd_scalar(value, SOX_SAMPLE_SCALE);
-  output_samples.values[
-      output_frame * parameters.channels + channel] = value;
+  output_samples.values[output_frame * parameters.channels + channel] = value;
 }

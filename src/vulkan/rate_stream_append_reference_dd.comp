@@ -40,9 +40,7 @@ void main()
       parameters.input_base_element +
       frame * parameters.input_frame_stride +
       channel * parameters.input_channel_stride;
-  const uint output_index =
-      (parameters.output_first_frame + frame) *
-      parameters.channels + channel;
+  const uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
   dvec2 value = input_samples.values[input_index];
 
   if (parameters.quantize_sox_sample != 0u) {
@@ -51,8 +49,7 @@ void main()
 
     if (rounded < -2147483648.0 || rounded > 2147483647.0)
       atomicAdd(clipped_samples[parameters.clip_index], 1u);
-    value = dvec2(
-        clamp(rounded, -2147483648.0, 2147483647.0), 0.0);
+    value = dvec2(clamp(rounded, -2147483648.0, 2147483647.0), 0.0);
   }
   stream_samples.values[output_index] = value;
 }

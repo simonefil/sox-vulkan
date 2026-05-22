@@ -31,9 +31,7 @@ vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
   precise float right_virtual = high - left;
-  precise float low =
-      (left - (high - right_virtual)) +
-      (right - right_virtual);
+  precise float low = (left - (high - right_virtual)) + (right - right_virtual);
 
   return vec2(high, low);
 }
@@ -49,10 +47,7 @@ vec2 add_double_single(vec2 left, vec2 right)
 vec2 multiply_double_single(vec2 left, vec2 right)
 {
   precise float product = left.x * right.x;
-  precise float residual =
-      fma(left.x, right.x, -product) +
-      left.x * right.y +
-      left.y * right.x;
+  precise float residual = fma(left.x, right.x, -product) + left.x * right.y + left.y * right.x;
 
   return two_sum(product, residual);
 }
@@ -62,26 +57,20 @@ void main()
   const uint output_frame = gl_GlobalInvocationID.x;
   const uint channel = gl_GlobalInvocationID.y;
 
-  if (output_frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
-  const uint position = parameters.phase_start +
-      output_frame * parameters.phase_step;
+  const uint position = parameters.phase_start + output_frame * parameters.phase_step;
   const uint input_base = position / parameters.phase_count;
   const uint phase = position % parameters.phase_count;
   precise vec2 sum = vec2(0.0);
 
   if (parameters.symmetric_presum != 0u) {
     const uint center = parameters.taps / 2u;
-    const vec2 center_coefficient =
-        coefficients.values[center];
-    const vec2 center_input = input_samples.values[
-        (input_base + center) *
-        parameters.channels + channel];
+    const vec2 center_coefficient = coefficients.values[center];
+    const vec2 center_input = input_samples.values[(input_base + center) * parameters.channels + channel];
 
-    sum = multiply_double_single(
-        center_coefficient, center_input);
+    sum = multiply_double_single(center_coefficient, center_input);
     for (uint tap = 0u; tap < center; ++tap) {
       const vec2 coefficient = coefficients.values[tap];
 
@@ -94,27 +83,19 @@ void main()
                 (input_base + parameters.taps - 1u - tap) *
                 parameters.channels + channel]);
 
-        sum = add_double_single(
-            sum,
-            multiply_double_single(coefficient, pair));
+        sum = add_double_single(sum, multiply_double_single(coefficient, pair));
       }
     }
   }
   else {
     for (uint tap = 0u; tap < parameters.taps; ++tap) {
-      const vec2 coefficient = coefficients.values[
-          tap * parameters.phase_count + phase];
-      const vec2 input_value = input_samples.values[
-          (input_base + tap) * parameters.channels + channel];
+      const vec2 coefficient = coefficients.values[tap * parameters.phase_count + phase];
+      const vec2 input_value = input_samples.values[(input_base + tap) * parameters.channels + channel];
 
-      sum = add_double_single(
-          sum,
-          multiply_double_single(coefficient, input_value));
+      sum = add_double_single(sum, multiply_double_single(coefficient, input_value));
     }
   }
   if (parameters.normalize != 0u)
-    sum = multiply_double_single(
-        sum, vec2(SOX_SAMPLE_SCALE, 0.0));
-  output_samples.values[
-      output_frame * parameters.channels + channel] = sum;
+    sum = multiply_double_single(sum, vec2(SOX_SAMPLE_SCALE, 0.0));
+  output_samples.values[output_frame * parameters.channels + channel] = sum;
 }

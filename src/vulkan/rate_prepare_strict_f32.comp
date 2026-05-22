@@ -33,9 +33,7 @@ uint reverse_bits_15(uint value)
 vec2 multiply_double_single(vec2 value, float scale)
 {
   precise float product = value.x * scale;
-  precise float residual =
-      fma(value.x, scale, -product) +
-      value.y * scale;
+  precise float residual = fma(value.x, scale, -product) + value.y * scale;
   precise float high = product + residual;
   precise float low = residual - (high - product);
 
@@ -47,17 +45,13 @@ void main()
   const uint frame = gl_GlobalInvocationID.x;
   const uint channel = gl_GlobalInvocationID.y;
 
-  if (frame >= parameters.block_frames ||
-      channel >= parameters.channels)
+  if (frame >= parameters.block_frames || channel >= parameters.channels)
     return;
 
-  const uint previous_index =
-      channel * parameters.block_frames + frame;
+  const uint previous_index = channel * parameters.block_frames + frame;
   const uint first_index = reverse_bits_15(frame);
-  const uint second_index =
-      reverse_bits_15(frame + parameters.block_frames);
-  const uint prepared_base =
-      channel * parameters.prepared_channel_stride;
+  const uint second_index = reverse_bits_15(frame + parameters.block_frames);
+  const uint prepared_base = channel * parameters.prepared_channel_stride;
   vec2 value = vec2(0.0);
 
   if (frame % parameters.up_factor == 0u) {
@@ -70,11 +64,7 @@ void main()
               channel * parameters.input_channel_stride],
           float(parameters.up_factor));
   }
-  prepared_samples.values[
-      prepared_base + first_index] =
-      vec4(previous_samples.values[previous_index], 0.0, 0.0);
-  prepared_samples.values[
-      prepared_base + second_index] =
-      vec4(value, 0.0, 0.0);
+  prepared_samples.values[prepared_base + first_index] = vec4(previous_samples.values[previous_index], 0.0, 0.0);
+  prepared_samples.values[prepared_base + second_index] = vec4(value, 0.0, 0.0);
   previous_samples.values[previous_index] = value;
 }

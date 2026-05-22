@@ -35,11 +35,8 @@ void main()
 
     sum.real_part = dvec2(0.0);
     sum.imaginary_part = dvec2(0.0);
-    for (uint part = 0;
-         part < parameters.partitions; ++part) {
-      const uint slot =
-          (parameters.current_slot + parameters.partitions -
-           part) % parameters.partitions;
+    for (uint part = 0; part < parameters.partitions; ++part) {
+      const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
       const DoubleDoubleComplex product = multiply_complex_dd(
           history.values[
           (channel * parameters.partitions + slot) *
@@ -49,8 +46,7 @@ void main()
           parameters.spectrum_bins + bin]);
 
       sum.real_part = add_dd(sum.real_part, product.real_part);
-      sum.imaginary_part = add_dd(
-          sum.imaginary_part, product.imaginary_part);
+      sum.imaginary_part = add_dd(sum.imaginary_part, product.imaginary_part);
     }
     working.values[index] = sum;
   }

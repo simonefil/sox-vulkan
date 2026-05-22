@@ -22,8 +22,7 @@ void main()
   const uint index = gl_GlobalInvocationID.x;
 
   if (index < parameters.spectrum_bins) {
-    const DoubleDoubleComplex first =
-        accumulated_spectrum.values[index];
+    const DoubleDoubleComplex first = accumulated_spectrum.values[index];
     const DoubleDoubleComplex second = input_spectrum.values[index];
     DoubleDoubleComplex result;
 

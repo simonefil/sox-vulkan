@@ -25,9 +25,7 @@ vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
   precise float right_virtual = high - left;
-  precise float low =
-      (left - (high - right_virtual)) +
-      (right - right_virtual);
+  precise float low = (left - (high - right_virtual)) + (right - right_virtual);
 
   return vec2(high, low);
 }
@@ -48,10 +46,7 @@ vec2 subtract_ds(vec2 left, vec2 right)
 vec2 multiply_ds(vec2 left, vec2 right)
 {
   precise float product = left.x * right.x;
-  precise float residual =
-      fma(left.x, right.x, -product) +
-      left.x * right.y +
-      left.y * right.x;
+  precise float residual = fma(left.x, right.x, -product) + left.x * right.y + left.y * right.x;
 
   return two_sum(product, residual);
 }
@@ -61,9 +56,7 @@ vec2 fraction_ds(uint fraction)
   const uint high = fraction >> 16u;
   const uint low = fraction & 65535u;
 
-  return vec2(
-      float(high) * (1.0 / 65536.0),
-      float(low) * (1.0 / 4294967296.0));
+  return vec2(float(high) * (1.0 / 65536.0), float(low) * (1.0 / 4294967296.0));
 }
 
 void main()
@@ -76,52 +69,26 @@ void main()
   uint carry;
   uint input_frame;
 
-  if (output_frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
-  umulExtended(
-      output_frame, parameters.step_fraction,
-      product_high, product_low);
+  umulExtended(output_frame, parameters.step_fraction, product_high, product_low);
   fraction = parameters.phase_fraction + product_low;
   carry = fraction < product_low ? 1u : 0u;
-  input_frame =
-      1u + output_frame * parameters.step_integer +
-      product_high + carry;
+  input_frame = 1u + output_frame * parameters.step_integer + product_high + carry;
   const vec2 x = fraction_ds(fraction);
-  const vec2 sample_m1 = input_samples.values[
-      (input_frame - 1u) * parameters.channels + channel];
-  const vec2 sample_0 = input_samples.values[
-      input_frame * parameters.channels + channel];
-  const vec2 sample_1 = input_samples.values[
-      (input_frame + 1u) * parameters.channels + channel];
-  const vec2 sample_2 = input_samples.values[
-      (input_frame + 2u) * parameters.channels + channel];
-  const vec2 b = subtract_ds(
-      multiply_ds(
-          add_ds(sample_1, sample_m1),
-          vec2(0.5, 0.0)),
-      sample_0);
+  const vec2 sample_m1 = input_samples.values[(input_frame - 1u) * parameters.channels + channel];
+  const vec2 sample_0 = input_samples.values[input_frame * parameters.channels + channel];
+  const vec2 sample_1 = input_samples.values[(input_frame + 1u) * parameters.channels + channel];
+  const vec2 sample_2 = input_samples.values[(input_frame + 2u) * parameters.channels + channel];
+  const vec2 b = subtract_ds(multiply_ds(add_ds(sample_1, sample_m1), vec2(0.5, 0.0)), sample_0);
   vec2 a = subtract_ds(sample_2, sample_1);
   a = add_ds(a, sample_m1);
   a = subtract_ds(a, sample_0);
-  a = subtract_ds(
-      a, multiply_ds(b, vec2(4.0, 0.0)));
-  a = multiply_ds(
-      a, vec2(0.1666666716337204, -4.967053879312289e-9));
-  const vec2 c = subtract_ds(
-      subtract_ds(
-          subtract_ds(sample_1, sample_0), a), b);
-  const vec2 output_value = add_ds(
-      multiply_ds(
-          add_ds(
-              multiply_ds(
-                  add_ds(multiply_ds(a, x), b), x),
-              c),
-          x),
-      sample_0);
+  a = subtract_ds(a, multiply_ds(b, vec2(4.0, 0.0)));
+  a = multiply_ds(a, vec2(0.1666666716337204, -4.967053879312289e-9));
+  const vec2 c = subtract_ds(subtract_ds(subtract_ds(sample_1, sample_0), a), b);
+  const vec2 output_value = add_ds(multiply_ds(add_ds(multiply_ds(add_ds(multiply_ds(a, x), b), x), c), x), sample_0);
 
-  output_samples.values[
-      output_frame * parameters.channels + channel] =
-      output_value;
+  output_samples.values[output_frame * parameters.channels + channel] = output_value;
 }

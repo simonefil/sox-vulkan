@@ -37,12 +37,10 @@ void main()
   const uint output_frame = gl_GlobalInvocationID.x;
   const uint channel = gl_GlobalInvocationID.y;
 
-  if (output_frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
-  const uint position = parameters.phase_start +
-      output_frame * parameters.phase_step;
+  const uint position = parameters.phase_start + output_frame * parameters.phase_step;
   const uint input_base = position / parameters.phase_count;
   const uint phase = position % parameters.phase_count;
   dvec2 sum = dvec2(0.0);
@@ -50,8 +48,7 @@ void main()
   if (parameters.symmetric_presum != 0u) {
     const uint center = parameters.taps / 2u;
     const dvec2 center_coefficient = coefficients.values[center];
-    const dvec2 center_input = input_samples.values[
-        (input_base + center) * parameters.channels + channel];
+    const dvec2 center_input = input_samples.values[(input_base + center) * parameters.channels + channel];
 
     sum = multiply_dd(center_coefficient, center_input);
     for (uint tap = 0u; tap < center; ++tap) {
@@ -72,18 +69,14 @@ void main()
   }
   else {
     for (uint tap = 0u; tap < parameters.taps; ++tap) {
-      const dvec2 coefficient = coefficients.values[
-          tap * parameters.phase_count + phase];
-      const dvec2 input_value = input_samples.values[
-          (input_base + tap) * parameters.channels + channel];
+      const dvec2 coefficient = coefficients.values[tap * parameters.phase_count + phase];
+      const dvec2 input_value = input_samples.values[(input_base + tap) * parameters.channels + channel];
 
       sum = add_dd(sum, multiply_dd(coefficient, input_value));
     }
   }
-  const dvec2 normalized =
-      multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
+  const dvec2 normalized = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
   precise double combined = normalized.x + normalized.y;
 
-  output_samples.values[
-      output_frame * parameters.channels + channel] = float(combined);
+  output_samples.values[output_frame * parameters.channels + channel] = float(combined);
 }

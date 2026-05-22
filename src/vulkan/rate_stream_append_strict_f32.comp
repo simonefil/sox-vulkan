@@ -30,28 +30,22 @@ void main()
   const uint frame = gl_GlobalInvocationID.x;
   const uint channel = gl_GlobalInvocationID.y;
 
-  if (frame >= parameters.frames ||
-      channel >= parameters.channels)
+  if (frame >= parameters.frames || channel >= parameters.channels)
     return;
 
   const uint input_index =
       parameters.input_base_element +
       frame * parameters.input_frame_stride +
       channel * parameters.input_channel_stride;
-  const uint output_index =
-      (parameters.output_first_frame + frame) *
-      parameters.channels + channel;
+  const uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
   vec2 value = input_samples.values[input_index];
 
   if (parameters.quantize_sox_sample != 0u) {
     float rounded = roundEven(value.x + value.y);
 
-    if (rounded < -2147483648.0 ||
-        rounded > 2147483647.0)
-      atomicAdd(
-          clips.clipped_samples[parameters.clip_index], 1u);
-    rounded = clamp(
-        rounded, -2147483648.0, 2147483647.0);
+    if (rounded < -2147483648.0 || rounded > 2147483647.0)
+      atomicAdd(clips.clipped_samples[parameters.clip_index], 1u);
+    rounded = clamp(rounded, -2147483648.0, 2147483647.0);
     value = vec2(rounded, 0.0);
   }
   stream_samples.values[output_index] = value;

@@ -31,9 +31,7 @@ vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
   precise float right_virtual = high - left;
-  precise float low =
-      (left - (high - right_virtual)) +
-      (right - right_virtual);
+  precise float low = (left - (high - right_virtual)) + (right - right_virtual);
 
   return vec2(high, low);
 }
@@ -51,26 +49,21 @@ void main()
   uint output_frame = gl_GlobalInvocationID.x;
   uint channel = gl_GlobalInvocationID.y;
 
-  if (output_frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
-  uint position = parameters.phase_start +
-      output_frame * parameters.phase_step;
+  uint position = parameters.phase_start + output_frame * parameters.phase_step;
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
-  float scale =
-      parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
+  float scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   precise vec2 sum = vec2(0.0);
 
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
     float center_coefficient = coefficients[center];
-    float center_input = input_samples[
-        (input_base + center) * parameters.channels + channel];
+    float center_input = input_samples[(input_base + center) * parameters.channels + channel];
     precise float product = center_coefficient * center_input;
-    precise float residual =
-        fma(center_coefficient, center_input, -product);
+    precise float residual = fma(center_coefficient, center_input, -product);
 
     sum = vec2(product, residual);
     for (uint tap = 0u; tap < center; ++tap) {
@@ -93,17 +86,13 @@ void main()
   }
   else {
     for (uint tap = 0u; tap < parameters.taps; ++tap) {
-      float coefficient =
-          coefficients[tap * parameters.phase_count + phase];
-      float input_value = input_samples[
-          (input_base + tap) * parameters.channels + channel];
+      float coefficient = coefficients[tap * parameters.phase_count + phase];
+      float input_value = input_samples[(input_base + tap) * parameters.channels + channel];
       precise float product = coefficient * input_value;
-      precise float residual =
-          fma(coefficient, input_value, -product);
+      precise float residual = fma(coefficient, input_value, -product);
 
       sum = add_float_float(sum, vec2(product, residual));
     }
   }
-  output_samples[output_frame * parameters.channels + channel] =
-      (sum.x + sum.y) * scale;
+  output_samples[output_frame * parameters.channels + channel] = (sum.x + sum.y) * scale;
 }

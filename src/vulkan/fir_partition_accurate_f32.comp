@@ -33,14 +33,8 @@ vec2 complex_product(vec2 value, vec2 coefficient)
   float bc = value.y * coefficient.x;
   float real_high = ac - bd;
   float imag_high = ad + bc;
-  float real_low =
-      fma(value.x, coefficient.x, -ac) -
-      fma(value.y, coefficient.y, -bd) +
-      ((ac - real_high) - bd);
-  float imag_low =
-      fma(value.x, coefficient.y, -ad) +
-      fma(value.y, coefficient.x, -bc) +
-      ((ad - imag_high) + bc);
+  float real_low = fma(value.x, coefficient.x, -ac) - fma(value.y, coefficient.y, -bd) + ((ac - real_high) - bd);
+  float imag_low = fma(value.x, coefficient.y, -ad) + fma(value.y, coefficient.x, -bc) + ((ad - imag_high) + bc);
 
   return vec2(real_high + real_low, imag_high + imag_low);
 }
@@ -55,17 +49,10 @@ void main()
     vec2 sum = vec2(0.0);
     vec2 correction = vec2(0.0);
 
-    for (uint part = 0;
-         part < parameters.partitions; ++part) {
-      const uint slot =
-          (parameters.current_slot + parameters.partitions -
-           part) % parameters.partitions;
-      const uint history_index =
-          (channel * parameters.partitions + slot) *
-          parameters.spectrum_bins + bin;
-      const uint kernel_index =
-          (part * parameters.channels + channel) *
-          parameters.spectrum_bins + bin;
+    for (uint part = 0; part < parameters.partitions; ++part) {
+      const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
+      const uint history_index = (channel * parameters.partitions + slot) * parameters.spectrum_bins + bin;
+      const uint kernel_index = (part * parameters.channels + channel) * parameters.spectrum_bins + bin;
       const vec2 value = history.values[history_index];
       vec2 product =
           complex_product(value, kernels_high.values[kernel_index]) +

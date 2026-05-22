@@ -42,14 +42,12 @@ void main()
   uint frame = gl_GlobalInvocationID.x;
   uint channel = gl_GlobalInvocationID.y;
 
-  if (frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
   float value = 0.0;
   if (frame < parameters.input_frames) {
-    dvec2 pair = input_samples[
-        frame * parameters.channels + channel];
+    dvec2 pair = input_samples[frame * parameters.channels + channel];
 
     value = float((pair.x + pair.y) * double(parameters.scale));
   }

@@ -40,24 +40,18 @@ void main()
 {
   uint output_frame = gl_GlobalInvocationID.x;
   uint channel = gl_GlobalInvocationID.y;
-  if (output_frame >= parameters.output_frames ||
-      channel >= parameters.channels)
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
     return;
 
-  uint position = parameters.phase_start +
-      output_frame * parameters.phase_step;
+  uint position = parameters.phase_start + output_frame * parameters.phase_step;
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
-  float scale =
-      parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
+  float scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   float sum = 0.0;
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
 
-    sum = coefficients[center] *
-        input_samples[
-            (input_base + center) *
-            parameters.channels + channel];
+    sum = coefficients[center] * input_samples[(input_base + center) * parameters.channels + channel];
     for (uint tap = 0u; tap < center; ++tap)
       if (coefficients[tap] != 0.0)
         sum = fma(
@@ -78,6 +72,5 @@ void main()
               (input_base + tap) *
               parameters.channels + channel],
           sum);
-  output_samples[output_frame * parameters.channels + channel] =
-      sum * scale;
+  output_samples[output_frame * parameters.channels + channel] = sum * scale;
 }

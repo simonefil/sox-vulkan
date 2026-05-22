@@ -32,17 +32,10 @@ void main()
     dvec2 sum = dvec2(0.0);
     dvec2 correction = dvec2(0.0);
 
-    for (uint part = 0;
-         part < parameters.partitions; ++part) {
-      const uint slot =
-          (parameters.current_slot + parameters.partitions -
-           part) % parameters.partitions;
-      const dvec2 value = history.values[
-          (channel * parameters.partitions + slot) *
-          parameters.spectrum_bins + bin];
-      const dvec2 coefficient = kernels.values[
-          (part * parameters.channels + channel) *
-          parameters.spectrum_bins + bin];
+    for (uint part = 0; part < parameters.partitions; ++part) {
+      const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
+      const dvec2 value = history.values[(channel * parameters.partitions + slot) * parameters.spectrum_bins + bin];
+      const dvec2 coefficient = kernels.values[(part * parameters.channels + channel) * parameters.spectrum_bins + bin];
       const dvec2 product = dvec2(
           value.x * coefficient.x - value.y * coefficient.y,
           value.x * coefficient.y + value.y * coefficient.x);

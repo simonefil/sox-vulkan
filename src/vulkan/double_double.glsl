@@ -32,8 +32,7 @@ dvec2 two_sum(double first, double second)
 {
   precise double sum = first + second;
   precise double recovered = sum - first;
-  precise double error =
-      (first - (sum - recovered)) + (second - recovered);
+  precise double error = (first - (sum - recovered)) + (second - recovered);
 
   return dvec2(sum, error);
 }
@@ -94,9 +93,7 @@ dvec2 two_product(double first, double second)
 dvec2 multiply_dd(dvec2 first, dvec2 second)
 {
   const dvec2 product = two_product(first.x, second.x);
-  precise double error = product.y +
-      (first.x * second.y + first.y * second.x) +
-      first.y * second.y;
+  precise double error = product.y + (first.x * second.y + first.y * second.x) + first.y * second.y;
 
   return normalize_dd(product.x, error);
 }
@@ -109,9 +106,7 @@ dvec2 multiply_dd_scalar(dvec2 value, double scale)
   return normalize_dd(product.x, error);
 }
 
-DoubleDoubleComplex multiply_complex_dd(
-    DoubleDoubleComplex first,
-    DoubleDoubleComplex second)
+DoubleDoubleComplex multiply_complex_dd(DoubleDoubleComplex first, DoubleDoubleComplex second)
 {
   DoubleDoubleComplex result;
 

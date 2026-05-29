@@ -38,14 +38,10 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
     size_t *result_count);
 void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context);
 size_t lsx_fir_vulkan_block_frames(void);
-size_t lsx_fir_vulkan_block_frames_for(
-    lsx_vulkan_context_t const *context);
-size_t lsx_fir_vulkan_prepared_stride(
-    lsx_fir_vulkan_t const *context);
+size_t lsx_fir_vulkan_block_frames_for(lsx_vulkan_context_t const *context);
+size_t lsx_fir_vulkan_prepared_stride(lsx_fir_vulkan_t const *context);
 lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *context);
-int lsx_fir_vulkan_process(
-    lsx_fir_vulkan_t *context, double const *input,
-    double const **output);
+int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, double const **output);
 int lsx_fir_vulkan_process_resident(
     lsx_fir_vulkan_t *context, double const *input,
     sox_rate_t rate, uint64_t frame_offset,

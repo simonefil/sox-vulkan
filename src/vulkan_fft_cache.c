@@ -45,9 +45,7 @@ static unsigned disk_writes;
 
 /* Compared field by field rather than with memcmp, which would read padding
  * bytes that a partially assigned key leaves indeterminate. */
-static int key_equal(
-    lsx_vulkan_fft_cache_key_t const *left,
-    lsx_vulkan_fft_cache_key_t const *right)
+static int key_equal(lsx_vulkan_fft_cache_key_t const *left, lsx_vulkan_fft_cache_key_t const *right)
 {
   return left->buffer_size == right->buffer_size &&
       left->vkfft_version == right->vkfft_version &&
@@ -89,8 +87,7 @@ static int disk_enabled(void)
 {
   char const *setting = getenv("SOX_VULKAN_FFT_DISK_CACHE");
 
-  return lsx_vulkan_fft_cache_enabled() &&
-      (!setting || strcmp(setting, "0") != 0);
+  return lsx_vulkan_fft_cache_enabled() && (!setting || strcmp(setting, "0") != 0);
 }
 
 static uint64_t blob_hash(void const *blob, uint64_t size)
@@ -155,8 +152,7 @@ static int get_u64(FILE *file, uint64_t *value)
 /* Assembles path/component, creating each directory as it goes.  Returns
  * zero if any level could not be created, which disables the disk cache for
  * this run rather than failing the effect. */
-static int append_directory(
-    char *path, size_t size, char const *component)
+static int append_directory(char *path, size_t size, char const *component)
 {
   size_t used = strlen(path);
 
@@ -218,8 +214,7 @@ static char const *cache_directory(void)
         return NULL;
       }
   }
-  if (!append_directory(path, sizeof(path), "sox") ||
-      !append_directory(path, sizeof(path), "vkfft-cache"))
+  if (!append_directory(path, sizeof(path), "sox") || !append_directory(path, sizeof(path), "vkfft-cache"))
     path[0] = '\0';
   return path[0] ? path : NULL;
 }
@@ -227,8 +222,7 @@ static char const *cache_directory(void)
 /* The sox version is verified from the file header rather than named here,
  * so that a new version overwrites the stale file instead of leaving it
  * behind to accumulate. */
-static int entry_path(
-    lsx_vulkan_fft_cache_key_t const *key, char *path, size_t size)
+static int entry_path(lsx_vulkan_fft_cache_key_t const *key, char *path, size_t size)
 {
   char const *directory = cache_directory();
   unsigned flags;
@@ -264,8 +258,7 @@ static void write_key(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
   put_u32(file, key->use_lut);
 }
 
-static int read_key_matches(
-    FILE *file, lsx_vulkan_fft_cache_key_t const *key)
+static int read_key_matches(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
 {
   lsx_vulkan_fft_cache_key_t stored;
   uint32_t fields[10];
@@ -306,8 +299,7 @@ static int version_matches(FILE *file)
   return strcmp(stored, version) == 0;
 }
 
-static void *disk_lookup(
-    lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
+static void *disk_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
 {
   char path[1024];
   FILE *file;
@@ -337,8 +329,7 @@ static void *disk_lookup(
     return NULL;
   }
   blob = lsx_malloc((size_t)stored_size);
-  if (fread(blob, 1, (size_t)stored_size, file) != stored_size ||
-      blob_hash(blob, stored_size) != stored_hash) {
+  if (fread(blob, 1, (size_t)stored_size, file) != stored_size || blob_hash(blob, stored_size) != stored_hash) {
     free(blob);
     fclose(file);
     return NULL;
@@ -351,8 +342,7 @@ static void *disk_lookup(
 
 /* Written to a temporary name and renamed, so that a reader never sees a
  * half-written file and two concurrent sox processes cannot interleave. */
-static void disk_store(
-    lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size)
+static void disk_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size)
 {
   char path[1024];
   char temporary[1024];
@@ -362,9 +352,7 @@ static void disk_store(
 
   if (!entry_path(key, path, sizeof(path)))
     return;
-  written = snprintf(
-      temporary, sizeof(temporary), "%s.%d.tmp", path,
-      (int)cache_getpid());
+  written = snprintf(temporary, sizeof(temporary), "%s.%d.tmp", path, (int)cache_getpid());
   if (written <= 0 || (size_t)written >= sizeof(temporary))
     return;
   file = fopen(temporary, "wb");
@@ -396,8 +384,7 @@ static void disk_store(
 
 /* ------------------------------------------------------------- in process */
 
-static void memory_store(
-    lsx_vulkan_fft_cache_key_t const *key, void *blob, uint64_t size)
+static void memory_store(lsx_vulkan_fft_cache_key_t const *key, void *blob, uint64_t size)
 {
   cache_entry_t *entry = lsx_calloc(1, sizeof(*entry));
 
@@ -408,8 +395,7 @@ static void memory_store(
   entries = entry;
 }
 
-void const *lsx_vulkan_fft_cache_lookup(
-    lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
+void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
 {
   cache_entry_t *entry;
   void *blob;
@@ -436,8 +422,7 @@ void const *lsx_vulkan_fft_cache_lookup(
   return NULL;
 }
 
-void lsx_vulkan_fft_cache_store(
-    lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size)
+void lsx_vulkan_fft_cache_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size)
 {
   void *copy;
 

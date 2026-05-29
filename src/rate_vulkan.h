@@ -45,10 +45,8 @@ int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context);
 uint32_t lsx_rate_vulkan_resident_stream_clips(lsx_rate_vulkan_t *context);
 uint32_t lsx_rate_vulkan_resident_stream_clips_completed(lsx_rate_vulkan_t *context);
 uint32_t lsx_rate_vulkan_resident_batch_depth(lsx_rate_vulkan_t const *context);
-lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(
-    lsx_rate_vulkan_t const *context);
-lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(
-    sox_effect_t const *effp);
+lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t const *context);
+lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t const *effp);
 int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced);
 int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done);
 sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp);

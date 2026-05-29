@@ -141,12 +141,10 @@ typedef struct lsx_vulkan_context {
 
 #define LSX_VULKAN_RESIDENT_BATCH_DEPTH 4u
 
-lsx_vulkan_context_t *lsx_vulkan_context_get(
-    sox_effects_globals_t *effects_globals);
+lsx_vulkan_context_t *lsx_vulkan_context_get(sox_effects_globals_t *effects_globals);
 void lsx_vulkan_context_destroy(void *opaque_context);
 char const *lsx_vulkan_profile_name(sox_vulkan_profile_t profile);
-char const *lsx_vulkan_numerical_family_name(
-    lsx_vulkan_numerical_family_t family);
+char const *lsx_vulkan_numerical_family_name(lsx_vulkan_numerical_family_t family);
 
 int lsx_vulkan_result(VkResult result, char const *operation);
 void lsx_vulkan_label_begin(lsx_vulkan_context_t *context, VkCommandBuffer command_buffer, char const *name);
@@ -155,12 +153,9 @@ int lsx_vulkan_buffer_create(
     lsx_vulkan_context_t *context, lsx_vulkan_buffer_t *buffer,
     VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryPropertyFlags properties);
-void lsx_vulkan_buffer_destroy(
-    lsx_vulkan_context_t *context, lsx_vulkan_buffer_t *buffer);
-VkDeviceSize lsx_vulkan_resident_buffer_size(
-    lsx_vulkan_resident_buffer_t const *resident);
-int lsx_vulkan_resident_buffer_validate(
-    lsx_vulkan_resident_buffer_t const *resident);
+void lsx_vulkan_buffer_destroy(lsx_vulkan_context_t *context, lsx_vulkan_buffer_t *buffer);
+VkDeviceSize lsx_vulkan_resident_buffer_size(lsx_vulkan_resident_buffer_t const *resident);
+int lsx_vulkan_resident_buffer_validate(lsx_vulkan_resident_buffer_t const *resident);
 int lsx_vulkan_download_resident_pcm(
     lsx_vulkan_context_t *context,
     lsx_vulkan_resident_buffer_t const *resident,

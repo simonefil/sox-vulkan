@@ -77,8 +77,7 @@ bool starts_types(uint32_t opcode)
   return opcode >= 19u && opcode <= 39u;
 }
 
-std::vector<uint32_t> decorate_no_contraction(
-    uint32_t const *words, size_t word_count)
+std::vector<uint32_t> decorate_no_contraction(uint32_t const *words, size_t word_count)
 {
   std::vector<uint32_t> result(words, words + word_count);
   std::vector<uint32_t> targets;
@@ -96,8 +95,7 @@ std::vector<uint32_t> decorate_no_contraction(
       return result;
     if (insertion == word_count && starts_types(opcode))
       insertion = index;
-    if (opcode == op_decorate && length >= 3u &&
-        words[index + 2u] == decoration_no_contraction)
+    if (opcode == op_decorate && length >= 3u && words[index + 2u] == decoration_no_contraction)
       decorated.push_back(words[index + 1u]);
     /* The result id of an arithmetic instruction is its second operand, the
      * first being the result type. */
@@ -123,9 +121,7 @@ std::vector<uint32_t> decorate_no_contraction(
       additions.push_back(targets[target]);
       additions.push_back(decoration_no_contraction);
     }
-    result.insert(
-        result.begin() + (long)insertion,
-        additions.begin(), additions.end());
+    result.insert(result.begin() + (long)insertion, additions.begin(), additions.end());
   }
   return result;
 }
@@ -134,8 +130,7 @@ VkResult create_decorated_shader_module(
     VkDevice device, VkShaderModuleCreateInfo const *create_info,
     VkAllocationCallbacks const *allocator, VkShaderModule *module)
 {
-  std::vector<uint32_t> patched = decorate_no_contraction(
-      create_info->pCode, create_info->codeSize / sizeof(uint32_t));
+  std::vector<uint32_t> patched = decorate_no_contraction(create_info->pCode, create_info->codeSize / sizeof(uint32_t));
   VkShaderModuleCreateInfo decorated = *create_info;
 
   decorated.pCode = patched.data();
@@ -173,8 +168,7 @@ extern "C" void *lsx_vulkan_fft_dd_create(
 {
   VkFFTConfiguration configuration = VKFFT_ZERO_INIT;
   dd_fft *context;
-  void const *cached = key ?
-      lsx_vulkan_fft_cache_lookup(key, NULL) : NULL;
+  void const *cached = key ? lsx_vulkan_fft_cache_lookup(key, NULL) : NULL;
   VkFFTResult result;
 
   if (result_code)
@@ -243,8 +237,7 @@ extern "C" void lsx_vulkan_fft_dd_destroy(void *handle)
   free(context);
 }
 
-extern "C" int lsx_vulkan_fft_dd_append(
-    void *handle, VkCommandBuffer command_buffer, int inverse)
+extern "C" int lsx_vulkan_fft_dd_append(void *handle, VkCommandBuffer command_buffer, int inverse)
 {
   dd_fft *context = (dd_fft *)handle;
   VkFFTLaunchParams launch = VKFFT_ZERO_INIT;
@@ -252,6 +245,5 @@ extern "C" int lsx_vulkan_fft_dd_append(
   if (!context || !context->initialized || !command_buffer)
     return -1;
   launch.commandBuffer = &command_buffer;
-  return (int)VkFFTAppend(
-      &context->application, inverse ? 1 : -1, &launch);
+  return (int)VkFFTAppend(&context->application, inverse ? 1 : -1, &launch);
 }

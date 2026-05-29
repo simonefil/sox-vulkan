@@ -20,8 +20,6 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
     sox_bool real_to_complex, sox_bool normalize_inverse,
     VkFence *fence);
 void lsx_vulkan_fft_destroy(lsx_vulkan_fft_t *context);
-int lsx_vulkan_fft_append(
-    lsx_vulkan_fft_t *context, VkCommandBuffer command_buffer,
-    sox_bool inverse);
+int lsx_vulkan_fft_append(lsx_vulkan_fft_t *context, VkCommandBuffer command_buffer, sox_bool inverse);
 
 #endif

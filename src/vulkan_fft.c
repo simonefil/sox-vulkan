@@ -79,8 +79,7 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   void const *cached;
   VkFFTResult result;
 
-  if (!vulkan || !buffer || !buffer->buffer || !buffer->size ||
-      !length || !batches || !fence)
+  if (!vulkan || !buffer || !buffer->buffer || !buffer->size || !length || !batches || !fence)
     return NULL;
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
@@ -88,9 +87,7 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   if (compiler_acquire() != SOX_SUCCESS)
     goto error;
   context->compiler_acquired = sox_true;
-  if (lsx_vulkan_result(
-      vkResetFences(vulkan->device, 1, fence),
-      "vkResetFences before initializeVkFFT") != SOX_SUCCESS)
+  if (lsx_vulkan_result(vkResetFences(vulkan->device, 1, fence), "vkResetFences before initializeVkFFT") != SOX_SUCCESS)
     goto error;
   if (double_double_precision) {
     int dd_result = 0;
@@ -105,9 +102,7 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
         length, batches, real_to_complex ? 1 : 0,
         normalize_inverse ? 1 : 0, fence, &key, &dd_result);
     if (!context->double_double) {
-      lsx_fail(
-          "double-double initializeVkFFT failed with result %d",
-          dd_result);
+      lsx_fail("double-double initializeVkFFT failed with result %d", dd_result);
       goto error;
     }
     return context;
@@ -144,9 +139,7 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
      * the same path serves the on-disk cache, where a stale or truncated
      * file has to degrade into a slow start rather than an error.  VkFFT
      * requires a zeroed application struct, and rejects a reused one. */
-    lsx_warn(
-        "cached VkFFT kernels rejected with result %d, recompiling",
-        (int)result);
+    lsx_warn("cached VkFFT kernels rejected with result %d, recompiling", (int)result);
     memset(&context->application, 0, sizeof(context->application));
     configuration.loadApplicationFromString = 0;
     configuration.loadApplicationString = NULL;
@@ -165,8 +158,7 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
         context->application.applicationStringSize);
   return context;
 
-error:
-  lsx_vulkan_fft_destroy(context);
+error: lsx_vulkan_fft_destroy(context);
   return NULL;
 }
 
@@ -183,9 +175,7 @@ void lsx_vulkan_fft_destroy(lsx_vulkan_fft_t *context)
   free(context);
 }
 
-int lsx_vulkan_fft_append(
-    lsx_vulkan_fft_t *context, VkCommandBuffer command_buffer,
-    sox_bool inverse)
+int lsx_vulkan_fft_append(lsx_vulkan_fft_t *context, VkCommandBuffer command_buffer, sox_bool inverse)
 {
   VkFFTLaunchParams launch = VKFFT_ZERO_INIT;
   VkFFTResult result;
@@ -193,8 +183,7 @@ int lsx_vulkan_fft_append(
   if (!context || !command_buffer)
     return SOX_EOF;
   if (context->double_double) {
-    result = (VkFFTResult)lsx_vulkan_fft_dd_append(
-        context->double_double, command_buffer, inverse ? 1 : 0);
+    result = (VkFFTResult)lsx_vulkan_fft_dd_append(context->double_double, command_buffer, inverse ? 1 : 0);
     if (result != VKFFT_SUCCESS) {
       lsx_fail(
           "double-double VkFFT %s command recording failed with "
@@ -206,12 +195,9 @@ int lsx_vulkan_fft_append(
   if (!context->initialized)
     return SOX_EOF;
   launch.commandBuffer = &command_buffer;
-  result = VkFFTAppend(
-      &context->application, inverse ? 1 : -1, &launch);
+  result = VkFFTAppend(&context->application, inverse ? 1 : -1, &launch);
   if (result != VKFFT_SUCCESS) {
-    lsx_fail(
-        "VkFFT %s command recording failed with result %d",
-        inverse ? "inverse" : "forward", (int)result);
+    lsx_fail("VkFFT %s command recording failed with result %d", inverse ? "inverse" : "forward", (int)result);
     return SOX_EOF;
   }
   return SOX_SUCCESS;

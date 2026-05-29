@@ -119,8 +119,7 @@ static int vk_result(VkResult result, char const *operation)
   return lsx_vulkan_result(result, operation);
 }
 
-static size_t resident_sample_size(
-    lsx_rate_vulkan_t const *context)
+static size_t resident_sample_size(lsx_rate_vulkan_t const *context)
 {
   return context->reference_dd ?
       2u * sizeof(double) :
@@ -129,8 +128,7 @@ static size_t resident_sample_size(
       context->double_precision ? sizeof(double) : sizeof(float);
 }
 
-static lsx_vulkan_resident_format_t resident_format(
-    lsx_rate_vulkan_t const *context)
+static lsx_vulkan_resident_format_t resident_format(lsx_rate_vulkan_t const *context)
 {
   return context->reference_dd ?
       lsx_vulkan_resident_format_f64x2 :
@@ -141,8 +139,7 @@ static lsx_vulkan_resident_format_t resident_format(
       lsx_vulkan_resident_format_f32;
 }
 
-lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(
-    lsx_rate_vulkan_t const *context)
+lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t const *context)
 {
   return resident_format(context);
 }
@@ -337,8 +334,7 @@ static lsx_rate_vulkan_t *create_rate(
     uint32_t channels)
 {
   lsx_rate_vulkan_t *context;
-  size_t block_frames =
-      lsx_fir_vulkan_block_frames_for(vulkan);
+  size_t block_frames = lsx_fir_vulkan_block_frames_for(vulkan);
   size_t output_capacity;
 
   if (!vulkan || !coefficients || !taps || post_peak >= taps ||
@@ -352,12 +348,8 @@ static lsx_rate_vulkan_t *create_rate(
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
   context->double_precision = vulkan->use_float64;
-  context->reference_dd =
-      context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_reference;
-  context->strict_fp32 =
-      !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_strict;
+  context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
+  context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
   context->input_frames = block_frames / up_factor;
   /* The skip is counted in output frames, so it carries post_peak exactly.
    * Rounding it down to a multiple of up_factor -- which mirrored the input
@@ -396,8 +388,7 @@ static lsx_rate_vulkan_t *create_rate(
       context->strict_fp32 ? "FP32x2" : "FP32");
   return context;
 
-error:
-  lsx_rate_vulkan_destroy(context);
+error: lsx_rate_vulkan_destroy(context);
   return NULL;
 }
 
@@ -409,9 +400,7 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create(
 {
   double const *channel_coefficients[] = {coefficients};
 
-  return create_rate(
-      vulkan, channel_coefficients, NULL, 1u, taps, post_peak,
-      up_factor, down_factor, channels);
+  return create_rate(vulkan, channel_coefficients, NULL, 1u, taps, post_peak, up_factor, down_factor, channels);
 }
 
 lsx_rate_vulkan_t *lsx_rate_vulkan_create_channels(
@@ -420,9 +409,7 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create_channels(
     size_t post_peak, uint32_t up_factor,
     uint32_t down_factor, uint32_t channels)
 {
-  return create_rate(
-      vulkan, coefficients, NULL, channels, taps, post_peak,
-      up_factor, down_factor, channels);
+  return create_rate(vulkan, coefficients, NULL, channels, taps, post_peak, up_factor, down_factor, channels);
 }
 
 lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd(
@@ -435,13 +422,9 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd(
   double const *channel_highs[] = {coefficient_highs};
   double const *channel_lows[] = {coefficient_lows};
 
-  if (!coefficient_lows || !vulkan ||
-      vulkan->profile != sox_vulkan_profile_reference)
+  if (!coefficient_lows || !vulkan || vulkan->profile != sox_vulkan_profile_reference)
     return NULL;
-  return create_rate(
-      vulkan, channel_highs, channel_lows, 1u,
-      taps, post_peak, up_factor, down_factor,
-      channels);
+  return create_rate(vulkan, channel_highs, channel_lows, 1u, taps, post_peak, up_factor, down_factor, channels);
 }
 
 lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd_channels(
@@ -451,8 +434,7 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd_channels(
     size_t post_peak, uint32_t up_factor,
     uint32_t down_factor, uint32_t channels)
 {
-  if (!coefficient_lows || !vulkan ||
-      vulkan->profile != sox_vulkan_profile_reference)
+  if (!coefficient_lows || !vulkan || vulkan->profile != sox_vulkan_profile_reference)
     return NULL;
   return create_rate(
       vulkan, coefficient_highs, coefficient_lows, channels,
@@ -466,8 +448,7 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
     return;
   vkDeviceWaitIdle(context->vulkan->device);
   if (context->resident_fence)
-    vkDestroyFence(
-        context->vulkan->device, context->resident_fence, NULL);
+    vkDestroyFence(context->vulkan->device, context->resident_fence, NULL);
   if (context->resident_command_buffers[0])
     vkFreeCommandBuffers(
         context->vulkan->device, context->vulkan->command_pool,
@@ -497,20 +478,13 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
   lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[1]);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[0]);
   if (context->resident_pipeline)
-    vkDestroyPipeline(
-        context->vulkan->device, context->resident_pipeline, NULL);
+    vkDestroyPipeline(context->vulkan->device, context->resident_pipeline, NULL);
   if (context->resident_pipeline_layout)
-    vkDestroyPipelineLayout(
-        context->vulkan->device,
-        context->resident_pipeline_layout, NULL);
+    vkDestroyPipelineLayout(context->vulkan->device, context->resident_pipeline_layout, NULL);
   if (context->resident_descriptor_pool)
-    vkDestroyDescriptorPool(
-        context->vulkan->device,
-        context->resident_descriptor_pool, NULL);
+    vkDestroyDescriptorPool(context->vulkan->device, context->resident_descriptor_pool, NULL);
   if (context->resident_descriptor_layout)
-    vkDestroyDescriptorSetLayout(
-        context->vulkan->device,
-        context->resident_descriptor_layout, NULL);
+    vkDestroyDescriptorSetLayout(context->vulkan->device, context->resident_descriptor_layout, NULL);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_output);
   lsx_fir_vulkan_destroy(context->fir);
   free(context->stage_input);
@@ -523,20 +497,14 @@ size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context)
   return context ? context->input_frames : 0;
 }
 
-static void prepare_stage_input(
-    lsx_rate_vulkan_t *context, double const *input)
+static void prepare_stage_input(lsx_rate_vulkan_t *context, double const *input)
 {
-  size_t block_frames =
-      lsx_fir_vulkan_block_frames_for(context->vulkan);
+  size_t block_frames = lsx_fir_vulkan_block_frames_for(context->vulkan);
   size_t input_frame;
   size_t channel;
 
-  memset(
-      context->stage_input, 0,
-      block_frames * context->channels *
-      sizeof(*context->stage_input));
-  for (input_frame = 0;
-       input_frame < context->input_frames; ++input_frame)
+  memset(context->stage_input, 0, block_frames * context->channels * sizeof(*context->stage_input));
+  for (input_frame = 0; input_frame < context->input_frames; ++input_frame)
     for (channel = 0; channel < context->channels; ++channel)
       context->stage_input[
           (input_frame * context->up_factor) *
@@ -594,8 +562,7 @@ static int run_resident_selection(
   };
   uint32_t index;
 
-  if (input->offset %
-      context->vulkan->properties.limits.minStorageBufferOffsetAlignment) {
+  if (input->offset % context->vulkan->properties.limits.minStorageBufferOffsetAlignment) {
     lsx_fail("resident Vulkan rate input is not storage-buffer aligned");
     return SOX_EOF;
   }
@@ -605,8 +572,7 @@ static int run_resident_selection(
   infos[1].buffer = context->resident_output.buffer;
   infos[1].offset = 0;
   infos[1].range = context->resident_output.size;
-  if (infos[0].range >
-      context->vulkan->properties.limits.maxStorageBufferRange) {
+  if (infos[0].range > context->vulkan->properties.limits.maxStorageBufferRange) {
     lsx_fail("resident Vulkan rate input exceeds device storage range");
     return SOX_EOF;
   }
@@ -619,9 +585,7 @@ static int run_resident_selection(
     writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &infos[index];
   }
-  vkUpdateDescriptorSets(
-      context->vulkan->device, RATE_SELECT_BINDINGS,
-      writes, 0, NULL);
+  vkUpdateDescriptorSets(context->vulkan->device, RATE_SELECT_BINDINGS, writes, 0, NULL);
   input_barrier.srcAccessMask = input->producer_access;
   if (vk_result(vkResetCommandBuffer(
       command_buffer, 0),
@@ -636,10 +600,7 @@ static int run_resident_selection(
       input->producer_stage,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
       1, &input_barrier, 0, NULL, 0, NULL);
-  vkCmdBindPipeline(
-      command_buffer,
-      VK_PIPELINE_BIND_POINT_COMPUTE,
-      context->resident_pipeline);
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->resident_pipeline);
   vkCmdBindDescriptorSets(
       command_buffer,
       VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -656,9 +617,7 @@ static int run_resident_selection(
       RATE_SELECT_LOCAL_SIZE,
       context->channels, 1);
   lsx_vulkan_label_end(context->vulkan, command_buffer);
-  if (vk_result(vkEndCommandBuffer(
-      command_buffer),
-      "vkEndCommandBuffer rate select") != SOX_SUCCESS)
+  if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer rate select") != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_enqueue(context->vulkan, command_buffer) != SOX_SUCCESS)
     return SOX_EOF;
@@ -668,8 +627,7 @@ static int run_resident_selection(
 
 static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *filtered, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, sox_bool allow_empty, lsx_vulkan_resident_buffer_t *resident)
 {
-  size_t block_frames =
-      lsx_fir_vulkan_block_frames_for(context->vulkan);
+  size_t block_frames = lsx_fir_vulkan_block_frames_for(context->vulkan);
   select_parameters_t parameters;
   size_t skipped;
   size_t available;
@@ -683,10 +641,8 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   skipped = min(context->skip_frames, block_frames);
   context->skip_frames -= skipped;
   available = block_frames - skipped;
-  first = context->decimation_phase ?
-      context->down_factor - context->decimation_phase : 0u;
-  output_frames = available > first ?
-      1u + (available - first - 1u) / context->down_factor : 0u;
+  first = context->decimation_phase ? context->down_factor - context->decimation_phase : 0u;
+  output_frames = available > first ? 1u + (available - first - 1u) / context->down_factor : 0u;
   if (output_frames > context->output_capacity) {
     lsx_fail("resident Vulkan rate selector produced invalid frame count %lu", (unsigned long)output_frames);
     return SOX_EOF;
@@ -709,8 +665,7 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   parameters.input_step = context->down_factor;
   parameters.input_channel_stride = (uint32_t)filtered->channel_stride_elements;
   parameters.channels = context->channels;
-  parameters.normalize =
-      normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
+  parameters.normalize = normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   context->decimation_phase =
       (context->decimation_phase +
       (uint32_t)(available % context->down_factor)) %
@@ -722,8 +677,7 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   memset(resident, 0, sizeof(*resident));
   resident->buffer = &context->resident_output;
   resident->owner = context;
-  resident->producer_stage =
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+  resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
   resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
   resident->capacity_elements = context->output_capacity;
   resident->valid_elements = output_frames;
@@ -758,8 +712,7 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   VkBufferMemoryBarrier input_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, 0, VK_ACCESS_SHADER_READ_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
   prepare_parameters_t parameters;
   lsx_vulkan_buffer_t *prepared;
-  size_t block_frames =
-      lsx_fir_vulkan_block_frames_for(context->vulkan);
+  size_t block_frames = lsx_fir_vulkan_block_frames_for(context->vulkan);
   uint32_t index;
 
   if (!input ||
@@ -802,9 +755,7 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   parameters.input_frames = (uint32_t)context->input_frames;
   parameters.input_frame_stride = (uint32_t)input->frame_stride_elements;
   parameters.input_channel_stride = (uint32_t)input->channel_stride_elements;
-  parameters.prepared_channel_stride =
-      (uint32_t)lsx_fir_vulkan_prepared_stride(
-          context->fir);
+  parameters.prepared_channel_stride = (uint32_t)lsx_fir_vulkan_prepared_stride(context->fir);
   parameters.up_factor = context->up_factor;
   parameters.channels = context->channels;
   input_barrier.srcAccessMask = input->producer_access;
@@ -846,11 +797,8 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   VkDeviceSize size;
   uint32_t index;
 
-  context->resident_stream_capacity =
-      lsx_fir_vulkan_block_frames_for(context->vulkan) +
-      context->input_frames;
-  size = (VkDeviceSize)context->resident_stream_capacity *
-      context->channels * resident_sample_size(context);
+  context->resident_stream_capacity = lsx_fir_vulkan_block_frames_for(context->vulkan) + context->input_frames;
+  size = (VkDeviceSize)context->resident_stream_capacity * context->channels * resident_sample_size(context);
   if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_stream[0], size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->resident_stream[1], size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_buffer_create(context->vulkan, &context->stream_append_clips, LSX_VULKAN_RESIDENT_BATCH_DEPTH * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
@@ -931,8 +879,7 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     return SOX_EOF;
   command = context->resident_stream_commands[context->resident_stream_command_index];
   descriptor_set = context->stream_append_descriptor_sets[context->resident_stream_descriptor_index];
-  frame_size = (VkDeviceSize)context->channels *
-      resident_sample_size(context);
+  frame_size = (VkDeviceSize)context->channels * resident_sample_size(context);
   copy.srcOffset = input->offset;
   copy.dstOffset = (VkDeviceSize)context->resident_stream_occupancy * frame_size;
   copy.size = (VkDeviceSize)input->valid_elements * frame_size;
@@ -972,8 +919,7 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     }
     vkUpdateDescriptorSets(context->vulkan->device, RATE_STREAM_APPEND_BINDINGS, writes, 0, NULL);
     memset(&parameters, 0, sizeof(parameters));
-    parameters.input_base_element = (uint32_t)(
-        input->offset / resident_sample_size(context));
+    parameters.input_base_element = (uint32_t)(input->offset / resident_sample_size(context));
     parameters.output_first_frame = (uint32_t)context->resident_stream_occupancy;
     parameters.frames = (uint32_t)input->valid_elements;
     parameters.input_frame_stride = (uint32_t)input->frame_stride_elements;
@@ -1016,13 +962,10 @@ size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context)
    * append that creates it.
    */
   if (!context->resident_stream[0].buffer)
-    return lsx_fir_vulkan_block_frames_for(context->vulkan) +
-        context->input_frames;
-  if (context->resident_stream_occupancy >
-      context->resident_stream_capacity)
+    return lsx_fir_vulkan_block_frames_for(context->vulkan) + context->input_frames;
+  if (context->resident_stream_occupancy > context->resident_stream_capacity)
     return 0;
-  return context->resident_stream_capacity -
-      context->resident_stream_occupancy;
+  return context->resident_stream_capacity - context->resident_stream_occupancy;
 }
 
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
@@ -1082,8 +1025,7 @@ int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate
   remaining = context->resident_stream_occupancy - context->input_frames;
   if (remaining) {
     command = context->resident_stream_commands[context->resident_stream_command_index];
-    frame_size = (VkDeviceSize)context->channels *
-        resident_sample_size(context);
+    frame_size = (VkDeviceSize)context->channels * resident_sample_size(context);
     retain.srcOffset = (VkDeviceSize)context->input_frames * frame_size;
     retain.dstOffset = 0;
     retain.size = (VkDeviceSize)remaining * frame_size;
@@ -1161,8 +1103,7 @@ int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context)
   if (context->resident_stream_occupancy >= context->input_frames)
     return SOX_SUCCESS;
   command = context->resident_stream_commands[context->resident_stream_command_index];
-  frame_size = (VkDeviceSize)context->channels *
-      resident_sample_size(context);
+  frame_size = (VkDeviceSize)context->channels * resident_sample_size(context);
   offset = (VkDeviceSize)context->resident_stream_occupancy * frame_size;
   size = (VkDeviceSize)(context->input_frames - context->resident_stream_occupancy) * frame_size;
   if (vk_result(vkResetCommandBuffer(command, 0), "vkResetCommandBuffer rate stream pad") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command, &begin), "vkBeginCommandBuffer rate stream pad") != SOX_SUCCESS)
@@ -1188,7 +1129,5 @@ int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *i
     lsx_fail("resident Vulkan rate FIR failed");
     return SOX_EOF;
   }
-  return finish_resident_process(
-      context, &filtered, rate, frame_offset, state,
-      normalize, sox_false, resident);
+  return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, sox_false, resident);
 }

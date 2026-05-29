@@ -31,8 +31,7 @@ void *lsx_vulkan_fft_dd_create(
     VkFence *fence, lsx_vulkan_fft_cache_key_t const *key,
     int *result_code);
 void lsx_vulkan_fft_dd_destroy(void *handle);
-int lsx_vulkan_fft_dd_append(
-    void *handle, VkCommandBuffer command_buffer, int inverse);
+int lsx_vulkan_fft_dd_append(void *handle, VkCommandBuffer command_buffer, int inverse);
 
 #ifdef __cplusplus
 }

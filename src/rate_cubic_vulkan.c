@@ -31,9 +31,7 @@ typedef struct {
   uint32_t padding[3];
 } parameters_t;
 
-lsx_static_assert(
-    sizeof(parameters_t) == 32,
-    vulkan_rate_cubic_push_layout);
+lsx_static_assert(sizeof(parameters_t) == 32, vulkan_rate_cubic_push_layout);
 
 struct lsx_rate_cubic_vulkan {
   lsx_vulkan_context_t *vulkan;
@@ -65,9 +63,7 @@ static int vk_result(VkResult result, char const *operation)
 
 static int create_buffers(lsx_rate_cubic_vulkan_t *context)
 {
-  VkMemoryPropertyFlags memory =
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   VkDeviceSize input_size =
       (VkDeviceSize)(RATE_CUBIC_BLOCK_FRAMES +
       context->pre_post) * context->parameters.channels *
@@ -135,8 +131,7 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
   memset(writes, 0, sizeof(writes));
   for (index = 0; index < RATE_CUBIC_BINDINGS; ++index) {
     bindings[index].binding = index;
-    bindings[index].descriptorType =
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[index].descriptorCount = 1;
     bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
@@ -213,13 +208,10 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
     writes[index].dstSet = context->descriptor_set;
     writes[index].dstBinding = index;
     writes[index].descriptorCount = 1;
-    writes[index].descriptorType =
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &buffer_info[index];
   }
-  vkUpdateDescriptorSets(
-      context->vulkan->device, RATE_CUBIC_BINDINGS,
-      writes, 0, NULL);
+  vkUpdateDescriptorSets(context->vulkan->device, RATE_CUBIC_BINDINGS, writes, 0, NULL);
   return SOX_SUCCESS;
 }
 
@@ -270,15 +262,9 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
   context = lsx_calloc(1, sizeof(*context));
   context->vulkan = vulkan;
   context->double_precision = vulkan->use_float64;
-  context->reference_dd =
-      context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_reference;
-  context->accurate_fp32 =
-      !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_accurate;
-  context->strict_fp32 =
-      !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_strict;
+  context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
+  context->accurate_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_accurate;
+  context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
   context->step = step;
   context->pre_post = pre_post;
   context->max_output_frames = (uint32_t)maximum;
@@ -302,40 +288,27 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
       context->accurate_fp32 ? "compensated FP32" : "FP32");
   return context;
 
-error:
-  lsx_rate_cubic_vulkan_destroy(context);
+error: lsx_rate_cubic_vulkan_destroy(context);
   return NULL;
 }
 
-void lsx_rate_cubic_vulkan_destroy(
-    lsx_rate_cubic_vulkan_t *context)
+void lsx_rate_cubic_vulkan_destroy(lsx_rate_cubic_vulkan_t *context)
 {
   if (!context)
     return;
   vkDeviceWaitIdle(context->vulkan->device);
   if (context->fence)
-    vkDestroyFence(
-        context->vulkan->device, context->fence, NULL);
+    vkDestroyFence(context->vulkan->device, context->fence, NULL);
   if (context->command_buffer)
-    vkFreeCommandBuffers(
-        context->vulkan->device,
-        context->vulkan->command_pool, 1,
-        &context->command_buffer);
+    vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, 1, &context->command_buffer);
   if (context->pipeline)
-    vkDestroyPipeline(
-        context->vulkan->device, context->pipeline, NULL);
+    vkDestroyPipeline(context->vulkan->device, context->pipeline, NULL);
   if (context->pipeline_layout)
-    vkDestroyPipelineLayout(
-        context->vulkan->device,
-        context->pipeline_layout, NULL);
+    vkDestroyPipelineLayout(context->vulkan->device, context->pipeline_layout, NULL);
   if (context->descriptor_pool)
-    vkDestroyDescriptorPool(
-        context->vulkan->device,
-        context->descriptor_pool, NULL);
+    vkDestroyDescriptorPool(context->vulkan->device, context->descriptor_pool, NULL);
   if (context->descriptor_layout)
-    vkDestroyDescriptorSetLayout(
-        context->vulkan->device,
-        context->descriptor_layout, NULL);
+    vkDestroyDescriptorSetLayout(context->vulkan->device, context->descriptor_layout, NULL);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->output);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->input);
   free(context->host_output);
@@ -347,8 +320,7 @@ size_t lsx_rate_cubic_vulkan_block_frames(void)
   return RATE_CUBIC_BLOCK_FRAMES;
 }
 
-uint32_t lsx_rate_cubic_vulkan_pre_post(
-    lsx_rate_cubic_vulkan_t const *context)
+uint32_t lsx_rate_cubic_vulkan_pre_post(lsx_rate_cubic_vulkan_t const *context)
 {
   return context ? context->pre_post : 0;
 }
@@ -374,43 +346,32 @@ int lsx_rate_cubic_vulkan_process(
   size_t sample_count;
   size_t index;
 
-  if (!context || !input || !output || !output_frames ||
-      !consumed_frames || input_frames <= context->pre_post)
+  if (!context || !input || !output || !output_frames || !consumed_frames || input_frames <= context->pre_post)
     return SOX_EOF;
-  processable_frames = min(
-      (size_t)RATE_CUBIC_BLOCK_FRAMES,
-      input_frames - context->pre_post);
+  processable_frames = min((size_t)RATE_CUBIC_BLOCK_FRAMES, input_frames - context->pre_post);
   limit = (uint64_t)processable_frames << 32;
-  count = limit > context->phase_fraction ?
-      (limit - 1u - context->phase_fraction) /
-      context->step + 1u : 0;
+  count = limit > context->phase_fraction ? (limit - 1u - context->phase_fraction) / context->step + 1u : 0;
   if (!count || count > context->max_output_frames)
     return SOX_EOF;
-  end_position =
-      context->phase_fraction + count * context->step;
+  end_position = context->phase_fraction + count * context->step;
   copied_frames = processable_frames + context->pre_post;
   sample_count = copied_frames * context->parameters.channels;
   if (context->reference_dd)
     for (index = 0; index < sample_count; ++index) {
-      double *target =
-          (double *)context->input.mapped + 2u * index;
+      double *target = (double *)context->input.mapped + 2u * index;
 
       target[0] = input[index];
       target[1] = 0.;
     }
   else if (context->double_precision)
-    memcpy(
-        context->input.mapped, input,
-        sample_count * sizeof(*input));
+    memcpy(context->input.mapped, input, sample_count * sizeof(*input));
   else if (context->strict_fp32)
     for (index = 0; index < sample_count; ++index) {
       float high = (float)input[index];
-      float *target =
-          (float *)context->input.mapped + 2u * index;
+      float *target = (float *)context->input.mapped + 2u * index;
 
       target[0] = high;
-      target[1] =
-          (float)(input[index] - (double)high);
+      target[1] = (float)(input[index] - (double)high);
     }
   else
     for (index = 0; index < sample_count; ++index)
@@ -429,12 +390,8 @@ int lsx_rate_cubic_vulkan_process(
               context->command_buffer, &begin),
           "vkBeginCommandBuffer rate cubic") != SOX_SUCCESS)
     return SOX_EOF;
-  lsx_vulkan_label_begin(
-      context->vulkan, context->command_buffer,
-      "Rate cubic");
-  vkCmdBindPipeline(
-      context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-      context->pipeline);
+  lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "Rate cubic");
+  vkCmdBindPipeline(context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
   vkCmdBindDescriptorSets(
       context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
       context->pipeline_layout, 0, 1,
@@ -453,8 +410,7 @@ int lsx_rate_cubic_vulkan_process(
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_PIPELINE_STAGE_HOST_BIT, 0,
       1, &barrier, 0, NULL, 0, NULL);
-  lsx_vulkan_label_end(
-      context->vulkan, context->command_buffer);
+  lsx_vulkan_label_end(context->vulkan, context->command_buffer);
   if (vk_result(
           vkEndCommandBuffer(context->command_buffer),
           "vkEndCommandBuffer rate cubic") != SOX_SUCCESS ||
@@ -466,12 +422,9 @@ int lsx_rate_cubic_vulkan_process(
   sample_count = (size_t)count * context->parameters.channels;
   if (context->reference_dd) {
     for (index = 0; index < sample_count; ++index) {
-      double const *value =
-          (double const *)context->output.mapped +
-          2u * index;
+      double const *value = (double const *)context->output.mapped + 2u * index;
 
-      context->host_output[index] =
-          lsx_vulkan_collapse_pair(value[0], value[1]);
+      context->host_output[index] = lsx_vulkan_collapse_pair(value[0], value[1]);
     }
     *output = context->host_output;
   }
@@ -479,19 +432,15 @@ int lsx_rate_cubic_vulkan_process(
     *output = context->output.mapped;
   else if (context->strict_fp32) {
     for (index = 0; index < sample_count; ++index) {
-      float const *value =
-          (float const *)context->output.mapped +
-          2u * index;
+      float const *value = (float const *)context->output.mapped + 2u * index;
 
-      context->host_output[index] =
-          (double)value[0] + (double)value[1];
+      context->host_output[index] = (double)value[0] + (double)value[1];
     }
     *output = context->host_output;
   }
   else {
     for (index = 0; index < sample_count; ++index)
-      context->host_output[index] =
-          (double)((float const *)context->output.mapped)[index];
+      context->host_output[index] = (double)((float const *)context->output.mapped)[index];
     *output = context->host_output;
   }
   *output_frames = (size_t)count;

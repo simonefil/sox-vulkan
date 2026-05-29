@@ -28,8 +28,7 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
     lsx_vulkan_context_t *vulkan, unsigned rate, unsigned channels,
     size_t batch_frames);
 void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context);
-size_t lsx_sdm_vulkan_input_capacity(
-    lsx_sdm_vulkan_t const *context);
+size_t lsx_sdm_vulkan_input_capacity(lsx_sdm_vulkan_t const *context);
 
 /*
  * Process channel-interleaved normalized PCM frames at the DSD rate.  The
@@ -56,9 +55,7 @@ int lsx_sdm_vulkan_consume_resident(
     sox_bool *input_consumed, sox_bool *output_ready,
     uint8_t const **channel_bytes,
     size_t *bytes_per_channel, size_t *channel_stride);
-sox_bool lsx_sdm_vulkan_resident_active(
-    lsx_sdm_vulkan_t const *context);
-uint64_t lsx_sdm_vulkan_resident_clips(
-    lsx_sdm_vulkan_t const *context);
+sox_bool lsx_sdm_vulkan_resident_active(lsx_sdm_vulkan_t const *context);
+uint64_t lsx_sdm_vulkan_resident_clips(lsx_sdm_vulkan_t const *context);
 
 #endif

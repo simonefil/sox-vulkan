@@ -25,28 +25,20 @@
 char const *lsx_vulkan_profile_name(sox_vulkan_profile_t profile)
 {
   switch (profile) {
-    case sox_vulkan_profile_none:
-      return "none";
-    case sox_vulkan_profile_fast:
-      return "fast";
-    case sox_vulkan_profile_accurate:
-      return "accurate";
-    case sox_vulkan_profile_strict:
-      return "strict";
-    case sox_vulkan_profile_reference:
-      return "reference";
+    case sox_vulkan_profile_none: return "none";
+    case sox_vulkan_profile_fast: return "fast";
+    case sox_vulkan_profile_accurate: return "accurate";
+    case sox_vulkan_profile_strict: return "strict";
+    case sox_vulkan_profile_reference: return "reference";
   }
   return "unknown";
 }
 
-char const *lsx_vulkan_numerical_family_name(
-    lsx_vulkan_numerical_family_t family)
+char const *lsx_vulkan_numerical_family_name(lsx_vulkan_numerical_family_t family)
 {
   switch (family) {
-    case lsx_vulkan_numerical_family_fp32_emulated:
-      return "FP32 emulated";
-    case lsx_vulkan_numerical_family_fp64:
-      return "FP64";
+    case lsx_vulkan_numerical_family_fp32_emulated: return "FP32 emulated";
+    case lsx_vulkan_numerical_family_fp64: return "FP64";
   }
   return "unknown";
 }
@@ -57,8 +49,7 @@ static double monotonic_seconds(void)
   LARGE_INTEGER frequency;
   LARGE_INTEGER counter;
 
-  if (!QueryPerformanceFrequency(&frequency) ||
-      !QueryPerformanceCounter(&counter))
+  if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&counter))
     return 0.0;
   return (double)counter.QuadPart / (double)frequency.QuadPart;
 #else
@@ -102,17 +93,12 @@ static sox_bool extension_available(VkExtensionProperties const *extensions, uin
   return sox_false;
 }
 
-static uint32_t memory_type(
-    lsx_vulkan_context_t const *context, uint32_t bits,
-    VkMemoryPropertyFlags required)
+static uint32_t memory_type(lsx_vulkan_context_t const *context, uint32_t bits, VkMemoryPropertyFlags required)
 {
   uint32_t index;
 
-  for (index = 0;
-       index < context->memory_properties.memoryTypeCount; ++index)
-    if ((bits & (1u << index)) &&
-        (context->memory_properties.memoryTypes[index].propertyFlags &
-         required) == required)
+  for (index = 0; index < context->memory_properties.memoryTypeCount; ++index)
+    if ((bits & (1u << index)) && (context->memory_properties.memoryTypes[index].propertyFlags & required) == required)
       return index;
   return UINT32_MAX;
 }
@@ -143,11 +129,9 @@ int lsx_vulkan_buffer_create(
       context->device, &buffer_info, NULL, &buffer->buffer),
       "vkCreateBuffer") != SOX_SUCCESS)
     return SOX_EOF;
-  vkGetBufferMemoryRequirements(
-      context->device, buffer->buffer, &requirements);
+  vkGetBufferMemoryRequirements(context->device, buffer->buffer, &requirements);
   allocation.allocationSize = requirements.size;
-  allocation.memoryTypeIndex = memory_type(
-      context, requirements.memoryTypeBits, properties);
+  allocation.memoryTypeIndex = memory_type(context, requirements.memoryTypeBits, properties);
   if (allocation.memoryTypeIndex == UINT32_MAX) {
     lsx_fail("no compatible Vulkan memory type");
     return SOX_EOF;
@@ -167,8 +151,7 @@ int lsx_vulkan_buffer_create(
   return SOX_SUCCESS;
 }
 
-void lsx_vulkan_buffer_destroy(
-    lsx_vulkan_context_t *context, lsx_vulkan_buffer_t *buffer)
+void lsx_vulkan_buffer_destroy(lsx_vulkan_context_t *context, lsx_vulkan_buffer_t *buffer)
 {
   if (!context || !buffer)
     return;
@@ -181,26 +164,19 @@ void lsx_vulkan_buffer_destroy(
   memset(buffer, 0, sizeof(*buffer));
 }
 
-static VkDeviceSize resident_element_size(
-    lsx_vulkan_resident_format_t format)
+static VkDeviceSize resident_element_size(lsx_vulkan_resident_format_t format)
 {
   switch (format) {
-    case lsx_vulkan_resident_format_f32:
-      return sizeof(float);
-    case lsx_vulkan_resident_format_f32x2:
-      return 2u * sizeof(float);
-    case lsx_vulkan_resident_format_f64:
-      return sizeof(double);
-    case lsx_vulkan_resident_format_f64x2:
-      return 2u * sizeof(double);
-    case lsx_vulkan_resident_format_dsd_u32:
-      return sizeof(uint32_t);
+    case lsx_vulkan_resident_format_f32: return sizeof(float);
+    case lsx_vulkan_resident_format_f32x2: return 2u * sizeof(float);
+    case lsx_vulkan_resident_format_f64: return sizeof(double);
+    case lsx_vulkan_resident_format_f64x2: return 2u * sizeof(double);
+    case lsx_vulkan_resident_format_dsd_u32: return sizeof(uint32_t);
   }
   return 0;
 }
 
-VkDeviceSize lsx_vulkan_resident_buffer_size(
-    lsx_vulkan_resident_buffer_t const *resident)
+VkDeviceSize lsx_vulkan_resident_buffer_size(lsx_vulkan_resident_buffer_t const *resident)
 {
   VkDeviceSize element_size;
   VkDeviceSize frame_span;
@@ -219,12 +195,9 @@ VkDeviceSize lsx_vulkan_resident_buffer_size(
       resident->channels - 1u >
       UINT64_MAX / resident->channel_stride_elements)
     return 0;
-  frame_span = (VkDeviceSize)(resident->capacity_elements - 1u) *
-      resident->frame_stride_elements;
-  channel_span = (VkDeviceSize)(resident->channels - 1u) *
-      resident->channel_stride_elements;
-  if (channel_span == UINT64_MAX ||
-      frame_span > UINT64_MAX - channel_span - 1u)
+  frame_span = (VkDeviceSize)(resident->capacity_elements - 1u) * resident->frame_stride_elements;
+  channel_span = (VkDeviceSize)(resident->channels - 1u) * resident->channel_stride_elements;
+  if (channel_span == UINT64_MAX || frame_span > UINT64_MAX - channel_span - 1u)
     return 0;
   last_element = frame_span + channel_span + 1u;
   if (last_element > UINT64_MAX / element_size)
@@ -232,8 +205,7 @@ VkDeviceSize lsx_vulkan_resident_buffer_size(
   return last_element * element_size;
 }
 
-int lsx_vulkan_resident_buffer_validate(
-    lsx_vulkan_resident_buffer_t const *resident)
+int lsx_vulkan_resident_buffer_validate(lsx_vulkan_resident_buffer_t const *resident)
 {
   VkDeviceSize size = lsx_vulkan_resident_buffer_size(resident);
 
@@ -262,16 +234,14 @@ int lsx_vulkan_resident_buffer_validate(
     lsx_fail("invalid PCM resident buffer");
     return SOX_EOF;
   }
-  if (resident->state == lsx_vulkan_resident_empty &&
-      resident->valid_elements) {
+  if (resident->state == lsx_vulkan_resident_empty && resident->valid_elements) {
     lsx_fail("non-empty Vulkan resident buffer marked empty");
     return SOX_EOF;
   }
   return SOX_SUCCESS;
 }
 
-static int create_resident_download(
-    lsx_vulkan_context_t *context, VkDeviceSize size)
+static int create_resident_download(lsx_vulkan_context_t *context, VkDeviceSize size)
 {
   VkCommandBufferAllocateInfo command_info = {
     VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO
@@ -283,8 +253,7 @@ static int create_resident_download(
   if (context->resident_download.size >= size)
     return SOX_SUCCESS;
   if (context->resident_download.buffer)
-    lsx_vulkan_buffer_destroy(
-        context, &context->resident_download);
+    lsx_vulkan_buffer_destroy(context, &context->resident_download);
   if (lsx_vulkan_buffer_create(
       context, &context->resident_download, size,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -335,15 +304,13 @@ double lsx_vulkan_collapse_pair(double high, double low)
   double shifted;
 
   switch (lsx_vulkan_pair_output_mode()) {
-  case lsx_vulkan_pair_output_low:
-    return low;
+  case lsx_vulkan_pair_output_low: return low;
   case lsx_vulkan_pair_output_residual:
     /* Knuth's two-sum: the residual is exactly representable, so the pair is
      * recovered as sum + residual without any rounding of its own. */
     shifted = sum - high;
     return (high - (sum - shifted)) + (low - shifted);
-  default:
-    return sum;
+  default: return sum;
   }
 }
 
@@ -375,8 +342,7 @@ int lsx_vulkan_download_resident_pcm(
       resident->domain == lsx_vulkan_resident_domain_dsd)
     return SOX_EOF;
   required_samples = resident->valid_elements * resident->channels;
-  if (resident->channels &&
-      required_samples / resident->channels != resident->valid_elements)
+  if (resident->channels && required_samples / resident->channels != resident->valid_elements)
     return SOX_EOF;
   if (output_samples < required_samples)
     return SOX_EOF;
@@ -400,9 +366,7 @@ int lsx_vulkan_download_resident_pcm(
       context->resident_download_command, &begin),
       "vkBeginCommandBuffer resident output") != SOX_SUCCESS)
     return SOX_EOF;
-  lsx_vulkan_label_begin(
-      context, context->resident_download_command,
-      "Resident PCM final output download");
+  lsx_vulkan_label_begin(context, context->resident_download_command, "Resident PCM final output download");
   vkCmdPipelineBarrier(
       context->resident_download_command,
       resident->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -415,8 +379,7 @@ int lsx_vulkan_download_resident_pcm(
       context->resident_download_command,
       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
       0, 1, &host_barrier, 0, NULL, 0, NULL);
-  lsx_vulkan_label_end(
-      context, context->resident_download_command);
+  lsx_vulkan_label_end(context, context->resident_download_command);
   if (lsx_vulkan_result(vkEndCommandBuffer(
       context->resident_download_command),
       "vkEndCommandBuffer resident output") != SOX_SUCCESS ||
@@ -433,28 +396,23 @@ int lsx_vulkan_download_resident_pcm(
       sizeof(double) : sizeof(float);
   for (frame = 0; frame < resident->valid_elements; ++frame)
     for (channel = 0; channel < resident->channels; ++channel) {
-      size_t source = frame * resident->frame_stride_elements +
-          channel * resident->channel_stride_elements;
+      size_t source = frame * resident->frame_stride_elements + channel * resident->channel_stride_elements;
       double value;
 
       if (resident->format == lsx_vulkan_resident_format_f32x2) {
         float const *pair = (float const *)
-            ((char const *)context->resident_download.mapped +
-            source * element_size);
+            ((char const *)context->resident_download.mapped + source * element_size);
         value = (double)pair[0] + (double)pair[1];
       }
       else if (resident->format == lsx_vulkan_resident_format_f64x2) {
         double const *pair = (double const *)
-            ((char const *)context->resident_download.mapped +
-            source * element_size);
+            ((char const *)context->resident_download.mapped + source * element_size);
         value = lsx_vulkan_collapse_pair(pair[0], pair[1]);
       }
       else if (resident->format == lsx_vulkan_resident_format_f64)
-        value = ((double const *)
-            context->resident_download.mapped)[source];
+        value = ((double const *) context->resident_download.mapped)[source];
       else
-        value = ((float const *)
-            context->resident_download.mapped)[source];
+        value = ((float const *) context->resident_download.mapped)[source];
       output[frame * resident->channels + channel] = value;
     }
   return SOX_SUCCESS;
@@ -553,8 +511,7 @@ int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox
   sox_bool calibrated_device;
   char const *selection = "qualified fallback";
 
-  if (!context || input_rate <= 0 || output_rate <= 0 || !channels ||
-      topology > lsx_vulkan_resident_topology_chained)
+  if (!context || input_rate <= 0 || output_rate <= 0 || !channels || topology > lsx_vulkan_resident_topology_chained)
     return SOX_EOF;
   calibrated_device =
       context->properties.vendorID == NVIDIA_VENDOR_ID &&
@@ -606,28 +563,21 @@ static int choose_device(lsx_vulkan_context_t *context)
     uint32_t queue_index;
 
     vkGetPhysicalDeviceProperties(devices[device_index], &properties);
-    vkGetPhysicalDeviceQueueFamilyProperties(
-        devices[device_index], &queue_count, NULL);
+    vkGetPhysicalDeviceQueueFamilyProperties(devices[device_index], &queue_count, NULL);
     queues = lsx_calloc(queue_count, sizeof(*queues));
-    vkGetPhysicalDeviceQueueFamilyProperties(
-        devices[device_index], &queue_count, queues);
+    vkGetPhysicalDeviceQueueFamilyProperties(devices[device_index], &queue_count, queues);
     for (queue_index = 0; queue_index < queue_count; ++queue_index)
       if (queues[queue_index].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-        int score =
-            properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ?
-            1000 : 0;
+        int score = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 1000 : 0;
 
         score += properties.vendorID == NVIDIA_VENDOR_ID ? 100 : 0;
-        score +=
-            !(queues[queue_index].queueFlags & VK_QUEUE_GRAPHICS_BIT) ?
-            10 : 0;
+        score += !(queues[queue_index].queueFlags & VK_QUEUE_GRAPHICS_BIT) ? 10 : 0;
         if (score > best_score) {
           best_score = score;
           best_device = devices[device_index];
           best_properties = properties;
           best_queue = queue_index;
-          best_timestamp_bits =
-              queues[queue_index].timestampValidBits;
+          best_timestamp_bits = queues[queue_index].timestampValidBits;
         }
       }
     free(queues);
@@ -657,8 +607,7 @@ static int choose_device(lsx_vulkan_context_t *context)
       }
     free(queues);
   }
-  vkGetPhysicalDeviceMemoryProperties(
-      best_device, &context->memory_properties);
+  vkGetPhysicalDeviceMemoryProperties(best_device, &context->memory_properties);
   return SOX_SUCCESS;
 }
 
@@ -695,8 +644,7 @@ static lsx_vulkan_context_t *create_context(void)
   uint32_t enabled_instance_extension_count = 0;
   uint32_t device_extension_count = 0;
   uint32_t enabled_device_extension_count = 0;
-  lsx_vulkan_context_t *context =
-      lsx_calloc(1, sizeof(*context));
+  lsx_vulkan_context_t *context = lsx_calloc(1, sizeof(*context));
   char const *graphics_capture = getenv("SOX_VULKAN_NSIGHT_GRAPHICS");
   char const *depth_override = getenv("SOX_VULKAN_RESIDENT_DEPTH");
   double started = monotonic_seconds();
@@ -769,12 +717,10 @@ static lsx_vulkan_context_t *create_context(void)
   device_extensions = NULL;
   device_info.enabledExtensionCount = enabled_device_extension_count;
   device_info.ppEnabledExtensionNames = enabled_device_extensions;
-  vkGetPhysicalDeviceFeatures(
-      context->physical_device, &available_features);
+  vkGetPhysicalDeviceFeatures(context->physical_device, &available_features);
   memset(&enabled_features, 0, sizeof(enabled_features));
   enabled_features.shaderFloat64 = available_features.shaderFloat64;
-  context->shader_float64 =
-      available_features.shaderFloat64 ? sox_true : sox_false;
+  context->shader_float64 = available_features.shaderFloat64 ? sox_true : sox_false;
   context->profile = sox_globals.vulkan_profile;
   context->use_float64 =
       context->shader_float64 &&
@@ -783,24 +729,15 @@ static lsx_vulkan_context_t *create_context(void)
   context->numerical_family = context->use_float64 ?
       lsx_vulkan_numerical_family_fp64 :
       lsx_vulkan_numerical_family_fp32_emulated;
-  lsx_report(
-      "Vulkan profile requested: %s",
-      lsx_vulkan_profile_name(context->profile));
-  lsx_report(
-      "Vulkan capability shaderFloat64: %s",
-      context->shader_float64 ? "true" : "false");
-  lsx_report(
-      "Vulkan numerical family: %s",
-      lsx_vulkan_numerical_family_name(
-          context->numerical_family));
+  lsx_report("Vulkan profile requested: %s", lsx_vulkan_profile_name(context->profile));
+  lsx_report("Vulkan capability shaderFloat64: %s", context->shader_float64 ? "true" : "false");
+  lsx_report("Vulkan numerical family: %s", lsx_vulkan_numerical_family_name(context->numerical_family));
   if (context->profile == sox_vulkan_profile_none) {
     lsx_fail("Vulkan context requested without a numerical profile");
     goto error;
   }
-  if (context->profile == sox_vulkan_profile_reference &&
-      !context->shader_float64) {
-    lsx_fail(
-        "Vulkan reference profile requires hardware shaderFloat64");
+  if (context->profile == sox_vulkan_profile_reference && !context->shader_float64) {
+    lsx_fail("Vulkan reference profile requires hardware shaderFloat64");
     goto error;
   }
   device_info.pEnabledFeatures = &enabled_features;
@@ -808,10 +745,8 @@ static lsx_vulkan_context_t *create_context(void)
       context->physical_device, &device_info, NULL,
       &context->device), "vkCreateDevice") != SOX_SUCCESS)
     goto error;
-  vkGetDeviceQueue(
-      context->device, context->queue_family, 0, &context->queue);
-  command_pool_info.flags =
-      VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  vkGetDeviceQueue(context->device, context->queue_family, 0, &context->queue);
+  command_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   command_pool_info.queueFamilyIndex = context->queue_family;
   if (lsx_vulkan_result(vkCreateCommandPool(
       context->device, &command_pool_info, NULL,
@@ -836,15 +771,13 @@ static lsx_vulkan_context_t *create_context(void)
       context->startup_seconds);
   return context;
 
-error:
-  free(instance_extensions);
+error: free(instance_extensions);
   free(device_extensions);
   lsx_vulkan_context_destroy(context);
   return NULL;
 }
 
-lsx_vulkan_context_t *lsx_vulkan_context_get(
-    sox_effects_globals_t *effects_globals)
+lsx_vulkan_context_t *lsx_vulkan_context_get(sox_effects_globals_t *effects_globals)
 {
   if (!effects_globals) {
     lsx_fail("Vulkan effect has no effects-chain context");
@@ -853,12 +786,10 @@ lsx_vulkan_context_t *lsx_vulkan_context_get(
   if (!effects_globals->vulkan_context)
     effects_globals->vulkan_context = create_context();
   else {
-    lsx_vulkan_context_t *context =
-        effects_globals->vulkan_context;
+    lsx_vulkan_context_t *context = effects_globals->vulkan_context;
 
     if (context->profile != sox_globals.vulkan_profile) {
-      lsx_fail(
-          "Vulkan profile cannot change during an effects chain");
+      lsx_fail("Vulkan profile cannot change during an effects chain");
       return NULL;
     }
   }
@@ -877,11 +808,9 @@ void lsx_vulkan_context_destroy(void *opaque_context)
    * purpose, so they are released with the device that they were keyed on. */
   lsx_vulkan_fft_cache_clear();
   if (context->device && context->resident_download_fence)
-    vkDestroyFence(
-        context->device, context->resident_download_fence, NULL);
+    vkDestroyFence(context->device, context->resident_download_fence, NULL);
   if (context->device)
-    lsx_vulkan_buffer_destroy(
-        context, &context->resident_download);
+    lsx_vulkan_buffer_destroy(context, &context->resident_download);
   if (context->submit_count || context->host_wait_count)
     lsx_report(
         "Vulkan core execution: %llu submits, %llu host waits",
@@ -892,11 +821,9 @@ void lsx_vulkan_context_destroy(void *opaque_context)
   if (context->host_wait_count)
     lsx_report("Vulkan wait reasons: fir_setup=%llu fir_sync=%llu fir_resident_flush=%llu rate_sync=%llu sdm_setup=%llu sdm_sync=%llu sdm_resident_flush=%llu packed_output=%llu resident_output=%llu", (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_rate_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_packed_output], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_resident_output]);
   if (context->device && context->pipeline_cache)
-    vkDestroyPipelineCache(
-        context->device, context->pipeline_cache, NULL);
+    vkDestroyPipelineCache(context->device, context->pipeline_cache, NULL);
   if (context->device && context->command_pool)
-    vkDestroyCommandPool(
-        context->device, context->command_pool, NULL);
+    vkDestroyCommandPool(context->device, context->command_pool, NULL);
   if (context->device)
     vkDestroyDevice(context->device, NULL);
   if (context->instance)

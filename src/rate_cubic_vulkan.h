@@ -16,11 +16,9 @@ typedef struct lsx_rate_cubic_vulkan lsx_rate_cubic_vulkan_t;
 lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
     lsx_vulkan_context_t *vulkan, uint64_t step,
     uint32_t pre_post, uint32_t channels);
-void lsx_rate_cubic_vulkan_destroy(
-    lsx_rate_cubic_vulkan_t *context);
+void lsx_rate_cubic_vulkan_destroy(lsx_rate_cubic_vulkan_t *context);
 size_t lsx_rate_cubic_vulkan_block_frames(void);
-uint32_t lsx_rate_cubic_vulkan_pre_post(
-    lsx_rate_cubic_vulkan_t const *context);
+uint32_t lsx_rate_cubic_vulkan_pre_post(lsx_rate_cubic_vulkan_t const *context);
 int lsx_rate_cubic_vulkan_process(
     lsx_rate_cubic_vulkan_t *context, double const *input,
     size_t input_frames, double const **output,

@@ -15,26 +15,20 @@ static HMODULE module;
 
 static int (*initialize_process_impl)(void);
 static void (*finalize_process_impl)(void);
-static glslang_shader_t *(*shader_create_impl)(
-    glslang_input_t const *);
+static glslang_shader_t *(*shader_create_impl)(glslang_input_t const *);
 static void (*shader_delete_impl)(glslang_shader_t *);
-static int (*shader_preprocess_impl)(
-    glslang_shader_t *, glslang_input_t const *);
-static int (*shader_parse_impl)(
-    glslang_shader_t *, glslang_input_t const *);
+static int (*shader_preprocess_impl)(glslang_shader_t *, glslang_input_t const *);
+static int (*shader_parse_impl)(glslang_shader_t *, glslang_input_t const *);
 static char const *(*shader_get_info_log_impl)(glslang_shader_t *);
 static glslang_program_t *(*program_create_impl)(void);
 static void (*program_delete_impl)(glslang_program_t *);
-static void (*program_add_shader_impl)(
-    glslang_program_t *, glslang_shader_t *);
+static void (*program_add_shader_impl)(glslang_program_t *, glslang_shader_t *);
 static int (*program_link_impl)(glslang_program_t *, int);
 static char const *(*program_get_info_log_impl)(glslang_program_t *);
-static void (*program_spirv_generate_impl)(
-    glslang_program_t *, glslang_stage_t);
+static void (*program_spirv_generate_impl)(glslang_program_t *, glslang_stage_t);
 static size_t (*program_spirv_get_size_impl)(glslang_program_t *);
 static unsigned int *(*program_spirv_get_ptr_impl)(glslang_program_t *);
-static char const *(*program_spirv_get_messages_impl)(
-    glslang_program_t *);
+static char const *(*program_spirv_get_messages_impl)(glslang_program_t *);
 
 static void clear_functions(void)
 {
@@ -72,9 +66,7 @@ static int load_functions(void)
 {
   module = LoadLibraryA("glslang.dll");
   if (!module) {
-    lsx_fail(
-        "failed to load glslang.dll (Windows error %lu)",
-        (unsigned long)GetLastError());
+    lsx_fail("failed to load glslang.dll (Windows error %lu)", (unsigned long)GetLastError());
     return 0;
   }
   LOAD_FUNCTION(initialize_process, initialize_process);
@@ -134,8 +126,7 @@ void glslang_finalize_process(void)
   clear_functions();
 }
 
-glslang_shader_t *glslang_shader_create(
-    glslang_input_t const *input)
+glslang_shader_t *glslang_shader_create(glslang_input_t const *input)
 {
   return shader_create_impl(input);
 }
@@ -145,14 +136,12 @@ void glslang_shader_delete(glslang_shader_t *shader)
   shader_delete_impl(shader);
 }
 
-int glslang_shader_preprocess(
-    glslang_shader_t *shader, glslang_input_t const *input)
+int glslang_shader_preprocess(glslang_shader_t *shader, glslang_input_t const *input)
 {
   return shader_preprocess_impl(shader, input);
 }
 
-int glslang_shader_parse(
-    glslang_shader_t *shader, glslang_input_t const *input)
+int glslang_shader_parse(glslang_shader_t *shader, glslang_input_t const *input)
 {
   return shader_parse_impl(shader, input);
 }
@@ -172,8 +161,7 @@ void glslang_program_delete(glslang_program_t *program)
   program_delete_impl(program);
 }
 
-void glslang_program_add_shader(
-    glslang_program_t *program, glslang_shader_t *shader)
+void glslang_program_add_shader(glslang_program_t *program, glslang_shader_t *shader)
 {
   program_add_shader_impl(program, shader);
 }
@@ -183,14 +171,12 @@ int glslang_program_link(glslang_program_t *program, int messages)
   return program_link_impl(program, messages);
 }
 
-char const *glslang_program_get_info_log(
-    glslang_program_t *program)
+char const *glslang_program_get_info_log(glslang_program_t *program)
 {
   return program_get_info_log_impl(program);
 }
 
-void glslang_program_SPIRV_generate(
-    glslang_program_t *program, glslang_stage_t stage)
+void glslang_program_SPIRV_generate(glslang_program_t *program, glslang_stage_t stage)
 {
   program_spirv_generate_impl(program, stage);
 }
@@ -200,14 +186,12 @@ size_t glslang_program_SPIRV_get_size(glslang_program_t *program)
   return program_spirv_get_size_impl(program);
 }
 
-unsigned int *glslang_program_SPIRV_get_ptr(
-    glslang_program_t *program)
+unsigned int *glslang_program_SPIRV_get_ptr(glslang_program_t *program)
 {
   return program_spirv_get_ptr_impl(program);
 }
 
-char const *glslang_program_SPIRV_get_messages(
-    glslang_program_t *program)
+char const *glslang_program_SPIRV_get_messages(glslang_program_t *program)
 {
   return program_spirv_get_messages_impl(program);
 }

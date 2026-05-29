@@ -70,12 +70,10 @@ int lsx_vulkan_fft_cache_enabled(void);
  * NULL on a miss.  The caller hands it straight to loadApplicationString,
  * which only reads from it.  A miss consults the on-disk cache before
  * reporting one, and a file found there is kept in memory too. */
-void const *lsx_vulkan_fft_cache_lookup(
-    lsx_vulkan_fft_cache_key_t const *key, uint64_t *size);
+void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size);
 
 /* Takes a private copy: VkFFT frees saveApplicationString in deleteVkFFT. */
-void lsx_vulkan_fft_cache_store(
-    lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size);
+void lsx_vulkan_fft_cache_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size);
 
 /* Called once when the Vulkan context goes away.  Reports hits and misses. */
 void lsx_vulkan_fft_cache_clear(void);

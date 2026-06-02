@@ -25,10 +25,7 @@ static int prepare_encoder(AVCodecContext * context)
   return 0;
 }
 
-static size_t read_exact(
-    sox_format_t * ft,
-    uint8_t * data,
-    size_t length)
+static size_t read_exact(sox_format_t * ft, uint8_t * data, size_t length)
 {
   size_t done = 0;
 
@@ -53,8 +50,7 @@ static int read_packet(sox_format_t * ft, AVPacket * packet)
   if (header_size == 0)
     return 0;
   if (header_size != sizeof(header)) {
-    lsx_fail_errno(ft, SOX_EHDR, "Truncated %s access unit header",
-        p->stream_type == 0xba ? "Dolby TrueHD" : "MLP");
+    lsx_fail_errno(ft, SOX_EHDR, "Truncated %s access unit header", p->stream_type == 0xba ? "Dolby TrueHD" : "MLP");
     return SOX_EOF;
   }
   if (header[0] == 0x0b && header[1] == 0x77) {
@@ -66,30 +62,23 @@ static int read_packet(sox_format_t * ft, AVPacket * packet)
     return SOX_EOF;
   }
 
-  frame_size =
-      ((((size_t)header[0] << 8) | header[1]) & 0xfff) * 2;
+  frame_size = ((((size_t)header[0] << 8) | header[1]) & 0xfff) * 2;
   if (frame_size < sizeof(header)) {
-    lsx_fail_errno(ft, SOX_EHDR, "Invalid %s access unit length",
-        p->stream_type == 0xba ? "Dolby TrueHD" : "MLP");
+    lsx_fail_errno(ft, SOX_EHDR, "Invalid %s access unit length", p->stream_type == 0xba ? "Dolby TrueHD" : "MLP");
     return SOX_EOF;
   }
   result = av_new_packet(packet, (int)frame_size);
   if (result < 0) {
-    lsx_fail_errno(ft, SOX_ENOMEM,
-        "Unable to allocate compressed audio packet");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate compressed audio packet");
     return SOX_EOF;
   }
   memcpy(packet->data, header, sizeof(header));
-  if (read_exact(ft, packet->data + sizeof(header),
-        frame_size - sizeof(header)) != frame_size - sizeof(header)) {
+  if (read_exact(ft, packet->data + sizeof(header), frame_size - sizeof(header)) != frame_size - sizeof(header)) {
     av_packet_unref(packet);
-    lsx_fail_errno(ft, SOX_EHDR, "Truncated %s access unit",
-        p->stream_type == 0xba ? "Dolby TrueHD" : "MLP");
+    lsx_fail_errno(ft, SOX_EHDR, "Truncated %s access unit", p->stream_type == 0xba ? "Dolby TrueHD" : "MLP");
     return SOX_EOF;
   }
-  if (frame_size >= 8 &&
-      !memcmp(packet->data + 4, "\xf8\x72\x6f", 3) &&
-      packet->data[7] != p->stream_type) {
+  if (frame_size >= 8 && !memcmp(packet->data + 4, "\xf8\x72\x6f", 3) && packet->data[7] != p->stream_type) {
     int input_stream_type = packet->data[7];
 
     av_packet_unref(packet);
@@ -102,10 +91,7 @@ static int read_packet(sox_format_t * ft, AVPacket * packet)
   return 1;
 }
 
-static int write_packet(
-    sox_format_t * ft,
-    AVCodecContext const * context,
-    AVPacket const * packet)
+static int write_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -116,8 +102,7 @@ static int write_packet(
       packet->data[7] == p->stream_type)
     p->starts_with_major_sync = sox_true;
   ++p->packets_written;
-  return lsx_writebuf(ft, packet->data, (size_t)packet->size) ==
-      (size_t)packet->size ? SOX_SUCCESS : SOX_EOF;
+  return lsx_writebuf(ft, packet->data, (size_t)packet->size) == (size_t)packet->size ? SOX_SUCCESS : SOX_EOF;
 }
 
 static lsx_ffmpeg_codec_definition_t const mlp_definition = {
@@ -170,14 +155,11 @@ static lsx_ffmpeg_codec_definition_t const truehd_definition = {
   NULL
 };
 
-static int startread(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_definition_t const * definition)
+static int startread(sox_format_t * ft, lsx_ffmpeg_codec_definition_t const * definition)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  p->stream_type =
-      definition->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
+  p->stream_type = definition->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
   return lsx_ffmpeg_codec_startread(ft, &p->codec, definition);
 }
 
@@ -191,10 +173,7 @@ static int startread_truehd(sox_format_t * ft)
   return startread(ft, &truehd_definition);
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -208,16 +187,12 @@ static int stopread(sox_format_t * ft)
   return lsx_ffmpeg_codec_stopread(&p->codec);
 }
 
-static int startwrite(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_definition_t const * definition)
+static int startwrite(sox_format_t * ft, lsx_ffmpeg_codec_definition_t const * definition)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  if (ft->encoding.bits_per_sample != 16 &&
-      ft->encoding.bits_per_sample != 24) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "%s encoding supports 16-bit or 24-bit PCM", definition->name);
+  if (ft->encoding.bits_per_sample != 16 && ft->encoding.bits_per_sample != 24) {
+    lsx_fail_errno(ft, SOX_EFMT, "%s encoding supports 16-bit or 24-bit PCM", definition->name);
     return SOX_EOF;
   }
   if (ft->encoding.compression != HUGE_VAL) {
@@ -226,8 +201,7 @@ static int startwrite(
         "level with -C", definition->name);
     return SOX_EOF;
   }
-  p->stream_type =
-      definition->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
+  p->stream_type = definition->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
   p->starts_with_major_sync = sox_false;
   p->packets_written = 0;
   return lsx_ffmpeg_codec_startwrite(ft, &p->codec, definition);
@@ -243,10 +217,7 @@ static int startwrite_truehd(sox_format_t * ft)
   return startwrite(ft, &truehd_definition);
 }
 
-static size_t write_samples(
-    sox_format_t * ft,
-    sox_sample_t const * samples,
-    size_t length)
+static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 

@@ -30,11 +30,7 @@ typedef struct {
   sox_bool pce_pending;
 } priv_t;
 
-static int read_exact(
-    sox_format_t * ft,
-    uint8_t * data,
-    size_t size,
-    sox_bool clean_eof)
+static int read_exact(sox_format_t * ft, uint8_t * data, size_t size, sox_bool clean_eof)
 {
   size_t done = 0;
 
@@ -44,8 +40,7 @@ static int read_exact(
     if (count == 0) {
       if (done == 0 && clean_eof)
         return 0;
-      lsx_fail_errno(ft, SOX_EHDR,
-          "Truncated AAC ADTS frame or metadata tag");
+      lsx_fail_errno(ft, SOX_EHDR, "Truncated AAC ADTS frame or metadata tag");
       return SOX_EOF;
     }
     done += count;
@@ -67,9 +62,7 @@ static int discard_bytes(sox_format_t * ft, size_t size)
   return SOX_SUCCESS;
 }
 
-static int read_adts_packet(
-    sox_format_t * ft,
-    AVPacket * packet)
+static int read_adts_packet(sox_format_t * ft, AVPacket * packet)
 {
   uint8_t header[10];
 
@@ -93,11 +86,7 @@ static int read_adts_packet(
         lsx_fail_errno(ft, SOX_EHDR, "Invalid ID3v2 tag in AAC stream");
         return SOX_EOF;
       }
-      payload_size =
-          ((size_t)header[6] << 21) +
-          ((size_t)header[7] << 14) +
-          ((size_t)header[8] << 7) +
-          header[9];
+      payload_size = ((size_t)header[6] << 21) + ((size_t)header[7] << 14) + ((size_t)header[8] << 7) + header[9];
       if (header[3] == 4 && (header[5] & 0x10))
         payload_size += 10;
       if (discard_bytes(ft, payload_size) != SOX_SUCCESS)
@@ -110,14 +99,11 @@ static int read_adts_packet(
       continue;
     }
 
-    result = read_exact(
-        ft, header + 3, AV_AAC_ADTS_HEADER_SIZE - 3, sox_false);
+    result = read_exact(ft, header + 3, AV_AAC_ADTS_HEADER_SIZE - 3, sox_false);
     if (result != 1)
       return result;
-    frame_size =
-        ((header[3] & 3) << 11) | (header[4] << 3) | (header[5] >> 5);
-    header_size = (header[1] & 1) ?
-        AV_AAC_ADTS_HEADER_SIZE : AV_AAC_ADTS_HEADER_SIZE + 2;
+    frame_size = ((header[3] & 3) << 11) | (header[4] << 3) | (header[5] >> 5);
+    header_size = (header[1] & 1) ? AV_AAC_ADTS_HEADER_SIZE : AV_AAC_ADTS_HEADER_SIZE + 2;
     if (header[0] != 0xff || (header[1] & 0xf6) != 0xf0 ||
         frame_size < header_size ||
         av_adts_header_parse(header, &samples, &frames) < 0) {
@@ -127,14 +113,11 @@ static int read_adts_packet(
 
     result = av_new_packet(packet, (int)frame_size);
     if (result < 0) {
-      lsx_fail_errno(ft, SOX_ENOMEM,
-          "Unable to allocate AAC compressed audio packet");
+      lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate AAC compressed audio packet");
       return SOX_EOF;
     }
     memcpy(packet->data, header, AV_AAC_ADTS_HEADER_SIZE);
-    result = read_exact(ft,
-        packet->data + AV_AAC_ADTS_HEADER_SIZE,
-        frame_size - AV_AAC_ADTS_HEADER_SIZE, sox_false);
+    result = read_exact(ft, packet->data + AV_AAC_ADTS_HEADER_SIZE, frame_size - AV_AAC_ADTS_HEADER_SIZE, sox_false);
     if (result != 1) {
       av_packet_unref(packet);
       return result;
@@ -160,16 +143,11 @@ static int sampling_frequency_index(int rate)
 /* Move count bits from the AudioSpecificConfig to the Program Config Element
  * being assembled, reporting them as well when the caller needs the value to
  * decide what comes next. */
-static int copy_bits(
-    lsx_bit_reader_t * reader,
-    lsx_bit_writer_t * writer,
-    unsigned count,
-    uint32_t * value)
+static int copy_bits(lsx_bit_reader_t * reader, lsx_bit_writer_t * writer, unsigned count, uint32_t * value)
 {
   uint32_t copied;
 
-  if (lsx_bit_read(reader, count, &copied) != SOX_SUCCESS ||
-      lsx_bit_write(writer, count, copied) != SOX_SUCCESS)
+  if (lsx_bit_read(reader, count, &copied) != SOX_SUCCESS || lsx_bit_write(writer, count, copied) != SOX_SUCCESS)
     return SOX_EOF;
   if (value != NULL)
     *value = copied;
@@ -194,10 +172,7 @@ static int align_writer(lsx_bit_writer_t * writer)
   return SOX_SUCCESS;
 }
 
-static int extract_pce(
-    lsx_bit_reader_t * reader,
-    uint8_t * destination,
-    size_t * destination_size)
+static int extract_pce(lsx_bit_reader_t * reader, uint8_t * destination, size_t * destination_size)
 {
   lsx_bit_writer_t writer = {
     destination,
@@ -262,10 +237,7 @@ static int extract_pce(
   return *destination_size ? SOX_SUCCESS : SOX_EOF;
 }
 
-static int configure_adts(
-    sox_format_t * ft,
-    AVCodecContext const * context,
-    priv_t * p)
+static int configure_adts(sox_format_t * ft, AVCodecContext const * context, priv_t * p)
 {
   lsx_bit_reader_t reader;
   uint32_t frame_length_flag;
@@ -274,8 +246,7 @@ static int configure_adts(
   int expected_rate_index = sampling_frequency_index(context->sample_rate);
 
   if (context->extradata == NULL || context->extradata_size < 2) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "AAC encoder did not provide an AudioSpecificConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "AAC encoder did not provide an AudioSpecificConfig");
     return SOX_EOF;
   }
   reader.data = context->extradata;
@@ -287,8 +258,7 @@ static int configure_adts(
       lsx_bit_read(&reader, 1, &frame_length_flag) != SOX_SUCCESS ||
       lsx_bit_read(&reader, 1, &depends_on_core_coder) != SOX_SUCCESS ||
       lsx_bit_read(&reader, 1, &extension_flag) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Invalid AAC AudioSpecificConfig from encoder");
+    lsx_fail_errno(ft, SOX_EHDR, "Invalid AAC AudioSpecificConfig from encoder");
     return SOX_EOF;
   }
   if (p->object_type < 1 || p->object_type > 4 ||
@@ -296,22 +266,18 @@ static int configure_adts(
       p->rate_index != (uint32_t)expected_rate_index ||
       p->channel_configuration > 7 ||
       frame_length_flag || depends_on_core_coder || extension_flag) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "AAC encoder configuration cannot be represented in ADTS");
+    lsx_fail_errno(ft, SOX_EFMT, "AAC encoder configuration cannot be represented in ADTS");
     return SOX_EOF;
   }
   if (!p->channel_configuration) {
     if (extract_pce(&reader, p->pce, &p->pce_size) != SOX_SUCCESS) {
-      lsx_fail_errno(ft, SOX_EHDR,
-          "Invalid Program Config Element from AAC encoder");
+      lsx_fail_errno(ft, SOX_EHDR, "Invalid Program Config Element from AAC encoder");
       return SOX_EOF;
     }
     p->pce_pending = sox_true;
   }
-  else if (context->ch_layout.nb_channels == 4 ||
-      context->ch_layout.nb_channels >= 7) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "AAC encoder did not provide the required Program Config Element");
+  else if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7) {
+    lsx_fail_errno(ft, SOX_EFMT, "AAC encoder did not provide the required Program Config Element");
     return SOX_EOF;
   }
   p->adts_configured = sox_true;
@@ -322,17 +288,12 @@ static int prepare_aac_encoder(AVCodecContext * context)
 {
   /* Quad and 6.1 require a PCE.  Force one for 7.1 as well because ADTS
    * channel_configuration 7 describes the different 7.1(wide) layout. */
-  if (context->ch_layout.nb_channels == 4 ||
-      context->ch_layout.nb_channels >= 7)
-    return av_opt_set_int(
-        context->priv_data, "aac_pce", 1, 0);
+  if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7)
+    return av_opt_set_int(context->priv_data, "aac_pce", 1, 0);
   return 0;
 }
 
-static int write_adts_packet(
-    sox_format_t * ft,
-    AVCodecContext const * context,
-    AVPacket const * packet)
+static int write_adts_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
   uint8_t header[AV_AAC_ADTS_HEADER_SIZE];
@@ -340,37 +301,27 @@ static int write_adts_packet(
 
   if (packet->size == 0)
     return SOX_SUCCESS;
-  if (!p->adts_configured &&
-      configure_adts(ft, context, p) != SOX_SUCCESS)
+  if (!p->adts_configured && configure_adts(ft, context, p) != SOX_SUCCESS)
     return SOX_EOF;
-  frame_size = sizeof(header) + (size_t)packet->size +
-      (p->pce_pending ? p->pce_size : 0);
+  frame_size = sizeof(header) + (size_t)packet->size + (p->pce_pending ? p->pce_size : 0);
   if (frame_size > ADTS_MAX_FRAME_SIZE) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "AAC frame is too large for the 13-bit ADTS frame length");
+    lsx_fail_errno(ft, SOX_EFMT, "AAC frame is too large for the 13-bit ADTS frame length");
     return SOX_EOF;
   }
 
   header[0] = 0xff;
   header[1] = 0xf1;
-  header[2] = (uint8_t)(
-      (((p->object_type - 1) & 3) << 6) |
-      (p->rate_index << 2) |
-      (p->channel_configuration >> 2));
-  header[3] = (uint8_t)(
-      ((p->channel_configuration & 3) << 6) |
-      (frame_size >> 11));
+  header[2] = (uint8_t)((((p->object_type - 1) & 3) << 6) | (p->rate_index << 2) | (p->channel_configuration >> 2));
+  header[3] = (uint8_t)(((p->channel_configuration & 3) << 6) | (frame_size >> 11));
   header[4] = (uint8_t)(frame_size >> 3);
   header[5] = (uint8_t)(((frame_size & 7) << 5) | 0x1f);
   header[6] = 0xfc;
 
   if (lsx_writebuf(ft, header, sizeof(header)) != sizeof(header))
     return SOX_EOF;
-  if (p->pce_pending &&
-      lsx_writebuf(ft, p->pce, p->pce_size) != p->pce_size)
+  if (p->pce_pending && lsx_writebuf(ft, p->pce, p->pce_size) != p->pce_size)
     return SOX_EOF;
-  if (lsx_writebuf(ft, packet->data,
-          (size_t)packet->size) != (size_t)packet->size)
+  if (lsx_writebuf(ft, packet->data, (size_t)packet->size) != (size_t)packet->size)
     return SOX_EOF;
   p->pce_pending = sox_false;
   return SOX_SUCCESS;
@@ -410,10 +361,7 @@ static int startread(sox_format_t * ft)
   return lsx_ffmpeg_codec_startread(ft, &p->codec, &definition);
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -434,10 +382,7 @@ static int startwrite(sox_format_t * ft)
   return lsx_ffmpeg_codec_startwrite(ft, &p->codec, &definition);
 }
 
-static size_t write_samples(
-    sox_format_t * ft,
-    sox_sample_t const * samples,
-    size_t length)
+static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 

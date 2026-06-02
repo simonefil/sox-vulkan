@@ -47,10 +47,7 @@ static int startread(sox_format_t * ft)
   return lsx_ffmpeg_codec_startread(ft, &p->codec, &definition);
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -71,10 +68,7 @@ static int startwrite(sox_format_t * ft)
   return lsx_ffmpeg_codec_startwrite(ft, &p->codec, &definition);
 }
 
-static size_t write_samples(
-    sox_format_t * ft,
-    sox_sample_t const * samples,
-    size_t length)
+static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 

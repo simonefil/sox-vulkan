@@ -14,13 +14,9 @@ int lsx_ffmpeg_container_startread(
     enum AVCodecID codec_id,
     AVCodecContext * codec_context);
 
-int lsx_ffmpeg_container_read_packet(
-    sox_format_t * ft,
-    lsx_ffmpeg_container_t * state,
-    AVPacket * packet);
+int lsx_ffmpeg_container_read_packet(sox_format_t * ft, lsx_ffmpeg_container_t * state, AVPacket * packet);
 
-void lsx_ffmpeg_container_stopread(
-    lsx_ffmpeg_container_t ** state);
+void lsx_ffmpeg_container_stopread(lsx_ffmpeg_container_t ** state);
 
 int lsx_ffmpeg_container_startwrite(
     sox_format_t * ft,
@@ -34,8 +30,6 @@ int lsx_ffmpeg_container_write_packet(
     AVCodecContext const * codec_context,
     AVPacket const * packet);
 
-int lsx_ffmpeg_container_stopwrite(
-    sox_format_t * ft,
-    lsx_ffmpeg_container_t ** state);
+int lsx_ffmpeg_container_stopwrite(sox_format_t * ft, lsx_ffmpeg_container_t ** state);
 
 #endif

@@ -320,8 +320,7 @@ static void makecodes(int e, uint32_t c, uint32_t s, uint32_t b,
   }
 }
 
-static void putcode(sox_format_t * ft, uint32_t codes[256],
-    uint32_t codesize[256], unsigned c, unsigned char **df)
+static void putcode(sox_format_t * ft, uint32_t codes[256], uint32_t codesize[256], unsigned c, unsigned char **df)
 {
   priv_t *p = (priv_t *) ft->priv;
   uint32_t code, size, i;

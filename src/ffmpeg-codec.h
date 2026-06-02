@@ -40,39 +40,26 @@ typedef struct {
 
 /* Read count bits (at most 32) into *value, which may be NULL to skip them.
  * Returns SOX_EOF without moving the cursor if the field does not fit. */
-int lsx_bit_read(
-    lsx_bit_reader_t * reader,
-    unsigned count,
-    uint32_t * value);
+int lsx_bit_read(lsx_bit_reader_t * reader, unsigned count, uint32_t * value);
 
 /* Write the low count bits (at most 32) of value.  Returns SOX_EOF without
  * moving the cursor if the field does not fit. */
-int lsx_bit_write(
-    lsx_bit_writer_t * writer,
-    unsigned count,
-    uint32_t value);
+int lsx_bit_write(lsx_bit_writer_t * writer, unsigned count, uint32_t value);
 
 typedef struct lsx_ffmpeg_codec_t lsx_ffmpeg_codec_t;
 
-typedef int (*lsx_ffmpeg_codec_decoder_preparer_t)(
-    sox_format_t * ft,
-    AVCodecContext * context);
+typedef int (*lsx_ffmpeg_codec_decoder_preparer_t)(sox_format_t * ft, AVCodecContext * context);
 
-typedef int (*lsx_ffmpeg_codec_encoder_preparer_t)(
-    AVCodecContext * context);
+typedef int (*lsx_ffmpeg_codec_encoder_preparer_t)(AVCodecContext * context);
 
-typedef int (*lsx_ffmpeg_codec_packet_reader_t)(
-    sox_format_t * ft,
-    AVPacket * packet);
+typedef int (*lsx_ffmpeg_codec_packet_reader_t)(sox_format_t * ft, AVPacket * packet);
 
 typedef int (*lsx_ffmpeg_codec_packet_writer_t)(
     sox_format_t * ft,
     AVCodecContext const * context,
     AVPacket const * packet);
 
-typedef int (*lsx_ffmpeg_codec_layout_selector_t)(
-    unsigned channels,
-    AVChannelLayout * layout);
+typedef int (*lsx_ffmpeg_codec_layout_selector_t)(unsigned channels, AVChannelLayout * layout);
 
 typedef struct {
   enum AVCodecID codec_id;
@@ -104,11 +91,7 @@ int lsx_ffmpeg_codec_startread(
     lsx_ffmpeg_codec_t ** state,
     lsx_ffmpeg_codec_definition_t const * definition);
 
-size_t lsx_ffmpeg_codec_read(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state,
-    sox_sample_t * samples,
-    size_t length);
+size_t lsx_ffmpeg_codec_read(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_sample_t * samples, size_t length);
 
 int lsx_ffmpeg_codec_stopread(lsx_ffmpeg_codec_t ** state);
 
@@ -123,12 +106,9 @@ size_t lsx_ffmpeg_codec_write(
     sox_sample_t const * samples,
     size_t length);
 
-int lsx_ffmpeg_codec_stopwrite(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t ** state);
+int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state);
 
-AVCodecContext const * lsx_ffmpeg_codec_context(
-    lsx_ffmpeg_codec_t const * state);
+AVCodecContext const * lsx_ffmpeg_codec_context(lsx_ffmpeg_codec_t const * state);
 
 void lsx_ffmpeg_codec_print_format_layouts(char const * format_name);
 

@@ -114,40 +114,32 @@ static opus_int64 callback_tell(void* ft_data)
 
 /********************* End callbacks *****************************/
 
-static int validate_opus_layout(sox_format_t * ft, const OpusHead * head,
-    unsigned expected_channels)
+static int validate_opus_layout(sox_format_t * ft, const OpusHead * head, unsigned expected_channels)
 {
   if (head == NULL) {
     lsx_fail_errno(ft, SOX_EHDR, "Opus stream is missing its ID header");
     return SOX_EOF;
   }
   if (head->channel_count < 1 || head->channel_count > 8) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "Opus decoding supports standard layouts with 1 to 8 channels");
+    lsx_fail_errno(ft, SOX_EFMT, "Opus decoding supports standard layouts with 1 to 8 channels");
     return SOX_EOF;
   }
   if (head->mapping_family != 0 && head->mapping_family != 1) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "Unsupported Opus channel mapping family %d", head->mapping_family);
+    lsx_fail_errno(ft, SOX_EFMT, "Unsupported Opus channel mapping family %d", head->mapping_family);
     return SOX_EOF;
   }
   if (head->mapping_family == 0 && head->channel_count > 2) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Opus mapping family 0 is invalid for %d channels",
-        head->channel_count);
+    lsx_fail_errno(ft, SOX_EHDR, "Opus mapping family 0 is invalid for %d channels", head->channel_count);
     return SOX_EOF;
   }
-  if (expected_channels &&
-      (unsigned)head->channel_count != expected_channels) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "Chained Opus streams with different channel counts are unsupported");
+  if (expected_channels && (unsigned)head->channel_count != expected_channels) {
+    lsx_fail_errno(ft, SOX_EFMT, "Chained Opus streams with different channel counts are unsupported");
     return SOX_EOF;
   }
   return SOX_SUCCESS;
 }
 
-static void reorder_vorbis_to_sox(opus_int16 * pcm, int frames,
-    unsigned channels)
+static void reorder_vorbis_to_sox(opus_int16 * pcm, int frames, unsigned channels)
 {
   int frame;
 
@@ -157,12 +149,9 @@ static void reorder_vorbis_to_sox(opus_int16 * pcm, int frames,
     opus_int16 source[8];
     unsigned vorbis_channel;
 
-    memcpy(source, pcm + (size_t)frame * channels,
-        channels * sizeof(*source));
+    memcpy(source, pcm + (size_t)frame * channels, channels * sizeof(*source));
     for (vorbis_channel = 0; vorbis_channel < channels; ++vorbis_channel)
-      pcm[(size_t)frame * channels +
-          vorbis_channel_from_sox[channels][vorbis_channel]] =
-          source[vorbis_channel];
+      pcm[(size_t)frame * channels + vorbis_channel_from_sox[channels][vorbis_channel]] = source[vorbis_channel];
   }
 }
 
@@ -205,8 +194,7 @@ static int startread(sox_format_t * ft)
     int links = op_link_count(vb->of);
 
     for (i = 1; i < links; ++i) {
-      if (validate_opus_layout(ft, op_head(vb->of, i),
-            (unsigned)oh->channel_count) != SOX_SUCCESS) {
+      if (validate_opus_layout(ft, op_head(vb->of, i), (unsigned)oh->channel_count) != SOX_SUCCESS) {
         op_free(vb->of);
         vb->of = NULL;
         return SOX_EOF;
@@ -358,8 +346,7 @@ static int add_comments(sox_format_t * ft, OggOpusComments * comments)
         ope_comments_add_string(comments, ft->oob.comments[i]) :
         ope_comments_add(comments, "Comment", ft->oob.comments[i]);
     if (result != OPE_OK) {
-      lsx_fail_errno(ft, SOX_EINVAL, "Failed to add Opus comment: %s",
-          ope_strerror(result));
+      lsx_fail_errno(ft, SOX_EINVAL, "Failed to add Opus comment: %s", ope_strerror(result));
       return SOX_EOF;
     }
   }
@@ -378,13 +365,11 @@ static int startwrite(sox_format_t * ft)
   int result = OPE_OK;
 
   if (ft->signal.channels < 1 || ft->signal.channels > 8) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "Opus encoding supports standard layouts with 1 to 8 channels");
+    lsx_fail_errno(ft, SOX_EFMT, "Opus encoding supports standard layouts with 1 to 8 channels");
     return SOX_EOF;
   }
   if (ft->signal.rate != OPUS_OUTPUT_RATE) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "Opus encoding requires a 48000 Hz SoX pipeline");
+    lsx_fail_errno(ft, SOX_EFMT, "Opus encoding requires a 48000 Hz SoX pipeline");
     return SOX_EOF;
   }
 
@@ -406,8 +391,7 @@ static int startwrite(sox_format_t * ft)
       OPUS_OUTPUT_RATE, (int)ft->signal.channels, mapping_family, &result);
   ope_comments_destroy(comments);
   if (vb->encoder == NULL) {
-    lsx_fail_errno(ft, SOX_EFMT, "Failed to initialize Opus encoder: %s",
-        ope_strerror(result));
+    lsx_fail_errno(ft, SOX_EFMT, "Failed to initialize Opus encoder: %s", ope_strerror(result));
     return SOX_EOF;
   }
 
@@ -427,8 +411,7 @@ static int startwrite(sox_format_t * ft)
     bitrate_bps = (opus_int32)(bitrate * 1000 + .5);
     result = ope_encoder_ctl(vb->encoder, OPUS_SET_BITRATE(bitrate_bps));
     if (result != OPE_OK) {
-      lsx_fail_errno(ft, SOX_EINVAL, "Failed to set Opus bitrate: %s",
-          ope_strerror(result));
+      lsx_fail_errno(ft, SOX_EINVAL, "Failed to set Opus bitrate: %s", ope_strerror(result));
       ope_encoder_destroy(vb->encoder);
       vb->encoder = NULL;
       return SOX_EOF;
@@ -437,8 +420,7 @@ static int startwrite(sox_format_t * ft)
 
   result = ope_encoder_flush_header(vb->encoder);
   if (result != OPE_OK) {
-    lsx_fail_errno(ft, SOX_EOF, "Failed to write Opus header: %s",
-        ope_strerror(result));
+    lsx_fail_errno(ft, SOX_EOF, "Failed to write Opus header: %s", ope_strerror(result));
     ope_encoder_destroy(vb->encoder);
     vb->encoder = NULL;
     return SOX_EOF;
@@ -447,8 +429,7 @@ static int startwrite(sox_format_t * ft)
   return SOX_SUCCESS;
 }
 
-static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf,
-    size_t len)
+static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf, size_t len)
 {
   priv_t * vb = (priv_t *)ft->priv;
   size_t i;
@@ -456,8 +437,7 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf,
   SOX_SAMPLE_LOCALS;
 
   if (len % ft->signal.channels) {
-    lsx_fail_errno(ft, SOX_EINVAL,
-        "Opus encoder received an incomplete interleaved sample frame");
+    lsx_fail_errno(ft, SOX_EINVAL, "Opus encoder received an incomplete interleaved sample frame");
     return 0;
   }
 
@@ -468,22 +448,17 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf,
   for (i = 0; i < len / ft->signal.channels; ++i) {
     unsigned vorbis_channel;
 
-    for (vorbis_channel = 0; vorbis_channel < ft->signal.channels;
-        ++vorbis_channel) {
+    for (vorbis_channel = 0; vorbis_channel < ft->signal.channels; ++vorbis_channel) {
       size_t output = i * ft->signal.channels + vorbis_channel;
-      size_t input = i * ft->signal.channels +
-          vorbis_channel_from_sox[ft->signal.channels][vorbis_channel];
+      size_t input = i * ft->signal.channels + vorbis_channel_from_sox[ft->signal.channels][vorbis_channel];
 
-      vb->write_buf[output] =
-          SOX_SAMPLE_TO_FLOAT_32BIT(buf[input], ft->clips);
+      vb->write_buf[output] = SOX_SAMPLE_TO_FLOAT_32BIT(buf[input], ft->clips);
     }
   }
 
-  result = ope_encoder_write_float(vb->encoder, vb->write_buf,
-      (int)(len / ft->signal.channels));
+  result = ope_encoder_write_float(vb->encoder, vb->write_buf, (int)(len / ft->signal.channels));
   if (result != OPE_OK) {
-    lsx_fail_errno(ft, SOX_EOF, "Opus encoding failed: %s",
-        ope_strerror(result));
+    lsx_fail_errno(ft, SOX_EOF, "Opus encoding failed: %s", ope_strerror(result));
     return 0;
   }
   return len;
@@ -495,8 +470,7 @@ static int stopwrite(sox_format_t * ft)
   int result = ope_encoder_drain(vb->encoder);
 
   if (result != OPE_OK)
-    lsx_fail_errno(ft, SOX_EOF, "Failed to finalize Opus stream: %s",
-        ope_strerror(result));
+    lsx_fail_errno(ft, SOX_EOF, "Failed to finalize Opus stream: %s", ope_strerror(result));
   ope_encoder_destroy(vb->encoder);
   free(vb->write_buf);
   return result == OPE_OK ? SOX_SUCCESS : SOX_EOF;

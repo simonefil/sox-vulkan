@@ -36,31 +36,23 @@ typedef struct {
   sox_bool configured;
 } priv_t;
 
-static int copy_bits(
-    lsx_bit_reader_t * reader,
-    uint8_t * destination,
-    size_t count)
+static int copy_bits(lsx_bit_reader_t * reader, uint8_t * destination, size_t count)
 {
   size_t i;
 
   memset(destination, 0, (count + 7) / 8);
-  if (reader->position > reader->size_bits ||
-      count > reader->size_bits - reader->position)
+  if (reader->position > reader->size_bits || count > reader->size_bits - reader->position)
     return SOX_EOF;
   for (i = 0; i < count; ++i) {
     size_t source_position = reader->position++;
 
-    if ((reader->data[source_position / 8] >>
-          (7 - source_position % 8)) & 1)
+    if ((reader->data[source_position / 8] >> (7 - source_position % 8)) & 1)
       destination[i / 8] |= (uint8_t)(1U << (7 - i % 8));
   }
   return SOX_SUCCESS;
 }
 
-static int audio_object_type(
-    uint8_t const * config,
-    size_t config_bits,
-    uint32_t * object_type)
+static int audio_object_type(uint8_t const * config, size_t config_bits, uint32_t * object_type)
 {
   lsx_bit_reader_t reader = {config, config_bits, 0};
   uint32_t value;
@@ -78,11 +70,7 @@ static int audio_object_type(
   return SOX_SUCCESS;
 }
 
-static int parse_stream_mux_config(
-    sox_format_t * ft,
-    priv_t * p,
-    lsx_bit_reader_t * reader,
-    sox_bool * config_changed)
+static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader_t * reader, sox_bool * config_changed)
 {
   uint8_t config[USAC_MAX_CONFIG_SIZE];
   uint32_t value;
@@ -103,53 +91,41 @@ static int parse_stream_mux_config(
         "synchronous program and layer with audioMuxVersion 1");
     return SOX_EOF;
   }
-  if (lsx_latm_read_value(reader, &asc_bits) != SOX_SUCCESS ||
-      asc_bits == 0 ||
-      asc_bits > USAC_MAX_CONFIG_SIZE * 8U) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Invalid xHE-AAC AudioSpecificConfig length");
+  if (lsx_latm_read_value(reader, &asc_bits) != SOX_SUCCESS || asc_bits == 0 || asc_bits > USAC_MAX_CONFIG_SIZE * 8U) {
+    lsx_fail_errno(ft, SOX_EHDR, "Invalid xHE-AAC AudioSpecificConfig length");
     return SOX_EOF;
   }
 
   config_size = (asc_bits + 7) / 8;
   if (copy_bits(reader, config, asc_bits) != SOX_SUCCESS ||
       audio_object_type(config, asc_bits, &object_type) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Truncated xHE-AAC AudioSpecificConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC AudioSpecificConfig");
     return SOX_EOF;
   }
   if (object_type != 42) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "LOAS/LATM AudioSpecificConfig is not xHE-AAC/USAC");
+    lsx_fail_errno(ft, SOX_EFMT, "LOAS/LATM AudioSpecificConfig is not xHE-AAC/USAC");
     return SOX_EOF;
   }
 
-  if (lsx_bit_read(reader, 3, &value) != SOX_SUCCESS || value != 0 ||
-      lsx_bit_read(reader, 8, &value) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Unsupported xHE-AAC LATM frame length configuration");
+  if (lsx_bit_read(reader, 3, &value) != SOX_SUCCESS || value != 0 || lsx_bit_read(reader, 8, &value) != SOX_SUCCESS) {
+    lsx_fail_errno(ft, SOX_EHDR, "Unsupported xHE-AAC LATM frame length configuration");
     return SOX_EOF;
   }
   if (lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 0) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "xHE-AAC LATM otherData is unsupported");
+    lsx_fail_errno(ft, SOX_EHDR, "xHE-AAC LATM otherData is unsupported");
     return SOX_EOF;
   }
   if (lsx_bit_read(reader, 1, &value) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Truncated xHE-AAC StreamMuxConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC StreamMuxConfig");
     return SOX_EOF;
   }
   if (value && lsx_bit_read(reader, 8, NULL) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Truncated xHE-AAC StreamMuxConfig CRC");
+    lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC StreamMuxConfig CRC");
     return SOX_EOF;
   }
 
   *config_changed = was_configured &&
-      (p->config_bits != asc_bits ||
-       p->config_size != config_size ||
-       memcmp(p->config, config, config_size));
+      (p->config_bits != asc_bits || p->config_size != config_size || memcmp(p->config, config, config_size));
   memcpy(p->config, config, config_size);
   p->config_size = config_size;
   p->config_bits = asc_bits;
@@ -179,30 +155,24 @@ static int parse_audio_mux_element(
     return SOX_EOF;
   }
   if (!value) {
-    if (parse_stream_mux_config(
-          ft, p, &reader, config_changed) != SOX_SUCCESS)
+    if (parse_stream_mux_config(ft, p, &reader, config_changed) != SOX_SUCCESS)
       return SOX_EOF;
   }
   else if (!p->configured) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "xHE-AAC LATM stream starts without a StreamMuxConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "xHE-AAC LATM stream starts without a StreamMuxConfig");
     return SOX_EOF;
   }
 
   do {
-    if (lsx_bit_read(&reader, 8, &value) != SOX_SUCCESS ||
-        payload_size > LSX_LOAS_MAX_FRAME_SIZE - value) {
-      lsx_fail_errno(ft, SOX_EHDR,
-          "Invalid xHE-AAC LATM payload length");
+    if (lsx_bit_read(&reader, 8, &value) != SOX_SUCCESS || payload_size > LSX_LOAS_MAX_FRAME_SIZE - value) {
+      lsx_fail_errno(ft, SOX_EHDR, "Invalid xHE-AAC LATM payload length");
       return SOX_EOF;
     }
     payload_size += value;
   } while (value == 255);
 
-  if (payload_size == 0 ||
-      copy_bits(&reader, destination, payload_size * 8) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Truncated or empty xHE-AAC access unit");
+  if (payload_size == 0 || copy_bits(&reader, destination, payload_size * 8) != SOX_SUCCESS) {
+    lsx_fail_errno(ft, SOX_EHDR, "Truncated or empty xHE-AAC access unit");
     return SOX_EOF;
   }
   *destination_size = payload_size;
@@ -218,8 +188,7 @@ static int read_loas_access_unit(
     sox_bool clean_eof)
 {
   size_t frame_size;
-  int result = lsx_loas_read_packet(ft, p->loas_frame,
-      sizeof(p->loas_frame), &frame_size, clean_eof, "xHE-AAC");
+  int result = lsx_loas_read_packet(ft, p->loas_frame, sizeof(p->loas_frame), &frame_size, clean_eof, "xHE-AAC");
 
   if (result != 1)
     return result;
@@ -228,44 +197,35 @@ static int read_loas_access_unit(
       SOX_EOF;
 }
 
-static int prepare_usac_decoder(
-    sox_format_t * ft,
-    AVCodecContext * context)
+static int prepare_usac_decoder(sox_format_t * ft, AVCodecContext * context)
 {
   priv_t * p = (priv_t *)ft->priv;
   sox_bool config_changed;
   int result;
 
   if ((avcodec_version() >> 16) < 62) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "xHE-AAC decoding requires FFmpeg 8.0 or later");
+    lsx_fail_errno(ft, SOX_EFMT, "xHE-AAC decoding requires FFmpeg 8.0 or later");
     return SOX_EOF;
   }
-  result = read_loas_access_unit(ft, p, p->pending_packet,
-      &p->pending_size, &config_changed, sox_true);
+  result = read_loas_access_unit(ft, p, p->pending_packet, &p->pending_size, &config_changed, sox_true);
   if (result != 1) {
     if (result == 0)
       lsx_fail_errno(ft, SOX_EHDR, "xHE-AAC stream contains no audio");
     return SOX_EOF;
   }
 
-  context->extradata = av_mallocz(
-      p->config_size + AV_INPUT_BUFFER_PADDING_SIZE);
+  context->extradata = av_mallocz(p->config_size + AV_INPUT_BUFFER_PADDING_SIZE);
   if (context->extradata == NULL) {
-    lsx_fail_errno(ft, SOX_ENOMEM,
-        "Unable to allocate xHE-AAC decoder configuration");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate xHE-AAC decoder configuration");
     return SOX_EOF;
   }
   memcpy(context->extradata, p->config, p->config_size);
   context->extradata_size = (int)p->config_size;
-  lsx_warn("`%s': xHE-AAC loudness and dynamic-range metadata, if "
-      "present, will be ignored", ft->filename);
+  lsx_warn("`%s': xHE-AAC loudness and dynamic-range metadata, if " "present, will be ignored", ft->filename);
   return SOX_SUCCESS;
 }
 
-static int read_usac_packet(
-    sox_format_t * ft,
-    AVPacket * packet)
+static int read_usac_packet(sox_format_t * ft, AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
   uint8_t access_unit[LSX_LOAS_MAX_FRAME_SIZE];
@@ -280,28 +240,24 @@ static int read_usac_packet(
     p->pending_size = 0;
   }
   else {
-    result = read_loas_access_unit(ft, p, access_unit,
-        &access_unit_size, &config_changed, sox_true);
+    result = read_loas_access_unit(ft, p, access_unit, &access_unit_size, &config_changed, sox_true);
     if (result != 1)
       return result;
   }
 
   result = av_new_packet(packet, (int)access_unit_size);
   if (result < 0) {
-    lsx_fail_errno(ft, SOX_ENOMEM,
-        "Unable to allocate xHE-AAC compressed audio packet");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate xHE-AAC compressed audio packet");
     return SOX_EOF;
   }
   memcpy(packet->data, access_unit, access_unit_size);
   if (!config_changed)
     return 1;
 
-  new_config = av_packet_new_side_data(packet,
-      AV_PKT_DATA_NEW_EXTRADATA, p->config_size);
+  new_config = av_packet_new_side_data(packet, AV_PKT_DATA_NEW_EXTRADATA, p->config_size);
   if (new_config == NULL) {
     av_packet_unref(packet);
-    lsx_fail_errno(ft, SOX_ENOMEM,
-        "Unable to attach updated xHE-AAC decoder configuration");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to attach updated xHE-AAC decoder configuration");
     return SOX_EOF;
   }
   memcpy(new_config, p->config, p->config_size);
@@ -340,10 +296,7 @@ static int startread(sox_format_t * ft)
   return lsx_ffmpeg_codec_startread(ft, &p->codec, &definition);
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 

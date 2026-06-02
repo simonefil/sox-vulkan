@@ -32,8 +32,7 @@ struct dsdiff {
 };
 
 static size_t dff_write_packed(sox_format_t *, const sox_sample_t *, size_t);
-static size_t dff_write_packed_words(sox_format_t *,
-	const sox_sample_t *, size_t);
+static size_t dff_write_packed_words(sox_format_t *, const sox_sample_t *, size_t);
 
 #define ID(a, b, c, d) ((a) << 24 | (b) << 16 | (c) << 8 | (d))
 
@@ -394,8 +393,7 @@ static size_t dff_write(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 	return wsamp * nchan;
 }
 
-static size_t dff_write_packed(sox_format_t *ft,
-			       const sox_sample_t *buf, size_t len)
+static size_t dff_write_packed(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
 	struct dsdiff *dff = ft->priv;
 	unsigned channels = ft->signal.channels;
@@ -405,8 +403,7 @@ static size_t dff_write_packed(sox_format_t *ft,
 		size_t full = 0;
 		size_t i;
 
-		while (full + channels <= len &&
-		       SOX_DSD_PACKED_VALID_BITS(buf[full]) == 8) {
+		while (full + channels <= len && SOX_DSD_PACKED_VALID_BITS(buf[full]) == 8) {
 			for (i = 1; i < channels; ++i)
 				if (SOX_DSD_PACKED_VALID_BITS(buf[full + i]) != 8)
 					return consumed;
@@ -419,8 +416,7 @@ static size_t dff_write_packed(sox_format_t *ft,
 				dff->packed_capacity = full;
 			}
 			for (i = 0; i < full; ++i)
-				dff->packed_buf[i] =
-					SOX_DSD_PACKED_DATA(buf[i]);
+				dff->packed_buf[i] = SOX_DSD_PACKED_DATA(buf[i]);
 			if (lsx_write_b_buf(ft, dff->packed_buf, full) < full)
 				return 0;
 			dff->data_size += full;
@@ -453,9 +449,7 @@ static size_t dff_write_packed(sox_format_t *ft,
 				if (SOX_DSD_PACKED_VALID_BITS(buf[i]) != valid)
 					return consumed;
 				for (j = 0; j < valid; ++j)
-					dff->buf[i] |=
-						((data >> (7 - j)) & 1) <<
-						(7 - dff->bit_pos - j);
+					dff->buf[i] |= ((data >> (7 - j)) & 1) << (7 - dff->bit_pos - j);
 			}
 			dff->bit_pos += valid;
 			if (dff->bit_pos == 8) {
@@ -481,16 +475,14 @@ static uint8_t dff_reverse_byte(uint8_t value)
 	return (uint8_t)(((value & 0xaa) >> 1) | ((value & 0x55) << 1));
 }
 
-static size_t dff_write_packed_words(sox_format_t *ft,
-	const sox_sample_t *buf, size_t len)
+static size_t dff_write_packed_words(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
 	struct dsdiff *dff = ft->priv;
 	unsigned channels = ft->signal.channels;
 	size_t bytes;
 	size_t group;
 
-	if (dff->bit_pos || !channels || len % channels ||
-	    len > SOX_SIZE_MAX / 4)
+	if (dff->bit_pos || !channels || len % channels || len > SOX_SIZE_MAX / 4)
 		return 0;
 	bytes = len * 4;
 	if (bytes > dff->packed_capacity) {

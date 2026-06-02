@@ -60,37 +60,28 @@
 #endif
 
 #ifdef HAVE_FFMPEG_CODECS
-static sox_bool is_adts_header(
-    unsigned char const * data,
-    size_t length)
+static sox_bool is_adts_header(unsigned char const * data, size_t length)
 {
   unsigned frame_size;
   unsigned header_size;
   uint32_t samples;
   uint8_t frames;
 
-  if (length < AV_AAC_ADTS_HEADER_SIZE ||
-      data[0] != 0xff || (data[1] & 0xf6) != 0xf0)
+  if (length < AV_AAC_ADTS_HEADER_SIZE || data[0] != 0xff || (data[1] & 0xf6) != 0xf0)
     return sox_false;
-  frame_size =
-      ((data[3] & 3) << 11) | (data[4] << 3) | (data[5] >> 5);
+  frame_size = ((data[3] & 3) << 11) | (data[4] << 3) | (data[5] >> 5);
   header_size = (data[1] & 1) ? 7 : 9;
-  return length >= header_size && frame_size >= header_size &&
-      av_adts_header_parse(data, &samples, &frames) >= 0;
+  return length >= header_size && frame_size >= header_size && av_adts_header_parse(data, &samples, &frames) >= 0;
 }
 
-static char const * detect_mlp_major_sync(
-    unsigned char const * data,
-    size_t length)
+static char const * detect_mlp_major_sync(unsigned char const * data, size_t length)
 {
   size_t offset;
 
   for (offset = 0; offset + 8 <= length; ++offset) {
-    unsigned access_unit_size =
-        ((((unsigned)data[offset] << 8) | data[offset + 1]) & 0xfff) * 2;
+    unsigned access_unit_size = ((((unsigned)data[offset] << 8) | data[offset + 1]) & 0xfff) * 2;
 
-    if (access_unit_size < 8 ||
-        memcmp(data + offset + 4, "\xf8\x72\x6f", 3))
+    if (access_unit_size < 8 || memcmp(data + offset + 4, "\xf8\x72\x6f", 3))
       continue;
     if (data[offset + 7] == 0xba)
       return "truehd";
@@ -100,25 +91,17 @@ static char const * detect_mlp_major_sync(
   return NULL;
 }
 
-static sox_bool is_dts_header(
-    unsigned char const * data,
-    size_t length)
+static sox_bool is_dts_header(unsigned char const * data, size_t length)
 {
   if (length >= 8 && !memcmp(data, "DTSHDHDR", 8))
     return sox_true;
-  if (length >= 4 &&
-      data[0] == 0x64 && data[1] == 0x58 &&
-      data[2] == 0x20 && data[3] == 0x25)
+  if (length >= 4 && data[0] == 0x64 && data[1] == 0x58 && data[2] == 0x20 && data[3] == 0x25)
     return sox_true;
   if (length < 6)
     return sox_false;
-  if (data[0] == 0x7f && data[1] == 0xfe &&
-      data[2] == 0x80 && data[3] == 0x01 &&
-      (data[4] & 0xfc) == 0xfc)
+  if (data[0] == 0x7f && data[1] == 0xfe && data[2] == 0x80 && data[3] == 0x01 && (data[4] & 0xfc) == 0xfc)
     return sox_true;
-  if (data[0] == 0xfe && data[1] == 0x7f &&
-      data[2] == 0x01 && data[3] == 0x80 &&
-      (data[5] & 0xfc) == 0xfc)
+  if (data[0] == 0xfe && data[1] == 0x7f && data[2] == 0x01 && data[3] == 0x80 && (data[5] & 0xfc) == 0xfc)
     return sox_true;
   if (data[0] == 0x1f && data[1] == 0xff &&
       data[2] == 0xe8 && data[3] == 0x00 &&
@@ -129,9 +112,7 @@ static sox_bool is_dts_header(
       (data[4] & 0xf0) == 0xf0 && data[5] == 0x07;
 }
 
-static size_t leading_id3v2_size(
-    unsigned char const * data,
-    size_t length)
+static size_t leading_id3v2_size(unsigned char const * data, size_t length)
 {
   size_t size;
 
@@ -140,20 +121,14 @@ static size_t leading_id3v2_size(
       (data[6] & 0x80) || (data[7] & 0x80) ||
       (data[8] & 0x80) || (data[9] & 0x80))
     return 0;
-  size = 10 +
-      ((size_t)data[6] << 21) +
-      ((size_t)data[7] << 14) +
-      ((size_t)data[8] << 7) +
-      data[9];
+  size = 10 + ((size_t)data[6] << 21) + ((size_t)data[7] << 14) + ((size_t)data[8] << 7) + data[9];
   if (data[3] == 4 && (data[5] & 0x10))
     size += 10;
   return size;
 }
 
 #ifdef HAVE_FFMPEG_FORMATS
-static sox_bool is_m4a_header(
-    unsigned char const * data,
-    size_t length)
+static sox_bool is_m4a_header(unsigned char const * data, size_t length)
 {
   size_t atom_size;
   size_t limit;
@@ -161,10 +136,7 @@ static sox_bool is_m4a_header(
 
   if (length < 12 || memcmp(data + 4, "ftyp", 4))
     return sox_false;
-  atom_size = ((size_t)data[0] << 24) |
-      ((size_t)data[1] << 16) |
-      ((size_t)data[2] << 8) |
-      data[3];
+  atom_size = ((size_t)data[0] << 24) | ((size_t)data[1] << 16) | ((size_t)data[2] << 8) | data[3];
   if (atom_size < 12)
     return sox_false;
   limit = min(atom_size, length);
@@ -212,16 +184,14 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   if (is_dts_header((unsigned char const *)data, len))
     return "dts";
   {
-    char const * mlp_format = detect_mlp_major_sync(
-        (unsigned char const *)data, len);
+    char const * mlp_format = detect_mlp_major_sync((unsigned char const *)data, len);
 
     if (mlp_format != NULL)
       return mlp_format;
   }
   {
     uint32_t object_type;
-    int config = lsx_latm_config_object_type(
-        (uint8_t const *)data, len, &object_type);
+    int config = lsx_latm_config_object_type((uint8_t const *)data, len, &object_type);
 
     if (config == 1) {
       if (object_type == 42)
@@ -235,8 +205,7 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
     size_t offset = 0;
 
     while (offset < len) {
-      size_t id3v2_size =
-          leading_id3v2_size(bytes + offset, len - offset);
+      size_t id3v2_size = leading_id3v2_size(bytes + offset, len - offset);
 
       if (!id3v2_size)
         break;
@@ -249,13 +218,11 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
     if (offset < len && is_adts_header(bytes + offset, len - offset))
       return "aac";
   }
-  if (len >= 7 && (unsigned char)data[0] == 0x0b &&
-      (unsigned char)data[1] == 0x77) {
+  if (len >= 7 && (unsigned char)data[0] == 0x0b && (unsigned char)data[1] == 0x77) {
     uint8_t bitstream_id;
     uint16_t frame_size;
 
-    if (av_ac3_parse_header((uint8_t const *)data, len,
-          &bitstream_id, &frame_size) >= 0)
+    if (av_ac3_parse_header((uint8_t const *)data, len, &bitstream_id, &frame_size) >= 0)
       return bitstream_id <= 10 ? "ac3" : "eac3";
   }
 #endif
@@ -888,8 +855,7 @@ sox_format_t * lsx_open_read_with_codec_options(
     char               const * filetype,
     char               const * codec_options)
 {
-  return open_read(path, NULL, (size_t)0, signal, encoding, filetype,
-      codec_options);
+  return open_read(path, NULL, (size_t)0, signal, encoding, filetype, codec_options);
 }
 
 sox_format_t * sox_open_mem_read(
@@ -1156,8 +1122,7 @@ static sox_format_t * open_write(
     lsx_fail("codec options are unsupported for file type `%s'", filetype);
     goto error;
   }
-  if (channel_layout &&
-      !(ft->handler.flags & SOX_FILE_CHANNEL_LAYOUT)) {
+  if (channel_layout && !(ft->handler.flags & SOX_FILE_CHANNEL_LAYOUT)) {
     lsx_fail("channel layouts are unsupported for file type `%s'", filetype);
     goto error;
   }
@@ -1291,8 +1256,7 @@ sox_format_t * sox_open_mem_write(
     char               const * filetype,
     sox_oob_t          const * oob)
 {
-  return open_write("", buffer, buffer_size, NULL, NULL, signal, encoding,
-      filetype, oob, NULL, NULL, NULL);
+  return open_write("", buffer, buffer_size, NULL, NULL, signal, encoding, filetype, oob, NULL, NULL, NULL);
 }
 
 sox_format_t * sox_open_memstream_write(
@@ -1334,8 +1298,7 @@ size_t sox_write(sox_format_t * ft, const sox_sample_t *buf, size_t len)
   return actual;
 }
 
-size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf,
-                            size_t len)
+size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
   size_t actual;
   size_t channels = ft->signal.channels;
@@ -1360,20 +1323,17 @@ size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf,
     return 0;
 
   for (i = 0; i < actual; i += channels)
-    ft->olength +=
-        SOX_DSD_PACKED_VALID_BITS(buf[i]) * channels;
+    ft->olength += SOX_DSD_PACKED_VALID_BITS(buf[i]) * channels;
 
   return actual;
 }
 
-size_t sox_write_packed_dsd_words(sox_format_t *ft,
-                                  const sox_sample_t *buf, size_t len)
+size_t sox_write_packed_dsd_words(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
   size_t actual;
   size_t channels = ft->signal.channels;
 
-  if (!ft->write_packed_dsd_words ||
-      !channels || len % channels)
+  if (!ft->write_packed_dsd_words || !channels || len % channels)
     return 0;
   actual = (*ft->write_packed_dsd_words)(ft, buf, len);
   if (actual > len || actual % channels)

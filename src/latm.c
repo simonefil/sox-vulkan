@@ -27,19 +27,14 @@ typedef struct {
   unsigned config_counter;
 } priv_t;
 
-static int copy_bits(
-    lsx_bit_writer_t * writer,
-    uint8_t const * source,
-    size_t count)
+static int copy_bits(lsx_bit_writer_t * writer, uint8_t const * source, size_t count)
 {
   size_t i;
 
-  if (writer->position > writer->size_bits ||
-      count > writer->size_bits - writer->position)
+  if (writer->position > writer->size_bits || count > writer->size_bits - writer->position)
     return SOX_EOF;
   for (i = 0; i < count; ++i) {
-    uint32_t bit =
-        (source[i / 8] >> (7 - i % 8)) & 1;
+    uint32_t bit = (source[i / 8] >> (7 - i % 8)) & 1;
 
     if (lsx_bit_write(writer, 1, bit) != SOX_SUCCESS)
       return SOX_EOF;
@@ -47,9 +42,7 @@ static int copy_bits(
   return SOX_SUCCESS;
 }
 
-static int write_latm_value(
-    lsx_bit_writer_t * writer,
-    uint32_t value)
+static int write_latm_value(lsx_bit_writer_t * writer, uint32_t value)
 {
   unsigned bytes = 1;
   unsigned i;
@@ -63,16 +56,12 @@ static int write_latm_value(
   if (lsx_bit_write(writer, 2, bytes - 1) != SOX_SUCCESS)
     return SOX_EOF;
   for (i = bytes; i; --i)
-    if (lsx_bit_write(writer, 8,
-          value >> ((i - 1) * 8)) != SOX_SUCCESS)
+    if (lsx_bit_write(writer, 8, value >> ((i - 1) * 8)) != SOX_SUCCESS)
       return SOX_EOF;
   return SOX_SUCCESS;
 }
 
-static int audio_object_type(
-    uint8_t const * config,
-    size_t config_size,
-    uint32_t * object_type)
+static int audio_object_type(uint8_t const * config, size_t config_size, uint32_t * object_type)
 {
   uint32_t value;
 
@@ -82,8 +71,7 @@ static int audio_object_type(
   if (value == 31) {
     if (config_size < 2)
       return SOX_EOF;
-    value = 32 + (((uint32_t)config[0] & 7) << 3) +
-        (config[1] >> 5);
+    value = 32 + (((uint32_t)config[0] & 7) << 3) + (config[1] >> 5);
   }
   *object_type = value;
   return SOX_SUCCESS;
@@ -91,29 +79,22 @@ static int audio_object_type(
 
 static sox_bool supported_object_type(uint32_t object_type)
 {
-  return object_type == 2 ||
-      object_type == 5 ||
-      object_type == 29;
+  return object_type == 2 || object_type == 5 || object_type == 29;
 }
 
-static int read_latm_packet(
-    sox_format_t * ft,
-    AVPacket * packet)
+static int read_latm_packet(sox_format_t * ft, AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
   uint32_t object_type;
   size_t packet_size;
   int config;
-  int result = lsx_loas_read_packet(ft, p->packet,
-      sizeof(p->packet), &packet_size, sox_true, "AAC");
+  int result = lsx_loas_read_packet(ft, p->packet, sizeof(p->packet), &packet_size, sox_true, "AAC");
 
   if (result != 1)
     return result;
-  config = lsx_latm_config_object_type(
-      p->packet, packet_size, &object_type);
+  config = lsx_latm_config_object_type(p->packet, packet_size, &object_type);
   if (config == SOX_EOF) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Invalid or unsupported AAC LATM StreamMuxConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "Invalid or unsupported AAC LATM StreamMuxConfig");
     return SOX_EOF;
   }
   if (config == 1) {
@@ -126,15 +107,13 @@ static int read_latm_packet(
     p->configured = sox_true;
   }
   else if (!p->configured) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "AAC LATM stream starts without a StreamMuxConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "AAC LATM stream starts without a StreamMuxConfig");
     return SOX_EOF;
   }
 
   result = av_new_packet(packet, (int)packet_size);
   if (result < 0) {
-    lsx_fail_errno(ft, SOX_ENOMEM,
-        "Unable to allocate AAC LATM packet");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate AAC LATM packet");
     return SOX_EOF;
   }
   memcpy(packet->data, p->packet, packet_size);
@@ -145,19 +124,14 @@ static int prepare_latm_encoder(AVCodecContext * context)
 {
   /* Quad and 6.1 require a PCE.  Force one for 7.1 as well because channel
    * configuration 7 describes the different 7.1(wide) layout. */
-  if (context->ch_layout.nb_channels == 4 ||
-      context->ch_layout.nb_channels >= 7)
-    return av_opt_set_int(
-        context->priv_data, "aac_pce", 1, 0);
+  if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7)
+    return av_opt_set_int(context->priv_data, "aac_pce", 1, 0);
   return 0;
 }
 
-static int write_stream_mux_config(
-    lsx_bit_writer_t * writer,
-    AVCodecContext const * context)
+static int write_stream_mux_config(lsx_bit_writer_t * writer, AVCodecContext const * context)
 {
-  uint32_t asc_bits =
-      (uint32_t)context->extradata_size * 8;
+  uint32_t asc_bits = (uint32_t)context->extradata_size * 8;
 
   /* audioMuxVersion 1 makes the AudioSpecificConfig length explicit, so
    * the complete encoder configuration, including any PCE, is preserved. */
@@ -178,10 +152,7 @@ static int write_stream_mux_config(
   return SOX_SUCCESS;
 }
 
-static int write_latm_packet(
-    sox_format_t * ft,
-    AVCodecContext const * context,
-    AVPacket const * packet)
+static int write_latm_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
   lsx_bit_writer_t writer;
@@ -199,19 +170,15 @@ static int write_latm_packet(
       audio_object_type(context->extradata,
           (size_t)context->extradata_size,
           &object_type) != SOX_SUCCESS) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "AAC encoder did not provide a valid AudioSpecificConfig");
+    lsx_fail_errno(ft, SOX_EHDR, "AAC encoder did not provide a valid AudioSpecificConfig");
     return SOX_EOF;
   }
   if (object_type != 2) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "AAC LATM encoding supports AAC-LC only");
+    lsx_fail_errno(ft, SOX_EFMT, "AAC LATM encoding supports AAC-LC only");
     return SOX_EOF;
   }
-  if (packet->size < 0 ||
-      (size_t)packet->size > LSX_LOAS_MAX_FRAME_SIZE) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "AAC frame is too large for the 13-bit LOAS frame length");
+  if (packet->size < 0 || (size_t)packet->size > LSX_LOAS_MAX_FRAME_SIZE) {
+    lsx_fail_errno(ft, SOX_EFMT, "AAC frame is too large for the 13-bit LOAS frame length");
     return SOX_EOF;
   }
 
@@ -223,8 +190,7 @@ static int write_latm_packet(
   if (lsx_bit_write(&writer, 1, !write_config) != SOX_SUCCESS ||
       (write_config &&
        write_stream_mux_config(&writer, context) != SOX_SUCCESS)) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "AAC StreamMuxConfig is too large for LOAS/LATM");
+    lsx_fail_errno(ft, SOX_EFMT, "AAC StreamMuxConfig is too large for LOAS/LATM");
     return SOX_EOF;
   }
 
@@ -245,8 +211,7 @@ static int write_latm_packet(
             ((size_t)packet->size - 1) * 8) != SOX_SUCCESS)
       goto too_large;
   }
-  else if (copy_bits(&writer, packet->data,
-        (size_t)packet->size * 8) != SOX_SUCCESS)
+  else if (copy_bits(&writer, packet->data, (size_t)packet->size * 8) != SOX_SUCCESS)
     goto too_large;
 
   body_size = (writer.position + 7) / 8;
@@ -258,13 +223,11 @@ static int write_latm_packet(
   packet_size = LSX_LOAS_HEADER_SIZE + body_size;
   if (lsx_writebuf(ft, p->packet, packet_size) != packet_size)
     return SOX_EOF;
-  p->config_counter =
-      (p->config_counter + 1) % LATM_CONFIG_INTERVAL;
+  p->config_counter = (p->config_counter + 1) % LATM_CONFIG_INTERVAL;
   return SOX_SUCCESS;
 
 too_large:
-  lsx_fail_errno(ft, SOX_EFMT,
-      "AAC packet is too large for the 13-bit LOAS frame length");
+  lsx_fail_errno(ft, SOX_EFMT, "AAC packet is too large for the 13-bit LOAS frame length");
   return SOX_EOF;
 }
 
@@ -322,14 +285,10 @@ static int startread(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  return lsx_ffmpeg_codec_startread(
-      ft, &p->codec, &read_definition);
+  return lsx_ffmpeg_codec_startread(ft, &p->codec, &read_definition);
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -347,14 +306,10 @@ static int startwrite(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  return lsx_ffmpeg_codec_startwrite(
-      ft, &p->codec, &write_definition);
+  return lsx_ffmpeg_codec_startwrite(ft, &p->codec, &write_definition);
 }
 
-static size_t write_samples(
-    sox_format_t * ft,
-    sox_sample_t const * samples,
-    size_t length)
+static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 

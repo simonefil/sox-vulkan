@@ -44,8 +44,7 @@ struct dsf {
 };
 
 static size_t dsf_write_packed(sox_format_t *, const sox_sample_t *, size_t);
-static size_t dsf_write_packed_words(sox_format_t *,
-	const sox_sample_t *, size_t);
+static size_t dsf_write_packed_words(sox_format_t *, const sox_sample_t *, size_t);
 
 #define TAG(a, b, c, d) ((a) | (b) << 8 | (c) << 16 | (d) << 24)
 
@@ -387,8 +386,7 @@ static uint8_t dsf_reverse_byte(uint8_t value)
 	return (uint8_t)(((value & 0xaa) >> 1) | ((value & 0x55) << 1));
 }
 
-static size_t dsf_write_packed(sox_format_t *ft,
-			       const sox_sample_t *buf, size_t len)
+static size_t dsf_write_packed(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
 	struct dsf *dsf = ft->priv;
 	unsigned channels = dsf->chan_num;
@@ -404,15 +402,12 @@ static size_t dsf_write_packed(sox_format_t *ft,
 			break;
 
 		if (valid == 8 && !dsf->bit_pos) {
-			size_t groups = min(
-				len / channels,
-				dsf->block_size - dsf->block_pos);
+			size_t groups = min(len / channels, dsf->block_size - dsf->block_pos);
 			size_t group;
 
 			for (group = 0; group < groups; ++group) {
 				for (i = 0; i < channels; ++i) {
-					sox_sample_t sample =
-						buf[group * channels + i];
+					sox_sample_t sample = buf[group * channels + i];
 					if (SOX_DSD_PACKED_VALID_BITS(sample) != valid) {
 						dsf->block_pos += group;
 						dsf->scount += group * 8;
@@ -436,8 +431,7 @@ static size_t dsf_write_packed(sox_format_t *ft,
 		} else {
 			for (i = 0; i < channels; ++i) {
 				uint8_t data = SOX_DSD_PACKED_DATA(buf[i]);
-				uint8_t *target = dsf->block +
-					i * dsf->block_size + dsf->block_pos;
+				uint8_t *target = dsf->block + i * dsf->block_size + dsf->block_pos;
 
 				if (SOX_DSD_PACKED_VALID_BITS(buf[i]) != valid)
 					return consumed;
@@ -463,31 +457,25 @@ static size_t dsf_write_packed(sox_format_t *ft,
 	return consumed;
 }
 
-static size_t dsf_write_packed_words(sox_format_t *ft,
-	const sox_sample_t *buf, size_t len)
+static size_t dsf_write_packed_words(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
 	struct dsf *dsf = ft->priv;
 	unsigned channels = dsf->chan_num;
 	size_t total_groups;
 	size_t consumed_groups = 0;
 
-	if (dsf->bit_pos || dsf->block_pos % 4 ||
-	    !channels || len % channels)
+	if (dsf->bit_pos || dsf->block_pos % 4 || !channels || len % channels)
 		return 0;
 	total_groups = len / channels;
 	while (consumed_groups < total_groups) {
-		size_t groups = min(
-			total_groups - consumed_groups,
-			(dsf->block_size - dsf->block_pos) / 4);
+		size_t groups = min(total_groups - consumed_groups, (dsf->block_size - dsf->block_pos) / 4);
 		unsigned channel;
 
 		if (!groups)
 			break;
 		for (channel = 0; channel < channels; ++channel) {
-			uint8_t *target = dsf->block +
-				channel * dsf->block_size + dsf->block_pos;
-			const sox_sample_t *source = buf +
-				channel * total_groups + consumed_groups;
+			uint8_t *target = dsf->block + channel * dsf->block_size + dsf->block_pos;
+			const sox_sample_t *source = buf + channel * total_groups + consumed_groups;
 
 			/* DSF stores the earliest DSD bit in bit zero of each byte. */
 			if (MACHINE_IS_LITTLEENDIAN)

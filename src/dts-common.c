@@ -89,8 +89,7 @@ static char const * profile_name(int profile)
 static void warn_spatial_metadata(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
-  AVCodecContext const * context =
-      lsx_ffmpeg_codec_context(p->codec);
+  AVCodecContext const * context = lsx_ffmpeg_codec_context(p->codec);
   char const * name;
 
   if (p->spatial_metadata_warning_shown || context == NULL)
@@ -107,17 +106,14 @@ static void warn_spatial_metadata(sox_format_t * ft)
   p->spatial_metadata_warning_shown = sox_true;
 }
 
-static int startread_common(
-    sox_format_t * ft,
-    sox_bool require_dtshd)
+static int startread_common(sox_format_t * ft, sox_bool require_dtshd)
 {
   priv_t * p = (priv_t *)ft->priv;
   AVCodecContext const * context;
   int result;
 
   p->spatial_metadata_warning_shown = sox_false;
-  result = lsx_ffmpeg_codec_startread(
-      ft, &p->codec, &definition);
+  result = lsx_ffmpeg_codec_startread(ft, &p->codec, &definition);
   if (result != SOX_SUCCESS)
     return result;
   context = lsx_ffmpeg_codec_context(p->codec);
@@ -125,18 +121,14 @@ static int startread_common(
       (context->bits_per_raw_sample == 16 ||
        context->bits_per_raw_sample == 20 ||
        context->bits_per_raw_sample == 24))
-    ft->signal.precision = ft->encoding.bits_per_sample =
-        (unsigned)context->bits_per_raw_sample;
+    ft->signal.precision = ft->encoding.bits_per_sample = (unsigned)context->bits_per_raw_sample;
   else
     ft->signal.precision = ft->encoding.bits_per_sample = 16;
-  if (require_dtshd &&
-      (context == NULL || !is_dtshd_profile(context->profile))) {
-    char const * name = context == NULL ?
-        "unknown DTS" : profile_name(context->profile);
+  if (require_dtshd && (context == NULL || !is_dtshd_profile(context->profile))) {
+    char const * name = context == NULL ? "unknown DTS" : profile_name(context->profile);
 
     lsx_ffmpeg_codec_stopread(&p->codec);
-    lsx_fail_errno(ft, SOX_EFMT,
-        "The input is %s rather than DTS-HD", name);
+    lsx_fail_errno(ft, SOX_EFMT, "The input is %s rather than DTS-HD", name);
     return SOX_EOF;
   }
   warn_spatial_metadata(ft);
@@ -153,14 +145,10 @@ static int startread_dtshd(sox_format_t * ft)
   return startread_common(ft, sox_true);
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
-  size_t result =
-      lsx_ffmpeg_codec_read(ft, p->codec, samples, length);
+  size_t result = lsx_ffmpeg_codec_read(ft, p->codec, samples, length);
 
   warn_spatial_metadata(ft);
   return result;
@@ -179,16 +167,13 @@ static void warn_encoded_layout(sox_format_t * ft)
     return;
   switch (ft->signal.channels) {
     case 4:
-      lsx_warn("Encoding 4-channel DTS as quad(side) without remixing; "
-          "channel order is FL FR SL SR");
+      lsx_warn("Encoding 4-channel DTS as quad(side) without remixing; " "channel order is FL FR SL SR");
       break;
     case 5:
-      lsx_warn("Encoding 5-channel DTS as 5.0(side) without remixing; "
-          "channel order is FL FR FC SL SR");
+      lsx_warn("Encoding 5-channel DTS as 5.0(side) without remixing; " "channel order is FL FR FC SL SR");
       break;
     case 6:
-      lsx_warn("Encoding 6-channel DTS as 5.1(side) without remixing; "
-          "channel order is FL FR FC LFE SL SR");
+      lsx_warn("Encoding 6-channel DTS as 5.1(side) without remixing; " "channel order is FL FR FC LFE SL SR");
       break;
     default:
       break;
@@ -218,8 +203,7 @@ static int startwrite(sox_format_t * ft)
     }
     ft->channel_layout = default_layout;
   }
-  result = lsx_ffmpeg_codec_startwrite(
-      ft, &p->codec, &definition);
+  result = lsx_ffmpeg_codec_startwrite(ft, &p->codec, &definition);
   ft->channel_layout = requested_layout;
 
   if (result == SOX_SUCCESS)
@@ -227,10 +211,7 @@ static int startwrite(sox_format_t * ft)
   return result;
 }
 
-static size_t write_samples(
-    sox_format_t * ft,
-    sox_sample_t const * samples,
-    size_t length)
+static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 

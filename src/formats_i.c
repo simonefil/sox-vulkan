@@ -105,8 +105,7 @@ size_t lsx_readbuf(sox_format_t * ft, void *buf, size_t len)
   }
   ret = replay_count;
   if (ret < len)
-    ret += fread((unsigned char *)buf + ret,
-        (size_t)1, len - ret, (FILE*)ft->fp);
+    ret += fread((unsigned char *)buf + ret, (size_t)1, len - ret, (FILE*)ft->fp);
   if (ret != len && ferror((FILE*)ft->fp))
     lsx_fail_errno(ft, errno, "lsx_readbuf");
   ft->tell_off += ret;
@@ -169,8 +168,7 @@ off_t lsx_tell(sox_format_t * ft)
 
 int lsx_eof(sox_format_t * ft)
 {
-  return ft->read_replay_pos == ft->read_replay_size &&
-      feof((FILE*)ft->fp);
+  return ft->read_replay_pos == ft->read_replay_size && feof((FILE*)ft->fp);
 }
 
 int lsx_error(sox_format_t * ft)
@@ -192,8 +190,7 @@ void lsx_clearerr(sox_format_t * ft)
 
 int lsx_unreadb(sox_format_t * ft, unsigned b)
 {
-  if (ft->read_replay_pos < ft->read_replay_size &&
-      ft->read_replay_pos > 0) {
+  if (ft->read_replay_pos < ft->read_replay_size && ft->read_replay_pos > 0) {
     ft->read_replay_buffer[--ft->read_replay_pos] = (unsigned char)b;
     if (ft->tell_off)
       --ft->tell_off;

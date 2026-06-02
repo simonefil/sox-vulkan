@@ -4,12 +4,7 @@
 
 #ifdef HAVE_FFMPEG_CODECS
 
-static int read_exact(
-    sox_format_t * ft,
-    uint8_t * data,
-    size_t size,
-    sox_bool clean_eof,
-    char const * codec_name)
+static int read_exact(sox_format_t * ft, uint8_t * data, size_t size, sox_bool clean_eof, char const * codec_name)
 {
   size_t done = 0;
 
@@ -19,8 +14,7 @@ static int read_exact(
     if (count == 0) {
       if (done == 0 && clean_eof)
         return 0;
-      lsx_fail_errno(ft, SOX_EHDR,
-          "Truncated %s LOAS frame", codec_name);
+      lsx_fail_errno(ft, SOX_EHDR, "Truncated %s LOAS frame", codec_name);
       return SOX_EOF;
     }
     done += count;
@@ -28,9 +22,7 @@ static int read_exact(
   return 1;
 }
 
-int lsx_latm_read_value(
-    lsx_bit_reader_t * reader,
-    uint32_t * value)
+int lsx_latm_read_value(lsx_bit_reader_t * reader, uint32_t * value)
 {
   uint32_t bytes_for_value;
   uint32_t result = 0;
@@ -60,33 +52,25 @@ int lsx_loas_read_packet(
   int result;
 
   if (capacity < LSX_LOAS_MAX_PACKET_SIZE) {
-    lsx_fail_errno(ft, SOX_EINVAL,
-        "Internal LOAS packet buffer is too small");
+    lsx_fail_errno(ft, SOX_EINVAL, "Internal LOAS packet buffer is too small");
     return SOX_EOF;
   }
-  result = read_exact(ft, packet, LSX_LOAS_HEADER_SIZE,
-      clean_eof, codec_name);
+  result = read_exact(ft, packet, LSX_LOAS_HEADER_SIZE, clean_eof, codec_name);
   if (result != 1)
     return result;
   if (packet[0] != 0x56 || (packet[1] & 0xe0) != 0xe0) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Invalid %s LOAS sync word", codec_name);
+    lsx_fail_errno(ft, SOX_EHDR, "Invalid %s LOAS sync word", codec_name);
     return SOX_EOF;
   }
 
   frame_size = ((size_t)(packet[1] & 0x1f) << 8) | packet[2];
-  if (frame_size == 0 ||
-      read_exact(ft, packet + LSX_LOAS_HEADER_SIZE,
-          frame_size, sox_false, codec_name) != 1)
+  if (frame_size == 0 || read_exact(ft, packet + LSX_LOAS_HEADER_SIZE, frame_size, sox_false, codec_name) != 1)
     return SOX_EOF;
   *packet_size = LSX_LOAS_HEADER_SIZE + frame_size;
   return 1;
 }
 
-int lsx_latm_config_object_type(
-    uint8_t const * packet,
-    size_t packet_size,
-    uint32_t * object_type)
+int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint32_t * object_type)
 {
   lsx_bit_reader_t reader;
   size_t declared_size;
@@ -96,14 +80,12 @@ int lsx_latm_config_object_type(
   uint32_t asc_bits = 0;
   size_t asc_start;
 
-  if (packet_size < LSX_LOAS_HEADER_SIZE ||
-      packet[0] != 0x56 || (packet[1] & 0xe0) != 0xe0)
+  if (packet_size < LSX_LOAS_HEADER_SIZE || packet[0] != 0x56 || (packet[1] & 0xe0) != 0xe0)
     return SOX_EOF;
   declared_size = ((size_t)(packet[1] & 0x1f) << 8) | packet[2];
   if (declared_size == 0)
     return SOX_EOF;
-  available_size = min(
-      declared_size, packet_size - LSX_LOAS_HEADER_SIZE);
+  available_size = min(declared_size, packet_size - LSX_LOAS_HEADER_SIZE);
   reader.data = packet + LSX_LOAS_HEADER_SIZE;
   reader.size_bits = available_size * 8;
   reader.position = 0;
@@ -124,9 +106,7 @@ int lsx_latm_config_object_type(
       lsx_bit_read(&reader, 4, &value) != SOX_SUCCESS || value != 0 ||
       lsx_bit_read(&reader, 3, &value) != SOX_SUCCESS || value != 0)
     return SOX_EOF;
-  if (audio_mux_version &&
-      (lsx_latm_read_value(&reader, &asc_bits) != SOX_SUCCESS ||
-       asc_bits < 5))
+  if (audio_mux_version && (lsx_latm_read_value(&reader, &asc_bits) != SOX_SUCCESS || asc_bits < 5))
     return SOX_EOF;
 
   asc_start = reader.position;

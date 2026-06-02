@@ -22,13 +22,8 @@ int lsx_loas_read_packet(
 
 /* Read a LATM variable-length integer: a two-bit count of the bytes that
  * follow, then that many bytes, most significant first. */
-int lsx_latm_read_value(
-    lsx_bit_reader_t * reader,
-    uint32_t * value);
+int lsx_latm_read_value(lsx_bit_reader_t * reader, uint32_t * value);
 
-int lsx_latm_config_object_type(
-    uint8_t const * packet,
-    size_t packet_size,
-    uint32_t * object_type);
+int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint32_t * object_type);
 
 #endif

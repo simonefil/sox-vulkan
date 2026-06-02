@@ -21,9 +21,7 @@ typedef struct {
   lsx_ffmpeg_container_t * container;
 } priv_t;
 
-static int select_alac_layout(
-    unsigned channels,
-    AVChannelLayout * layout)
+static int select_alac_layout(unsigned channels, AVChannelLayout * layout)
 {
   switch (channels) {
     case 1:
@@ -56,16 +54,13 @@ static int select_alac_layout(
   }
 }
 
-static void warn_alac_layout(
-    sox_format_t * ft,
-    char const * operation)
+static void warn_alac_layout(sox_format_t * ft, char const * operation)
 {
   if (ft->channel_layout != NULL)
     return;
   switch (ft->signal.channels) {
     case 4:
-      lsx_warn("%s 4-channel ALAC as MPEG 4.0 B without remixing; "
-          "channel order is FL FR FC BC", operation);
+      lsx_warn("%s 4-channel ALAC as MPEG 4.0 B without remixing; " "channel order is FL FR FC BC", operation);
       break;
     case 7:
       lsx_warn("%s 7-channel ALAC as Apple AAC 6.1 without remixing; "
@@ -80,40 +75,29 @@ static void warn_alac_layout(
   }
 }
 
-static int prepare_alac_decoder(
-    sox_format_t * ft,
-    AVCodecContext * context)
+static int prepare_alac_decoder(sox_format_t * ft, AVCodecContext * context)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  return lsx_ffmpeg_container_startread(
-      ft, &p->container, "mov", AV_CODEC_ID_ALAC, context);
+  return lsx_ffmpeg_container_startread(ft, &p->container, "mov", AV_CODEC_ID_ALAC, context);
 }
 
-static int read_alac_packet(
-    sox_format_t * ft,
-    AVPacket * packet)
+static int read_alac_packet(sox_format_t * ft, AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  return lsx_ffmpeg_container_read_packet(
-      ft, p->container, packet);
+  return lsx_ffmpeg_container_read_packet(ft, p->container, packet);
 }
 
-static int write_alac_packet(
-    sox_format_t * ft,
-    AVCodecContext const * context,
-    AVPacket const * packet)
+static int write_alac_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
 
   if (p->container == NULL) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "M4A output container is unavailable");
+    lsx_fail_errno(ft, SOX_EFMT, "M4A output container is unavailable");
     return SOX_EOF;
   }
-  return lsx_ffmpeg_container_write_packet(
-      ft, p->container, context, packet);
+  return lsx_ffmpeg_container_write_packet(ft, p->container, context, packet);
 }
 
 static lsx_ffmpeg_codec_definition_t const definition = {
@@ -144,18 +128,14 @@ static lsx_ffmpeg_codec_definition_t const definition = {
 static int startread(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
-  int result = lsx_ffmpeg_codec_startread(
-      ft, &p->codec, &definition);
+  int result = lsx_ffmpeg_codec_startread(ft, &p->codec, &definition);
 
   if (result != SOX_SUCCESS)
     lsx_ffmpeg_container_stopread(&p->container);
   return result;
 }
 
-static size_t read_samples(
-    sox_format_t * ft,
-    sox_sample_t * samples,
-    size_t length)
+static size_t read_samples(sox_format_t * ft, sox_sample_t * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -177,20 +157,16 @@ static int startwrite(sox_format_t * ft)
   AVCodecContext const * context;
   int result;
 
-  if (ft->encoding.bits_per_sample != 16 &&
-      ft->encoding.bits_per_sample != 24) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "ALAC encoding supports 16-bit or 24-bit PCM");
+  if (ft->encoding.bits_per_sample != 16 && ft->encoding.bits_per_sample != 24) {
+    lsx_fail_errno(ft, SOX_EFMT, "ALAC encoding supports 16-bit or 24-bit PCM");
     return SOX_EOF;
   }
-  result = lsx_ffmpeg_codec_startwrite(
-      ft, &p->codec, &definition);
+  result = lsx_ffmpeg_codec_startwrite(ft, &p->codec, &definition);
   if (result != SOX_SUCCESS)
     return result;
   warn_alac_layout(ft, "Encoding");
   context = lsx_ffmpeg_codec_context(p->codec);
-  result = lsx_ffmpeg_container_startwrite(
-      ft, &p->container, "ipod", context);
+  result = lsx_ffmpeg_container_startwrite(ft, &p->container, "ipod", context);
   if (result != SOX_SUCCESS) {
     lsx_ffmpeg_codec_stopwrite(ft, &p->codec);
     lsx_ffmpeg_container_stopwrite(ft, &p->container);
@@ -198,10 +174,7 @@ static int startwrite(sox_format_t * ft)
   return result;
 }
 
-static size_t write_samples(
-    sox_format_t * ft,
-    sox_sample_t const * samples,
-    size_t length)
+static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, size_t length)
 {
   priv_t * p = (priv_t *)ft->priv;
 
@@ -211,13 +184,10 @@ static size_t write_samples(
 static int stopwrite(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
-  int codec_result =
-      lsx_ffmpeg_codec_stopwrite(ft, &p->codec);
-  int container_result =
-      lsx_ffmpeg_container_stopwrite(ft, &p->container);
+  int codec_result = lsx_ffmpeg_codec_stopwrite(ft, &p->codec);
+  int container_result = lsx_ffmpeg_container_stopwrite(ft, &p->container);
 
-  return codec_result != SOX_SUCCESS ?
-      codec_result : container_result;
+  return codec_result != SOX_SUCCESS ? codec_result : container_result;
 }
 
 LSX_FORMAT_HANDLER(alac)

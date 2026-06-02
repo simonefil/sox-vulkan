@@ -21,45 +21,35 @@
 #include <stdlib.h>
 #include <string.h>
 
-int lsx_bit_read(
-    lsx_bit_reader_t * reader,
-    unsigned count,
-    uint32_t * value)
+int lsx_bit_read(lsx_bit_reader_t * reader, unsigned count, uint32_t * value)
 {
   uint32_t result = 0;
   unsigned i;
 
-  if (count > 32 || reader->position > reader->size_bits ||
-      count > reader->size_bits - reader->position)
+  if (count > 32 || reader->position > reader->size_bits || count > reader->size_bits - reader->position)
     return SOX_EOF;
   for (i = 0; i < count; ++i) {
     size_t position = reader->position++;
 
-    result = (result << 1) |
-        ((reader->data[position / 8] >> (7 - position % 8)) & 1);
+    result = (result << 1) | ((reader->data[position / 8] >> (7 - position % 8)) & 1);
   }
   if (value != NULL)
     *value = result;
   return SOX_SUCCESS;
 }
 
-int lsx_bit_write(
-    lsx_bit_writer_t * writer,
-    unsigned count,
-    uint32_t value)
+int lsx_bit_write(lsx_bit_writer_t * writer, unsigned count, uint32_t value)
 {
   unsigned i;
 
-  if (count > 32 || writer->position > writer->size_bits ||
-      count > writer->size_bits - writer->position)
+  if (count > 32 || writer->position > writer->size_bits || count > writer->size_bits - writer->position)
     return SOX_EOF;
   for (i = 0; i < count; ++i) {
     size_t position = writer->position++;
     uint32_t bit = (value >> (count - i - 1)) & 1;
 
     if (bit)
-      writer->data[position / 8] |=
-          (uint8_t)(1U << (7 - position % 8));
+      writer->data[position / 8] |= (uint8_t)(1U << (7 - position % 8));
   }
   return SOX_SUCCESS;
 }
@@ -100,11 +90,7 @@ struct lsx_ffmpeg_codec_t {
   sox_bool write_failed;
 };
 
-static int fail_av(
-    sox_format_t * ft,
-    int sox_error,
-    char const * operation,
-    int av_error)
+static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int av_error)
 {
   char message[AV_ERROR_MAX_STRING_SIZE];
 
@@ -133,10 +119,7 @@ static sox_bool is_reserved_codec_option(char const * key)
   return sox_false;
 }
 
-static int open_codec(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state,
-    sox_bool encoding)
+static int open_codec(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool encoding)
 {
   AVDictionary * options = NULL;
   AVDictionaryEntry const * entry;
@@ -146,9 +129,7 @@ static int open_codec(
     result = av_dict_parse_string(&options, ft->codec_options, "=", ":", 0);
     if (result < 0) {
       av_dict_free(&options);
-      return fail_av(ft, SOX_EINVAL,
-          "Unable to parse --ffmpeg-opts (expected key=value:key=value)",
-          result);
+      return fail_av(ft, SOX_EINVAL, "Unable to parse --ffmpeg-opts (expected key=value:key=value)", result);
     }
 
     entry = NULL;
@@ -162,14 +143,10 @@ static int open_codec(
       }
   }
 
-  result = avcodec_open2(state->context, state->codec,
-      options != NULL ? &options : NULL);
+  result = avcodec_open2(state->context, state->codec, options != NULL ? &options : NULL);
   if (result < 0) {
     av_dict_free(&options);
-    return fail_av(ft, SOX_EFMT,
-        encoding ? "Unable to open FFmpeg encoder" :
-            "Unable to open FFmpeg decoder",
-        result);
+    return fail_av(ft, SOX_EFMT, encoding ? "Unable to open FFmpeg encoder" : "Unable to open FFmpeg decoder", result);
   }
 
   entry = av_dict_iterate(options, NULL);
@@ -213,12 +190,9 @@ static int allocate_state(
   lsx_ffmpeg_codec_t * p = lsx_calloc(1, sizeof(*p));
 
   p->definition = definition;
-  p->codec = encoding ?
-      avcodec_find_encoder(definition->codec_id) :
-      avcodec_find_decoder(definition->codec_id);
+  p->codec = encoding ? avcodec_find_encoder(definition->codec_id) : avcodec_find_decoder(definition->codec_id);
   if (p->codec == NULL) {
-    lsx_fail_errno(ft, SOX_EFMT, "FFmpeg %s for %s is unavailable",
-        encoding ? "encoder" : "decoder", definition->name);
+    lsx_fail_errno(ft, SOX_EFMT, "FFmpeg %s for %s is unavailable", encoding ? "encoder" : "decoder", definition->name);
     destroy_state(&p);
     return SOX_EOF;
   }
@@ -268,10 +242,7 @@ static int canonical_layout(unsigned channels, AVChannelLayout * layout)
   }
 }
 
-static int select_layout(
-    lsx_ffmpeg_codec_definition_t const * definition,
-    unsigned channels,
-    AVChannelLayout * layout)
+static int select_layout(lsx_ffmpeg_codec_definition_t const * definition, unsigned channels, AVChannelLayout * layout)
 {
   return definition->select_layout != NULL ?
       definition->select_layout(channels, layout) :
@@ -310,14 +281,10 @@ static char const * const aac_layout_names[] = {
 
 static char const * const * codec_layout_names(enum AVCodecID codec_id)
 {
-  return codec_id == AV_CODEC_ID_AAC ?
-      aac_layout_names : NULL;
+  return codec_id == AV_CODEC_ID_AAC ? aac_layout_names : NULL;
 }
 
-static int format_encoder(
-    char const * format_name,
-    enum AVCodecID * codec_id,
-    unsigned * max_channels)
+static int format_encoder(char const * format_name, enum AVCodecID * codec_id, unsigned * max_channels)
 {
   if (!strcmp(format_name, "aac") ||
       !strcmp(format_name, "adts") ||
@@ -332,8 +299,7 @@ static int format_encoder(
     *max_channels = 6;
     return 1;
   }
-  if (!strcmp(format_name, "eac3") ||
-      !strcmp(format_name, "ec3")) {
+  if (!strcmp(format_name, "eac3") || !strcmp(format_name, "ec3")) {
     *codec_id = AV_CODEC_ID_EAC3;
     *max_channels = 6;
     return 1;
@@ -348,8 +314,7 @@ static int format_encoder(
     *max_channels = 6;
     return 1;
   }
-  if (!strcmp(format_name, "truehd") ||
-      !strcmp(format_name, "thd")) {
+  if (!strcmp(format_name, "truehd") || !strcmp(format_name, "thd")) {
     *codec_id = AV_CODEC_ID_TRUEHD;
     *max_channels = 6;
     return 1;
@@ -367,8 +332,7 @@ static void print_channel_order(AVChannelLayout const * layout)
   int i;
 
   for (i = 0; i < layout->nb_channels; ++i) {
-    enum AVChannel channel =
-        av_channel_layout_channel_from_index(layout, (unsigned)i);
+    enum AVChannel channel = av_channel_layout_channel_from_index(layout, (unsigned)i);
     char name[16];
 
     if (av_channel_name(name, sizeof(name), channel) < 0)
@@ -381,8 +345,7 @@ static void print_layout(AVChannelLayout const * layout)
 {
   char description[128];
 
-  if (av_channel_layout_describe(
-        layout, description, sizeof(description)) < 0)
+  if (av_channel_layout_describe(layout, description, sizeof(description)) < 0)
     strcpy(description, "unknown");
   printf("  %-18s ", description);
   print_channel_order(layout);
@@ -406,8 +369,7 @@ void lsx_ffmpeg_codec_print_format_layouts(char const * format_name)
   codec = avcodec_find_encoder(codec_id);
   if (codec == NULL)
     return;
-  result = avcodec_get_supported_config(NULL, codec,
-      AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, &configurations, &count);
+  result = avcodec_get_supported_config(NULL, codec, AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, &configurations, &count);
   if (result < 0)
     return;
 
@@ -432,37 +394,28 @@ void lsx_ffmpeg_codec_print_format_layouts(char const * format_name)
 
   layouts = configurations;
   for (i = 0; i < count; ++i) {
-    if (layouts[i].nb_channels < 1 ||
-        (unsigned)layouts[i].nb_channels > max_channels)
+    if (layouts[i].nb_channels < 1 || (unsigned)layouts[i].nb_channels > max_channels)
       continue;
     print_layout(&layouts[i]);
   }
 }
 
-static sox_bool is_supported_layout(
-    AVChannelLayout const * layout,
-    lsx_ffmpeg_codec_definition_t const * definition)
+static sox_bool is_supported_layout(AVChannelLayout const * layout, lsx_ffmpeg_codec_definition_t const * definition)
 {
   AVChannelLayout expected = {0};
 
-  if (!av_channel_layout_check(layout) ||
-      layout->nb_channels < 1)
+  if (!av_channel_layout_check(layout) || layout->nb_channels < 1)
     return sox_false;
   if (definition->select_layout != NULL)
     return select_layout(definition,
         (unsigned)layout->nb_channels, &expected) >= 0 &&
         av_channel_layout_compare(layout, &expected) == 0;
   if (layout->order == AV_CHANNEL_ORDER_UNSPEC)
-    return layout->nb_channels >= 1 &&
-        (layout->nb_channels <= 6 ||
-         definition->accept_unspecified_decode_layout);
+    return layout->nb_channels >= 1 && (layout->nb_channels <= 6 || definition->accept_unspecified_decode_layout);
   return sox_true;
 }
 
-static void warn_decoded_layout(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state,
-    AVChannelLayout const * layout)
+static void warn_decoded_layout(sox_format_t * ft, lsx_ffmpeg_codec_t * state, AVChannelLayout const * layout)
 {
   AVChannelLayout canonical = {0};
   char description[128];
@@ -481,8 +434,7 @@ static void warn_decoded_layout(
         (unsigned)layout->nb_channels, &canonical) < 0 ||
       av_channel_layout_compare(layout, &canonical) == 0)
     return;
-  if (av_channel_layout_describe(
-        layout, description, sizeof(description)) < 0)
+  if (av_channel_layout_describe(layout, description, sizeof(description)) < 0)
     strcpy(description, "unknown");
   lsx_warn("`%s': decoding %s channel layout `%s' without remixing; "
       "channel samples remain in FFmpeg decoder order",
@@ -490,20 +442,16 @@ static void warn_decoded_layout(
   state->layout_warning_shown = sox_true;
 }
 
-static int validate_decoded_frame(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state)
+static int validate_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   AVChannelLayout const * layout = &state->frame->ch_layout;
-  int rate = state->frame->sample_rate ?
-      state->frame->sample_rate : state->context->sample_rate;
+  int rate = state->frame->sample_rate ? state->frame->sample_rate : state->context->sample_rate;
   char description[128];
 
   if (state->definition->required_decode_profile != AV_PROFILE_UNKNOWN &&
       state->context->profile !=
           state->definition->required_decode_profile) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "The input is not %s audio", state->definition->name);
+    lsx_fail_errno(ft, SOX_EFMT, "The input is not %s audio", state->definition->name);
     return SOX_EOF;
   }
   if (layout->nb_channels == 0)
@@ -511,16 +459,13 @@ static int validate_decoded_frame(
   if (!is_supported_layout(layout, state->definition) ||
       (unsigned)layout->nb_channels >
           state->definition->max_decode_channels) {
-    if (av_channel_layout_describe(layout, description,
-          sizeof(description)) < 0)
+    if (av_channel_layout_describe(layout, description, sizeof(description)) < 0)
       strcpy(description, "unknown");
-    lsx_fail_errno(ft, SOX_EFMT, "Unsupported %s channel layout: %s",
-        state->definition->name, description);
+    lsx_fail_errno(ft, SOX_EFMT, "Unsupported %s channel layout: %s", state->definition->name, description);
     return SOX_EOF;
   }
   if (rate <= 0) {
-    lsx_fail_errno(ft, SOX_EHDR,
-        "Unable to determine %s sample rate", state->definition->name);
+    lsx_fail_errno(ft, SOX_EHDR, "Unable to determine %s sample rate", state->definition->name);
     return SOX_EOF;
   }
   if (state->decoded_channels &&
@@ -538,9 +483,7 @@ static int validate_decoded_frame(
   return SOX_SUCCESS;
 }
 
-static void warn_ignored_metadata(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state)
+static void warn_ignored_metadata(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   if (!state->ignored_metadata_warning_shown &&
       state->definition->ignored_metadata_name != NULL &&
@@ -553,11 +496,7 @@ static void warn_ignored_metadata(
   }
 }
 
-static void const * decoded_sample_address(
-    AVFrame const * frame,
-    int sample,
-    int channel,
-    unsigned channels)
+static void const * decoded_sample_address(AVFrame const * frame, int sample, int channel, unsigned channels)
 {
   enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
   int planar = av_sample_fmt_is_planar(format);
@@ -575,10 +514,8 @@ static sox_sample_t decoded_sample_to_sox(
     int channel,
     unsigned channels)
 {
-  enum AVSampleFormat format =
-      av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
-  void const * source =
-      decoded_sample_address(frame, sample, channel, channels);
+  enum AVSampleFormat format = av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
+  void const * source = decoded_sample_address(frame, sample, channel, channels);
 
   switch (format) {
     case AV_SAMPLE_FMT_U8:
@@ -594,8 +531,7 @@ static sox_sample_t decoded_sample_to_sox(
           ((uint64_t)*(int64_t const *)source >> 32);
     case AV_SAMPLE_FMT_FLT:
     case AV_SAMPLE_FMT_DBL: {
-      double value = format == AV_SAMPLE_FMT_FLT ?
-          *(float const *)source : *(double const *)source;
+      double value = format == AV_SAMPLE_FMT_FLT ? *(float const *)source : *(double const *)source;
       double scaled = value * 2147483648.;
 
       if (scaled <= -2147483648.5) {
@@ -629,9 +565,7 @@ static sox_bool supported_sample_format(enum AVSampleFormat format)
   }
 }
 
-static int store_decoded_frame(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state)
+static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   size_t required;
   int sample;
@@ -647,8 +581,7 @@ static int store_decoded_frame(
 
   required = (size_t)state->frame->nb_samples * state->decoded_channels;
   if (state->decoded_capacity < required) {
-    state->decoded = lsx_realloc(
-        state->decoded, required * sizeof(*state->decoded));
+    state->decoded = lsx_realloc(state->decoded, required * sizeof(*state->decoded));
     state->decoded_capacity = required;
   }
 
@@ -662,9 +595,7 @@ static int store_decoded_frame(
   return SOX_SUCCESS;
 }
 
-static int read_parsed_packet(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state)
+static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   if (state->definition->packet_reader != NULL)
     return state->definition->packet_reader(ft, state->packet);
@@ -676,11 +607,9 @@ static int read_parsed_packet(
     int result;
 
     if (state->input_offset == state->input_size && !state->input_eof) {
-      state->input_size = lsx_readbuf(
-          ft, state->input, INPUT_BUFFER_SIZE);
+      state->input_size = lsx_readbuf(ft, state->input, INPUT_BUFFER_SIZE);
       state->input_offset = 0;
-      memset(state->input + state->input_size, 0,
-          AV_INPUT_BUFFER_PADDING_SIZE);
+      memset(state->input + state->input_size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
       if (state->input_size == 0)
         state->input_eof = sox_true;
     }
@@ -692,8 +621,7 @@ static int read_parsed_packet(
           &packet_data, &packet_size, NULL, 0,
           AV_NOPTS_VALUE, AV_NOPTS_VALUE, -1);
       if (consumed < 0)
-        return fail_av(ft, SOX_EHDR,
-            "Unable to flush FFmpeg bitstream parser", consumed);
+        return fail_av(ft, SOX_EHDR, "Unable to flush FFmpeg bitstream parser", consumed);
       if (packet_size == 0) {
         state->parser_eof = sox_true;
         return 0;
@@ -707,16 +635,14 @@ static int read_parsed_packet(
           state->input + state->input_offset, (int)available,
           AV_NOPTS_VALUE, AV_NOPTS_VALUE, -1);
       if (consumed < 0)
-        return fail_av(ft, SOX_EHDR,
-            "Unable to parse compressed audio", consumed);
+        return fail_av(ft, SOX_EHDR, "Unable to parse compressed audio", consumed);
       state->input_offset += (size_t)consumed;
       if (consumed == 0 && packet_size == 0) {
         if (!state->parser_zero_progress) {
           state->parser_zero_progress = sox_true;
           continue;
         }
-        lsx_fail_errno(ft, SOX_EHDR,
-            "FFmpeg bitstream parser made no progress");
+        lsx_fail_errno(ft, SOX_EHDR, "FFmpeg bitstream parser made no progress");
         return SOX_EOF;
       }
     }
@@ -726,16 +652,13 @@ static int read_parsed_packet(
       continue;
     result = av_new_packet(state->packet, packet_size);
     if (result < 0)
-      return fail_av(ft, SOX_ENOMEM,
-          "Unable to allocate compressed audio packet", result);
+      return fail_av(ft, SOX_ENOMEM, "Unable to allocate compressed audio packet", result);
     memcpy(state->packet->data, packet_data, (size_t)packet_size);
     return 1;
   }
 }
 
-static int decode_next_frame(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state)
+static int decode_next_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   for (;;) {
     int result = avcodec_receive_frame(state->context, state->frame);
@@ -752,8 +675,7 @@ static int decode_next_frame(
       return fail_av(ft, SOX_EFMT, "Unable to decode audio frame", result);
 
     if (state->decoder_flushed) {
-      lsx_fail_errno(ft, SOX_EFMT,
-          "FFmpeg decoder requested input after end of stream");
+      lsx_fail_errno(ft, SOX_EFMT, "FFmpeg decoder requested input after end of stream");
       return SOX_EOF;
     }
 
@@ -769,8 +691,7 @@ static int decode_next_frame(
       av_packet_unref(state->packet);
     }
     if (result < 0)
-      return fail_av(ft, SOX_EFMT,
-          "Unable to submit compressed audio packet", result);
+      return fail_av(ft, SOX_EFMT, "Unable to submit compressed audio packet", result);
   }
 }
 
@@ -785,16 +706,14 @@ int lsx_ffmpeg_codec_startread(
   if (allocate_state(ft, state, definition, sox_false) != SOX_SUCCESS)
     return SOX_EOF;
   p = *state;
-  if (definition->prepare_decoder != NULL &&
-      definition->prepare_decoder(ft, p->context) != SOX_SUCCESS) {
+  if (definition->prepare_decoder != NULL && definition->prepare_decoder(ft, p->context) != SOX_SUCCESS) {
     destroy_state(state);
     return SOX_EOF;
   }
   if (definition->packet_reader == NULL) {
     p->parser = av_parser_init(definition->codec_id);
     if (p->parser == NULL) {
-      lsx_fail_errno(ft, SOX_EFMT,
-          "FFmpeg parser for %s is unavailable", definition->name);
+      lsx_fail_errno(ft, SOX_EFMT, "FFmpeg parser for %s is unavailable", definition->name);
       destroy_state(state);
       return SOX_EOF;
     }
@@ -808,30 +727,22 @@ int lsx_ffmpeg_codec_startread(
   result = decode_next_frame(ft, p);
   if (result <= 0) {
     if (result == 0)
-      lsx_fail_errno(ft, SOX_EHDR, "%s stream contains no audio",
-          definition->name);
+      lsx_fail_errno(ft, SOX_EHDR, "%s stream contains no audio", definition->name);
     destroy_state(state);
     return SOX_EOF;
   }
 
   ft->signal.rate = (sox_rate_t)p->decoded_rate;
   ft->signal.channels = p->decoded_channels;
-  ft->signal.precision = definition->precision ?
-      definition->precision :
-      (unsigned)p->context->bits_per_raw_sample;
+  ft->signal.precision = definition->precision ? definition->precision : (unsigned)p->context->bits_per_raw_sample;
   if (ft->signal.length == SOX_IGNORE_LENGTH)
     ft->signal.length = SOX_UNSPEC;
   ft->encoding.encoding = definition->encoding;
-  ft->encoding.bits_per_sample = definition->precision ?
-      0 : ft->signal.precision;
+  ft->encoding.bits_per_sample = definition->precision ? 0 : ft->signal.precision;
   return SOX_SUCCESS;
 }
 
-size_t lsx_ffmpeg_codec_read(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state,
-    sox_sample_t * samples,
-    size_t length)
+size_t lsx_ffmpeg_codec_read(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_sample_t * samples, size_t length)
 {
   size_t done = 0;
 
@@ -849,8 +760,7 @@ size_t lsx_ffmpeg_codec_read(
     }
     available = state->decoded_size - state->decoded_offset;
     count = min(available, length - done);
-    memcpy(samples + done, state->decoded + state->decoded_offset,
-        count * sizeof(*samples));
+    memcpy(samples + done, state->decoded + state->decoded_offset, count * sizeof(*samples));
     state->decoded_offset += count;
     done += count;
   }
@@ -863,21 +773,16 @@ int lsx_ffmpeg_codec_stopread(lsx_ffmpeg_codec_t ** state)
   return SOX_SUCCESS;
 }
 
-static int codec_supports_rate(
-    sox_format_t * ft,
-    AVCodec const * codec,
-    int rate)
+static int codec_supports_rate(sox_format_t * ft, AVCodec const * codec, int rate)
 {
   void const * configurations;
   int count;
   int i;
-  int result = avcodec_get_supported_config(NULL, codec,
-      AV_CODEC_CONFIG_SAMPLE_RATE, 0, &configurations, &count);
+  int result = avcodec_get_supported_config(NULL, codec, AV_CODEC_CONFIG_SAMPLE_RATE, 0, &configurations, &count);
   int const * rates = configurations;
 
   if (result < 0)
-    return fail_av(ft, SOX_EFMT,
-        "Unable to query FFmpeg sample rates", result);
+    return fail_av(ft, SOX_EFMT, "Unable to query FFmpeg sample rates", result);
   if (rates == NULL)
     return SOX_SUCCESS;
   for (i = 0; i < count; ++i)
@@ -889,23 +794,18 @@ static int codec_supports_rate(
   return SOX_EOF;
 }
 
-static int codec_supports_layout(
-    sox_format_t * ft,
-    AVCodec const * codec,
-    AVChannelLayout const * layout)
+static int codec_supports_layout(sox_format_t * ft, AVCodec const * codec, AVChannelLayout const * layout)
 {
   void const * configurations;
   char const * const * layout_names;
   char description[128];
   int count;
   int i;
-  int result = avcodec_get_supported_config(NULL, codec,
-      AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, &configurations, &count);
+  int result = avcodec_get_supported_config(NULL, codec, AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, &configurations, &count);
   AVChannelLayout const * layouts = configurations;
 
   if (result < 0)
-    return fail_av(ft, SOX_EFMT,
-        "Unable to query FFmpeg channel layouts", result);
+    return fail_av(ft, SOX_EFMT, "Unable to query FFmpeg channel layouts", result);
   if (layouts != NULL) {
     for (i = 0; i < count; ++i)
       if (av_channel_layout_compare(layout, &layouts[i]) == 0)
@@ -928,8 +828,7 @@ static int codec_supports_layout(
       ++layout_names;
     }
   }
-  if (av_channel_layout_describe(
-        layout, description, sizeof(description)) < 0)
+  if (av_channel_layout_describe(layout, description, sizeof(description)) < 0)
     strcpy(description, "unknown");
   lsx_fail_errno(ft, SOX_EFMT,
       "%s encoder does not support channel layout `%s' (%d channels)",
@@ -956,12 +855,10 @@ static int choose_sample_format(
   int count;
   size_t preference;
   int i;
-  int result = avcodec_get_supported_config(NULL, codec,
-      AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &configurations, &count);
+  int result = avcodec_get_supported_config(NULL, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &configurations, &count);
 
   if (result < 0)
-    return fail_av(ft, SOX_EFMT,
-        "Unable to query FFmpeg sample formats", result);
+    return fail_av(ft, SOX_EFMT, "Unable to query FFmpeg sample formats", result);
   formats = configurations;
   if (formats == NULL) {
     *selected = AV_SAMPLE_FMT_FLTP;
@@ -969,16 +866,14 @@ static int choose_sample_format(
   }
   if (precision && precision <= 16) {
     for (i = 0; i < count; ++i)
-      if (formats[i] == AV_SAMPLE_FMT_S16P ||
-          formats[i] == AV_SAMPLE_FMT_S16) {
+      if (formats[i] == AV_SAMPLE_FMT_S16P || formats[i] == AV_SAMPLE_FMT_S16) {
         *selected = formats[i];
         return SOX_SUCCESS;
       }
   }
   else if (precision > 16) {
     for (i = 0; i < count; ++i)
-      if (formats[i] == AV_SAMPLE_FMT_S32P ||
-          formats[i] == AV_SAMPLE_FMT_S32) {
+      if (formats[i] == AV_SAMPLE_FMT_S32P || formats[i] == AV_SAMPLE_FMT_S32) {
         *selected = formats[i];
         return SOX_SUCCESS;
       }
@@ -989,14 +884,11 @@ static int choose_sample_format(
         *selected = formats[i];
         return SOX_SUCCESS;
       }
-  lsx_fail_errno(ft, SOX_EFMT,
-      "%s encoder exposes no supported PCM sample format", codec->name);
+  lsx_fail_errno(ft, SOX_EFMT, "%s encoder exposes no supported PCM sample format", codec->name);
   return SOX_EOF;
 }
 
-static int set_encoder_bit_rate(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state)
+static int set_encoder_bit_rate(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   int64_t bit_rate = state->definition->default_bit_rate;
 
@@ -1025,10 +917,8 @@ static int set_encoder_bit_rate(
   if (ft->encoding.compression != HUGE_VAL) {
     double requested = ft->encoding.compression * 1000.;
 
-    if (!isfinite(requested) || requested < 1 ||
-        requested > (double)INT64_MAX) {
-      lsx_fail_errno(ft, SOX_EINVAL, "Invalid %s bitrate",
-          state->definition->name);
+    if (!isfinite(requested) || requested < 1 || requested > (double)INT64_MAX) {
+      lsx_fail_errno(ft, SOX_EINVAL, "Invalid %s bitrate", state->definition->name);
       return SOX_EOF;
     }
     bit_rate = (int64_t)(requested + .5);
@@ -1048,10 +938,7 @@ static int set_encoder_bit_rate(
   return SOX_SUCCESS;
 }
 
-static void * encoded_sample_address(
-    AVFrame * frame,
-    int sample,
-    int channel)
+static void * encoded_sample_address(AVFrame * frame, int sample, int channel)
 {
   enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
   int planar = av_sample_fmt_is_planar(format);
@@ -1062,14 +949,9 @@ static void * encoded_sample_address(
   return frame->extended_data[planar ? channel : 0] + index * bytes;
 }
 
-static void sox_sample_to_encoded(
-    AVFrame * frame,
-    int sample,
-    int channel,
-    sox_sample_t value)
+static void sox_sample_to_encoded(AVFrame * frame, int sample, int channel, sox_sample_t value)
 {
-  enum AVSampleFormat format =
-      av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
+  enum AVSampleFormat format = av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
   void * destination = encoded_sample_address(frame, sample, channel);
 
   switch (format) {
@@ -1115,10 +997,7 @@ static void sox_sample_to_encoded(
   }
 }
 
-static int write_available_packets(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state,
-    sox_bool flushing)
+static int write_available_packets(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool flushing)
 {
   for (;;) {
     int result = avcodec_receive_packet(state->context, state->packet);
@@ -1128,11 +1007,9 @@ static int write_available_packets(
     if (result == AVERROR_EOF)
       return SOX_SUCCESS;
     if (result < 0)
-      return fail_av(ft, SOX_EFMT,
-          "Unable to receive encoded audio packet", result);
+      return fail_av(ft, SOX_EFMT, "Unable to receive encoded audio packet", result);
     if (state->definition->packet_writer != NULL)
-      result = state->definition->packet_writer(
-          ft, state->context, state->packet);
+      result = state->definition->packet_writer(ft, state->context, state->packet);
     else
       result = lsx_writebuf(ft, state->packet->data,
           (size_t)state->packet->size) == (size_t)state->packet->size ?
@@ -1145,10 +1022,7 @@ static int write_available_packets(
   }
 }
 
-static int encode_pending_frame(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t * state,
-    int samples_per_channel)
+static int encode_pending_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state, int samples_per_channel)
 {
   int channel;
   int sample;
@@ -1157,12 +1031,10 @@ static int encode_pending_frame(
   state->frame->nb_samples = samples_per_channel;
   result = av_frame_make_writable(state->frame);
   if (result < 0)
-    return fail_av(ft, SOX_ENOMEM,
-        "Unable to prepare FFmpeg audio frame", result);
+    return fail_av(ft, SOX_ENOMEM, "Unable to prepare FFmpeg audio frame", result);
 
   for (sample = 0; sample < samples_per_channel; ++sample)
-    for (channel = 0; channel < state->context->ch_layout.nb_channels;
-        ++channel)
+    for (channel = 0; channel < state->context->ch_layout.nb_channels; ++channel)
       sox_sample_to_encoded(state->frame, sample, channel,
           state->pending[(size_t)sample *
               state->context->ch_layout.nb_channels + channel]);
@@ -1171,8 +1043,7 @@ static int encode_pending_frame(
 
   result = avcodec_send_frame(state->context, state->frame);
   if (result < 0)
-    return fail_av(ft, SOX_EFMT,
-        "Unable to submit PCM frame to FFmpeg encoder", result);
+    return fail_av(ft, SOX_EFMT, "Unable to submit PCM frame to FFmpeg encoder", result);
   return write_available_packets(ft, state, sox_false);
 }
 
@@ -1185,20 +1056,17 @@ int lsx_ffmpeg_codec_startwrite(
   AVChannelLayout layout = {0};
   enum AVSampleFormat sample_format;
   double rate = ft->signal.rate;
-  unsigned precision = ft->encoding.bits_per_sample ?
-      ft->encoding.bits_per_sample : definition->precision;
+  unsigned precision = ft->encoding.bits_per_sample ? ft->encoding.bits_per_sample : definition->precision;
   int result;
 
-  if (ft->signal.channels < 1 ||
-      ft->signal.channels > definition->max_encode_channels) {
+  if (ft->signal.channels < 1 || ft->signal.channels > definition->max_encode_channels) {
     lsx_fail_errno(ft, SOX_EFMT,
         "%s encoding supports layouts with 1 to %u channels",
         definition->name, definition->max_encode_channels);
     return SOX_EOF;
   }
   if (ft->channel_layout != NULL) {
-    result = av_channel_layout_from_string(
-        &layout, ft->channel_layout);
+    result = av_channel_layout_from_string(&layout, ft->channel_layout);
     if (result < 0 || !av_channel_layout_check(&layout)) {
       av_channel_layout_uninit(&layout);
       lsx_fail_errno(ft, SOX_EINVAL,
@@ -1217,8 +1085,7 @@ int lsx_ffmpeg_codec_startwrite(
       return SOX_EOF;
     }
   }
-  else if (select_layout(
-        definition, ft->signal.channels, &layout) < 0) {
+  else if (select_layout(definition, ft->signal.channels, &layout) < 0) {
     lsx_fail_errno(ft, SOX_EFMT,
         "%s encoding has no default layout for %u channels; "
         "specify --channel-layout explicitly",
@@ -1226,8 +1093,7 @@ int lsx_ffmpeg_codec_startwrite(
     return SOX_EOF;
   }
   if (rate < 1 || rate > INT_MAX || rate != (int)rate) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "%s encoding requires an integer sample rate", definition->name);
+    lsx_fail_errno(ft, SOX_EFMT, "%s encoding requires an integer sample rate", definition->name);
     av_channel_layout_uninit(&layout);
     return SOX_EOF;
   }
@@ -1254,16 +1120,14 @@ int lsx_ffmpeg_codec_startwrite(
   result = av_channel_layout_copy(&p->context->ch_layout, &layout);
   av_channel_layout_uninit(&layout);
   if (result < 0) {
-    fail_av(ft, SOX_ENOMEM,
-        "Unable to configure FFmpeg channel layout", result);
+    fail_av(ft, SOX_ENOMEM, "Unable to configure FFmpeg channel layout", result);
     destroy_state(state);
     return SOX_EOF;
   }
   if (definition->prepare_encoder != NULL) {
     result = definition->prepare_encoder(p->context);
     if (result < 0) {
-      fail_av(ft, SOX_EFMT,
-          "Unable to prepare FFmpeg encoder", result);
+      fail_av(ft, SOX_EFMT, "Unable to prepare FFmpeg encoder", result);
       destroy_state(state);
       return SOX_EOF;
     }
@@ -1275,22 +1139,18 @@ int lsx_ffmpeg_codec_startwrite(
     return SOX_EOF;
   }
   if (p->context->frame_size <= 0) {
-    lsx_fail_errno(ft, SOX_EFMT,
-        "%s encoder did not provide a fixed audio frame size",
-        definition->name);
+    lsx_fail_errno(ft, SOX_EFMT, "%s encoder did not provide a fixed audio frame size", definition->name);
     destroy_state(state);
     return SOX_EOF;
   }
 
   p->frame_samples = p->context->frame_size;
-  p->pending_capacity =
-      (size_t)p->frame_samples * p->context->ch_layout.nb_channels;
+  p->pending_capacity = (size_t)p->frame_samples * p->context->ch_layout.nb_channels;
   p->pending = lsx_calloc(p->pending_capacity, sizeof(*p->pending));
   p->frame->format = p->context->sample_fmt;
   p->frame->sample_rate = p->context->sample_rate;
   p->frame->nb_samples = p->frame_samples;
-  result = av_channel_layout_copy(
-      &p->frame->ch_layout, &p->context->ch_layout);
+  result = av_channel_layout_copy(&p->frame->ch_layout, &p->context->ch_layout);
   if (result >= 0)
     result = av_frame_get_buffer(p->frame, 0);
   if (result < 0) {
@@ -1300,8 +1160,7 @@ int lsx_ffmpeg_codec_startwrite(
   }
 
   ft->encoding.encoding = definition->encoding;
-  ft->encoding.bits_per_sample =
-      definition->precision ? 0 : precision;
+  ft->encoding.bits_per_sample = definition->precision ? 0 : precision;
   ft->signal.precision = precision;
   return SOX_SUCCESS;
 }
@@ -1320,13 +1179,11 @@ size_t lsx_ffmpeg_codec_write(
     size_t available = state->pending_capacity - state->pending_size;
     size_t count = min(available, length - done);
 
-    memcpy(state->pending + state->pending_size, samples + done,
-        count * sizeof(*samples));
+    memcpy(state->pending + state->pending_size, samples + done, count * sizeof(*samples));
     state->pending_size += count;
     done += count;
     if (state->pending_size == state->pending_capacity) {
-      if (encode_pending_frame(ft, state, state->frame_samples) !=
-          SOX_SUCCESS) {
+      if (encode_pending_frame(ft, state, state->frame_samples) != SOX_SUCCESS) {
         state->write_failed = sox_true;
         return done - count;
       }
@@ -1336,9 +1193,7 @@ size_t lsx_ffmpeg_codec_write(
   return done;
 }
 
-int lsx_ffmpeg_codec_stopwrite(
-    sox_format_t * ft,
-    lsx_ffmpeg_codec_t ** state)
+int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
 {
   lsx_ffmpeg_codec_t * p;
   int result = SOX_SUCCESS;
@@ -1353,16 +1208,13 @@ int lsx_ffmpeg_codec_stopwrite(
     int samples_per_channel;
 
     if (p->pending_size % channels) {
-      lsx_fail_errno(ft, SOX_EINVAL,
-          "%s encoder received an incomplete interleaved sample frame",
-          p->definition->name);
+      lsx_fail_errno(ft, SOX_EINVAL, "%s encoder received an incomplete interleaved sample frame", p->definition->name);
       result = SOX_EOF;
     }
     else {
       samples_per_channel = (int)(p->pending_size / channels);
       if (!(p->codec->capabilities & AV_CODEC_CAP_SMALL_LAST_FRAME)) {
-        memset(p->pending + p->pending_size, 0,
-            (p->pending_capacity - p->pending_size) * sizeof(*p->pending));
+        memset(p->pending + p->pending_size, 0, (p->pending_capacity - p->pending_size) * sizeof(*p->pending));
         samples_per_channel = p->frame_samples;
       }
       result = encode_pending_frame(ft, p, samples_per_channel);
@@ -1372,8 +1224,7 @@ int lsx_ffmpeg_codec_stopwrite(
     int av_result = avcodec_send_frame(p->context, NULL);
 
     if (av_result < 0)
-      result = fail_av(ft, SOX_EFMT,
-          "Unable to flush FFmpeg encoder", av_result);
+      result = fail_av(ft, SOX_EFMT, "Unable to flush FFmpeg encoder", av_result);
     else
       result = write_available_packets(ft, p, sox_true);
   }
@@ -1381,8 +1232,7 @@ int lsx_ffmpeg_codec_stopwrite(
   return result;
 }
 
-AVCodecContext const * lsx_ffmpeg_codec_context(
-    lsx_ffmpeg_codec_t const * state)
+AVCodecContext const * lsx_ffmpeg_codec_context(lsx_ffmpeg_codec_t const * state)
 {
   return state != NULL ? state->context : NULL;
 }

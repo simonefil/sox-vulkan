@@ -1156,8 +1156,7 @@ static sox_sample_t sdm_sample_1bit(sdm_t *p, double x)
   y = signbit(v) ? -1.0 : 1.0;                                             \
   *obuf++ = (sox_sample_t)(y * SOX_SAMPLE_MAX)
 
-static void sdm_process_simple_order4(sdm_t *p, const sox_sample_t *ibuf,
-                                      sox_sample_t *obuf, size_t len)
+static void sdm_process_simple_order4(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   SDM_KERNEL_BEGIN();
 
@@ -1176,8 +1175,7 @@ static void sdm_process_simple_order4(sdm_t *p, const sox_sample_t *ibuf,
   p->prev_y = y;
 }
 
-static void sdm_process_simple_order5(sdm_t *p, const sox_sample_t *ibuf,
-                                      sox_sample_t *obuf, size_t len)
+static void sdm_process_simple_order5(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   SDM_KERNEL_BEGIN();
   double s4 = p->simple_state[4];
@@ -1200,8 +1198,7 @@ static void sdm_process_simple_order5(sdm_t *p, const sox_sample_t *ibuf,
   p->prev_y = y;
 }
 
-static void sdm_process_simple_order6(sdm_t *p, const sox_sample_t *ibuf,
-                                      sox_sample_t *obuf, size_t len)
+static void sdm_process_simple_order6(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   SDM_KERNEL_BEGIN();
   double s4 = p->simple_state[4];
@@ -1228,8 +1225,7 @@ static void sdm_process_simple_order6(sdm_t *p, const sox_sample_t *ibuf,
   p->prev_y = y;
 }
 
-static void sdm_process_simple_order7(sdm_t *p, const sox_sample_t *ibuf,
-                                      sox_sample_t *obuf, size_t len)
+static void sdm_process_simple_order7(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   SDM_KERNEL_BEGIN();
   double s4 = p->simple_state[4];
@@ -1261,8 +1257,7 @@ static void sdm_process_simple_order7(sdm_t *p, const sox_sample_t *ibuf,
   p->prev_y = y;
 }
 
-static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf,
-                                      sox_sample_t *obuf, size_t len)
+static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   SDM_KERNEL_BEGIN();
   SDM_KERNEL_LOAD_HIGH_STATE();
@@ -1303,8 +1298,7 @@ static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf,
 #undef SDM_KERNEL_LOAD_HIGH_STATE
 #undef SDM_KERNEL_BEGIN
 
-static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf,
-                               sox_sample_t *obuf, size_t len)
+static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   switch (p->filter->order) {
     case 4: sdm_process_simple_order4(p, ibuf, obuf, len); break;
@@ -1323,8 +1317,7 @@ static sox_bool sdm_simple_state_valid(const sdm_t *p)
   if (!isfinite(p->prev_y))
     return sox_false;
   for (i = 0; i < p->filter->order; ++i)
-    if (!isfinite(p->simple_state[i]) ||
-        fabs(p->simple_state[i]) > SDM_STATE_LIMIT)
+    if (!isfinite(p->simple_state[i]) || fabs(p->simple_state[i]) > SDM_STATE_LIMIT)
       return sox_false;
   return sox_true;
 }
@@ -1514,8 +1507,7 @@ static inline void sdm_packet_push(sdm_t *p, uint8_t **out, int bit)
 /// - important: inLength must be a multiple of 8
 /// - important: outPackets size must be at least inLength / 8
 /// - returns: number of packets in outPackets
-size_t sdm_packet_process(sdm_t *p, const double *inSamples,
-                          uint8_t *outPackets, size_t inLength)
+size_t sdm_packet_process(sdm_t *p, const double *inSamples, uint8_t *outPackets, size_t inLength)
 {
   uint8_t *oPacket = outPackets;
   size_t len = inLength - inLength % 8;
@@ -1708,8 +1700,7 @@ static int ensure_vulkan_context(sdm_effect_t *p, size_t batch_frames)
 {
   if (p->vulkan)
     return SOX_SUCCESS;
-  p->vulkan = lsx_sdm_vulkan_create(
-      p->vulkan_engine, p->vulkan_rate, p->channels, batch_frames);
+  p->vulkan = lsx_sdm_vulkan_create(p->vulkan_engine, p->vulkan_rate, p->channels, batch_frames);
   if (!p->vulkan)
     return SOX_EOF;
   return SOX_SUCCESS;
@@ -1720,17 +1711,13 @@ static int ensure_vulkan_host_input(sdm_effect_t *p)
   if (ensure_vulkan_context(p, 0) != SOX_SUCCESS)
     return SOX_EOF;
   if (!p->vulkan_input) {
-    p->vulkan_input_capacity =
-        lsx_sdm_vulkan_input_capacity(p->vulkan);
-    p->vulkan_input = lsx_calloc(
-        p->vulkan_input_capacity * p->channels,
-        sizeof(*p->vulkan_input));
+    p->vulkan_input_capacity = lsx_sdm_vulkan_input_capacity(p->vulkan);
+    p->vulkan_input = lsx_calloc(p->vulkan_input_capacity * p->channels, sizeof(*p->vulkan_input));
   }
   return SOX_SUCCESS;
 }
 
-static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf,
-                               size_t *osamp)
+static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
 {
   size_t capacity = *osamp / p->channels;
   size_t remaining = p->vulkan_output_bytes - p->vulkan_output_pos;
@@ -1764,8 +1751,7 @@ static int process_vulkan_input(sdm_effect_t *p, size_t frames)
       &p->vulkan_output, &p->vulkan_output_bytes,
       &p->vulkan_output_stride) != SOX_SUCCESS)
     return SOX_EOF;
-  if (p->vulkan_output_bytes % 4u ||
-      p->vulkan_output_stride % 4u) {
+  if (p->vulkan_output_bytes % 4u || p->vulkan_output_stride % 4u) {
     lsx_fail("Vulkan DSD output is not word aligned");
     return SOX_EOF;
   }
@@ -1780,9 +1766,7 @@ static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_residen
 
   *input_consumed = sox_false;
   *input_clips = 0;
-  if (input && ensure_vulkan_context(
-      p, max(input->block_elements, input->valid_elements)) !=
-      SOX_SUCCESS) {
+  if (input && ensure_vulkan_context(p, max(input->block_elements, input->valid_elements)) != SOX_SUCCESS) {
     *osamp = 0;
     return SOX_EINVAL;
   }
@@ -1807,9 +1791,7 @@ static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_residen
     return SOX_EINVAL;
   }
   p->vulkan_output_pos = 0;
-  if (output_ready &&
-      (p->vulkan_output_bytes % 4u ||
-      p->vulkan_output_stride % 4u)) {
+  if (output_ready && (p->vulkan_output_bytes % 4u || p->vulkan_output_stride % 4u)) {
     lsx_fail("resident Vulkan DSD output is not word aligned");
     *osamp = 0;
     return SOX_EOF;
@@ -1825,9 +1807,7 @@ static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_residen
   return SOX_SUCCESS;
 }
 
-static int flow_vulkan(sdm_effect_t *p,
-    sox_sample_t const *ibuf, sox_sample_t *obuf,
-    size_t *isamp, size_t *osamp)
+static int flow_vulkan(sdm_effect_t *p, sox_sample_t const *ibuf, sox_sample_t *obuf, size_t *isamp, size_t *osamp)
 {
   size_t input_frames = *isamp / p->channels;
   size_t room;
@@ -1975,11 +1955,8 @@ static int start(sox_effect_t *effp)
           "(DSD64..DSD1024 is 2822400 to 45158400)");
       return SOX_EOF;
     }
-    if (p->filter_name || p->trellis_order || p->trellis_num ||
-        p->trellis_lat)
-      lsx_warn(
-          "Vulkan SDM uses the conservative MASH-2/FSM; "
-          "-f, -t, -n and -l are ignored");
+    if (p->filter_name || p->trellis_order || p->trellis_num || p->trellis_lat)
+      lsx_warn("Vulkan SDM uses the conservative MASH-2/FSM; " "-f, -t, -n and -l are ignored");
     vulkan = lsx_vulkan_context_get(effp->global_info);
     if (!vulkan)
       return SOX_EOF;
@@ -2033,11 +2010,9 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
   if (first->trellis_mask) {
     wide = min(*isamp, *osamp) / channels;
     *isamp = wide * channels;
-    size_t pre = first->pending < first->trellis_lat ?
-        min(first->trellis_lat - first->pending, wide) : 0;
+    size_t pre = first->pending < first->trellis_lat ? min(first->trellis_lat - first->pending, wide) : 0;
 #if defined HAVE_OPENMP
-    int thread_count = (int)min(
-        channels, (size_t)omp_get_max_threads());
+    int thread_count = (int)min(channels, (size_t)omp_get_max_threads());
     #pragma omp parallel for \
         if(sox_globals.use_threads && thread_count > 1) \
         num_threads(thread_count) schedule(static)
@@ -2047,13 +2022,11 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
       size_t i;
 
       for (i = 0; i < pre; ++i)
-        sdm_sample_trellis(sdm, ibuf[i * channels + job] *
-                           (0.5 / SOX_SAMPLE_MAX));
+        sdm_sample_trellis(sdm, ibuf[i * channels + job] * (0.5 / SOX_SAMPLE_MAX));
       sdm->pending += pre;
 
       for (i = pre; i < wide; ++i)
-        obuf[(i - pre) * channels + job] = sdm_sample_trellis(
-            sdm, ibuf[i * channels + job] * (0.5 / SOX_SAMPLE_MAX));
+        obuf[(i - pre) * channels + job] = sdm_sample_trellis(sdm, ibuf[i * channels + job] * (0.5 / SOX_SAMPLE_MAX));
     }
     *osamp = (wide - pre) * channels;
   } else {
@@ -2071,9 +2044,7 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
     emitted = (p->packet_bits + wide) / 8;
     *isamp = wide * channels;
 #if defined HAVE_OPENMP
-    int thread_count = (int)min(
-        min(channels, (size_t)p->threads),
-        (size_t)omp_get_max_threads());
+    int thread_count = (int)min(min(channels, (size_t)p->threads), (size_t)omp_get_max_threads());
     #pragma omp parallel for \
         if(sox_globals.use_threads && thread_count > 1) \
         num_threads(thread_count) schedule(static)
@@ -2127,9 +2098,7 @@ static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
     }
 
     for (channel = 0; channel < (ptrdiff_t)channels; ++channel)
-      obuf[channel] = SOX_DSD_PACKED_BYTE(
-          p->packet[channel] << (8 - p->packet_bits),
-          p->packet_bits);
+      obuf[channel] = SOX_DSD_PACKED_BYTE(p->packet[channel] << (8 - p->packet_bits), p->packet_bits);
     p->packet_bits = 0;
     memset(p->packet, 0, channels);
     *osamp = channels;

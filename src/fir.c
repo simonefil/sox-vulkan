@@ -65,8 +65,7 @@ static double *convolve_fir(
     double const *second, int second_count,
     int *result_count)
 {
-  size_t count =
-      (size_t)first_count + (size_t)second_count - 1u;
+  size_t count = (size_t)first_count + (size_t)second_count - 1u;
   size_t dft_length = 1u;
   double *first_spectrum;
   double *second_spectrum;
@@ -87,16 +86,10 @@ static double *convolve_fir(
       return NULL;
     dft_length *= 2u;
   }
-  first_spectrum = lsx_calloc(
-      dft_length, sizeof(*first_spectrum));
-  second_spectrum = lsx_calloc(
-      dft_length, sizeof(*second_spectrum));
-  memcpy(
-      first_spectrum, first,
-      (size_t)first_count * sizeof(*first));
-  memcpy(
-      second_spectrum, second,
-      (size_t)second_count * sizeof(*second));
+  first_spectrum = lsx_calloc(dft_length, sizeof(*first_spectrum));
+  second_spectrum = lsx_calloc(dft_length, sizeof(*second_spectrum));
+  memcpy(first_spectrum, first, (size_t)first_count * sizeof(*first));
+  memcpy(second_spectrum, second, (size_t)second_count * sizeof(*second));
   lsx_safe_rdft((int)dft_length, 1, first_spectrum);
   lsx_safe_rdft((int)dft_length, 1, second_spectrum);
   first_spectrum[0] *= second_spectrum[0];
@@ -129,16 +122,12 @@ static double *convolve_fir(
 #if HAVE_VULKAN
 #define FIR_FAST_FUSION_MAX_TAPS 4194304u
 
-static double const *vulkan_channel_source(
-    dft_filter_priv_t const *base, uint32_t channel)
+static double const *vulkan_channel_source(dft_filter_priv_t const *base, uint32_t channel)
 {
-  return base->vulkan_channels ?
-      base->vulkan_channels[channel].source_taps :
-      base->vulkan_source_taps;
+  return base->vulkan_channels ? base->vulkan_channels[channel].source_taps : base->vulkan_source_taps;
 }
 
-static int promote_vulkan_channels(
-    dft_filter_priv_t *base, uint32_t channels)
+static int promote_vulkan_channels(dft_filter_priv_t *base, uint32_t channels)
 {
   dft_filter_vulkan_channel_t *channel_filters;
   size_t source_tap_count = base->vulkan_fusion_source_count ?
@@ -148,35 +137,28 @@ static int promote_vulkan_channels(
   uint32_t source;
 
   if (base->vulkan_channels)
-    return base->vulkan_channel_count == channels ?
-        SOX_SUCCESS : SOX_EOF;
+    return base->vulkan_channel_count == channels ? SOX_SUCCESS : SOX_EOF;
   if (!base->vulkan_source_taps)
     return SOX_EOF;
-  channel_filters = lsx_calloc(
-      channels, sizeof(*channel_filters));
+  channel_filters = lsx_calloc(channels, sizeof(*channel_filters));
   for (channel = 0; channel < channels; ++channel) {
-    channel_filters[channel].source_taps = lsx_memdup(
-        base->vulkan_source_taps,
-        source_tap_count * sizeof(double));
+    channel_filters[channel].source_taps = lsx_memdup(base->vulkan_source_taps, source_tap_count * sizeof(double));
     if (base->vulkan_reference_low_taps)
       channel_filters[channel].reference_low_taps = lsx_memdup(
           base->vulkan_reference_low_taps,
           (size_t)base->vulkan_source_num_taps * sizeof(double));
-    for (source = 0;
-         source < base->vulkan_fusion_source_count; ++source) {
+    for (source = 0; source < base->vulkan_fusion_source_count; ++source) {
       channel_filters[channel].fusion_sources[source] = lsx_memdup(
           base->vulkan_fusion_sources[source],
           base->vulkan_fusion_source_taps[source] * sizeof(double));
-      channel_filters[channel].fusion_source_taps[source] =
-          base->vulkan_fusion_source_taps[source];
+      channel_filters[channel].fusion_source_taps[source] = base->vulkan_fusion_source_taps[source];
     }
   }
   free(base->vulkan_source_taps);
   free(base->vulkan_reference_low_taps);
   base->vulkan_source_taps = NULL;
   base->vulkan_reference_low_taps = NULL;
-  for (source = 0;
-       source < base->vulkan_fusion_source_count; ++source) {
+  for (source = 0; source < base->vulkan_fusion_source_count; ++source) {
     free(base->vulkan_fusion_sources[source]);
     base->vulkan_fusion_sources[source] = NULL;
     base->vulkan_fusion_source_taps[source] = 0;
@@ -186,8 +168,7 @@ static int promote_vulkan_channels(
   return SOX_SUCCESS;
 }
 
-int lsx_fir_vulkan_try_fuse(
-    sox_effect_t *first, sox_effect_t const *second)
+int lsx_fir_vulkan_try_fuse(sox_effect_t *first, sox_effect_t const *second)
 {
   priv_t *first_private;
   priv_t const *second_private;
@@ -238,13 +219,10 @@ int lsx_fir_vulkan_try_fuse(
   first_count = first_base->vulkan_source_num_taps;
   second_count = second_base->vulkan_source_num_taps;
   if (sox_globals.vulkan_profile == sox_vulkan_profile_reference) {
-    uint32_t source_count =
-        first_base->vulkan_fusion_source_count;
-    sox_bool channel_fusion =
-        first_base->vulkan_channels || second_base->vulkan_channels;
+    uint32_t source_count = first_base->vulkan_fusion_source_count;
+    sox_bool channel_fusion = first_base->vulkan_channels || second_base->vulkan_channels;
 
-    if (channel_fusion &&
-        promote_vulkan_channels(first_base, channels) != SOX_SUCCESS)
+    if (channel_fusion && promote_vulkan_channels(first_base, channels) != SOX_SUCCESS)
       return -1;
     if (!source_count && channel_fusion) {
       uint32_t channel;
@@ -254,8 +232,7 @@ int lsx_fir_vulkan_try_fuse(
             lsx_memdup(
                 first_base->vulkan_channels[channel].source_taps,
                 (size_t)first_count * sizeof(double));
-        first_base->vulkan_channels[channel].fusion_source_taps[0] =
-            (size_t)first_count;
+        first_base->vulkan_channels[channel].fusion_source_taps[0] = (size_t)first_count;
       }
       source_count = 1u;
     }
@@ -263,8 +240,7 @@ int lsx_fir_vulkan_try_fuse(
       first_base->vulkan_fusion_sources[0] = lsx_memdup(
           first_base->vulkan_source_taps,
           (size_t)first_count * sizeof(double));
-      first_base->vulkan_fusion_source_taps[0] =
-          (size_t)first_count;
+      first_base->vulkan_fusion_source_taps[0] = (size_t)first_count;
       source_count = 1u;
     }
     if (source_count >= 8u)
@@ -277,8 +253,7 @@ int lsx_fir_vulkan_try_fuse(
             lsx_memdup(
                 vulkan_channel_source(second_base, channel),
                 (size_t)second_count * sizeof(double));
-        first_base->vulkan_channels[channel].fusion_source_taps[source_count] =
-            (size_t)second_count;
+        first_base->vulkan_channels[channel].fusion_source_taps[source_count] = (size_t)second_count;
       }
     }
     else {
@@ -286,14 +261,11 @@ int lsx_fir_vulkan_try_fuse(
           lsx_memdup(
               second_base->vulkan_source_taps,
               (size_t)second_count * sizeof(double));
-      first_base->vulkan_fusion_source_taps[source_count] =
-          (size_t)second_count;
+      first_base->vulkan_fusion_source_taps[source_count] = (size_t)second_count;
     }
     first_base->vulkan_fusion_source_count = source_count + 1u;
     combined_count = first_count + second_count - 1;
-    combined_post_peak =
-        first_base->vulkan_source_post_peak +
-        second_base->vulkan_source_post_peak;
+    combined_post_peak = first_base->vulkan_source_post_peak + second_base->vulkan_source_post_peak;
     first_base->vulkan_source_num_taps = combined_count;
     first_base->vulkan_source_post_peak = combined_post_peak;
     first_base->vulkan_fusion_pending = sox_true;
@@ -303,8 +275,7 @@ int lsx_fir_vulkan_try_fuse(
         source_count + 1u, combined_count);
     return 1;
   }
-  if ((size_t)first_count + (size_t)second_count - 1u >
-      FIR_FAST_FUSION_MAX_TAPS)
+  if ((size_t)first_count + (size_t)second_count - 1u > FIR_FAST_FUSION_MAX_TAPS)
     return 0;
   if (first_base->vulkan_channels || second_base->vulkan_channels) {
     uint32_t channel;
@@ -328,9 +299,7 @@ int lsx_fir_vulkan_try_fuse(
      * fixed by the two inputs and stays defined even for a zero-channel
      * signal, where the loop above never runs. */
     combined_count = first_count + second_count - 1;
-    combined_post_peak =
-        first_base->vulkan_source_post_peak +
-        second_base->vulkan_source_post_peak;
+    combined_post_peak = first_base->vulkan_source_post_peak + second_base->vulkan_source_post_peak;
     first_base->vulkan_source_num_taps = combined_count;
     first_base->vulkan_source_post_peak = combined_post_peak;
     first_base->vulkan_fusion_pending = sox_true;
@@ -349,9 +318,7 @@ int lsx_fir_vulkan_try_fuse(
     lsx_fail("Vulkan FAST FIR fusion exceeds supported length");
     return -1;
   }
-  combined_post_peak =
-      first_base->vulkan_source_post_peak +
-      second_base->vulkan_source_post_peak;
+  combined_post_peak = first_base->vulkan_source_post_peak + second_base->vulkan_source_post_peak;
   free(first_base->vulkan_source_taps);
   first_base->vulkan_source_taps = combined;
   first_base->vulkan_source_num_taps = combined_count;
@@ -366,31 +333,25 @@ int lsx_fir_vulkan_try_fuse(
 }
 #endif
 
-static int channel_is_selected(
-    channel_map_entry_t const *entry, unsigned channel)
+static int channel_is_selected(channel_map_entry_t const *entry, unsigned channel)
 {
   size_t index;
 
   for (index = 0; index < entry->range_count; ++index)
-    if (channel >= entry->ranges[index].first &&
-        channel <= entry->ranges[index].last)
+    if (channel >= entry->ranges[index].first && channel <= entry->ranges[index].last)
       return 1;
   return 0;
 }
 
-static void append_channel_range(
-    channel_map_entry_t *entry, unsigned first, unsigned last)
+static void append_channel_range(channel_map_entry_t *entry, unsigned first, unsigned last)
 {
-  entry->ranges = lsx_realloc(
-      entry->ranges,
-      (entry->range_count + 1u) * sizeof(*entry->ranges));
+  entry->ranges = lsx_realloc(entry->ranges, (entry->range_count + 1u) * sizeof(*entry->ranges));
   entry->ranges[entry->range_count].first = first;
   entry->ranges[entry->range_count].last = last;
   ++entry->range_count;
 }
 
-static int parse_channel_number(
-    char const **text, char const *end, unsigned *value)
+static int parse_channel_number(char const **text, char const *end, unsigned *value)
 {
   char *number_end;
   unsigned long parsed;
@@ -399,17 +360,14 @@ static int parse_channel_number(
     return SOX_EOF;
   errno = 0;
   parsed = strtoul(*text, &number_end, 10);
-  if (errno || number_end == *text || number_end > end ||
-      !parsed || parsed > UINT_MAX)
+  if (errno || number_end == *text || number_end > end || !parsed || parsed > UINT_MAX)
     return SOX_EOF;
   *text = number_end;
   *value = (unsigned)parsed;
   return SOX_SUCCESS;
 }
 
-static int parse_channel_selector(
-    channel_map_entry_t *entry,
-    char const *selector, size_t length)
+static int parse_channel_selector(channel_map_entry_t *entry, char const *selector, size_t length)
 {
   char const *text = selector;
   char const *end = selector + length;
@@ -441,16 +399,13 @@ static int parse_channel_selector(
   return entry->range_count ? SOX_SUCCESS : SOX_EOF;
 }
 
-static int parse_channel_map(
-    sox_effect_t *effp, int argc, char **argv,
-    channel_filter_bank_t **result)
+static int parse_channel_map(sox_effect_t *effp, int argc, char **argv, channel_filter_bank_t **result)
 {
   channel_filter_bank_t *bank = lsx_calloc(1, sizeof(*bank));
   int stdin_entries = 0;
   int index;
 
-  bank->entries = lsx_calloc(
-      (size_t)argc, sizeof(*bank->entries));
+  bank->entries = lsx_calloc((size_t)argc, sizeof(*bank->entries));
   bank->entry_count = (size_t)argc;
   for (index = 0; index < argc; ++index) {
     channel_map_entry_t *entry = &bank->entries[index];
@@ -488,9 +443,7 @@ static int parse_channel_map(
   return SOX_SUCCESS;
 }
 
-static int read_coefficients(
-    sox_effect_t *effp, char const *filename,
-    double **taps, int *tap_count)
+static int read_coefficients(sox_effect_t *effp, char const *filename, double **taps, int *tap_count)
 {
   FILE *file = lsx_open_input_file(effp, filename, sox_true);
   double value;
@@ -532,8 +485,7 @@ static int read_coefficients(
   return SOX_SUCCESS;
 }
 
-static int prepare_channel_bank(
-    sox_effect_t *effp, channel_filter_bank_t *bank)
+static int prepare_channel_bank(sox_effect_t *effp, channel_filter_bank_t *bank)
 {
   unsigned channels = effp->in_signal.channels;
   double **unnormalized;
@@ -549,24 +501,16 @@ static int prepare_channel_bank(
     channel_map_entry_t *entry = &bank->entries[entry_index];
     size_t range_index;
 
-    for (range_index = 0;
-         range_index < entry->range_count; ++range_index) {
+    for (range_index = 0; range_index < entry->range_count; ++range_index) {
       if (entry->ranges[range_index].last > channels) {
-        lsx_fail(
-            "fir channel %u does not exist in %u-channel input",
-            entry->ranges[range_index].last, channels);
+        lsx_fail("fir channel %u does not exist in %u-channel input", entry->ranges[range_index].last, channels);
         return SOX_EOF;
       }
     }
-    if (read_coefficients(
-        effp, entry->filename,
-        &entry->taps, &entry->tap_count) != SOX_SUCCESS)
+    if (read_coefficients(effp, entry->filename, &entry->taps, &entry->tap_count) != SOX_SUCCESS)
       return SOX_EOF;
-    entry->pre_peak =
-        entry->tap_count - 1 - (entry->tap_count >> 1);
-    lsx_report(
-        "fir mapping `%s': %d coefficients, pre-peak %d",
-        entry->filename, entry->tap_count, entry->pre_peak);
+    entry->pre_peak = entry->tap_count - 1 - (entry->tap_count >> 1);
+    lsx_report("fir mapping `%s': %d coefficients, pre-peak %d", entry->filename, entry->tap_count, entry->pre_peak);
   }
 
   unnormalized = lsx_calloc(channels, sizeof(*unnormalized));
@@ -575,21 +519,16 @@ static int prepare_channel_bank(
   for (channel = 0; channel < channels; ++channel) {
     unsigned applied = 0;
 
-    for (entry_index = 0;
-         entry_index < bank->entry_count; ++entry_index) {
+    for (entry_index = 0; entry_index < bank->entry_count; ++entry_index) {
       channel_map_entry_t const *entry = &bank->entries[entry_index];
 
       if (channel_is_selected(entry, channel + 1u)) {
         double *combined;
         int combined_count;
 
-        lsx_report(
-            "fir channel %u applies `%s'",
-            channel + 1u, entry->filename);
+        lsx_report("fir channel %u applies `%s'", channel + 1u, entry->filename);
         if (!applied) {
-          unnormalized[channel] = lsx_memdup(
-              entry->taps,
-              (size_t)entry->tap_count * sizeof(*entry->taps));
+          unnormalized[channel] = lsx_memdup(entry->taps, (size_t)entry->tap_count * sizeof(*entry->taps));
           tap_counts[channel] = entry->tap_count;
         }
         else {
@@ -598,9 +537,7 @@ static int prepare_channel_bank(
               entry->taps, entry->tap_count,
               &combined_count);
           if (!combined) {
-            lsx_fail(
-                "combined fir for channel %u exceeds supported length",
-                channel + 1u);
+            lsx_fail("combined fir for channel %u exceeds supported length", channel + 1u);
             goto error;
           }
           free(unnormalized[channel]);
@@ -619,18 +556,13 @@ static int prepare_channel_bank(
       unnormalized[channel] = lsx_calloc(1, sizeof(**unnormalized));
       unnormalized[channel][0] = 1.;
       tap_counts[channel] = 1;
-      lsx_warn(
-          "fir channel %u is not mapped; passing it through",
-          channel + 1u);
+      lsx_warn("fir channel %u is not mapped; passing it through", channel + 1u);
     }
     common_pre_peak = max(common_pre_peak, pre_peaks[channel]);
-    common_post_peak = max(
-        common_post_peak,
-        tap_counts[channel] - 1 - pre_peaks[channel]);
+    common_post_peak = max(common_post_peak, tap_counts[channel] - 1 - pre_peaks[channel]);
   }
 
-  if (common_pre_peak == INT_MAX ||
-      common_post_peak > INT_MAX - common_pre_peak - 1) {
+  if (common_pre_peak == INT_MAX || common_post_peak > INT_MAX - common_pre_peak - 1) {
     lsx_fail("normalized fir is too large");
     goto error;
   }
@@ -644,12 +576,8 @@ static int prepare_channel_bank(
   for (channel = 0; channel < channels; ++channel) {
     int leading = common_pre_peak - pre_peaks[channel];
 
-    bank->taps[channel] = lsx_calloc(
-        (size_t)common_tap_count, sizeof(**bank->taps));
-    memcpy(
-        bank->taps[channel] + leading,
-        unnormalized[channel],
-        (size_t)tap_counts[channel] * sizeof(**bank->taps));
+    bank->taps[channel] = lsx_calloc((size_t)common_tap_count, sizeof(**bank->taps));
+    memcpy(bank->taps[channel] + leading, unnormalized[channel], (size_t)tap_counts[channel] * sizeof(**bank->taps));
     free(unnormalized[channel]);
     lsx_report(
         "fir channel %u resolved: %d taps, pre-peak %d; "
@@ -713,8 +641,7 @@ static int create(sox_effect_t * effp, int argc, char * * argv)
   --argc, ++argv;
   if (!argc)
     p->filename = "-"; /* default to stdin */
-  else if (strchr(argv[0], '=') &&
-      isdigit((unsigned char)argv[0][0]))
+  else if (strchr(argv[0], '=') && isdigit((unsigned char)argv[0][0]))
     return parse_channel_map(effp, argc, argv, &p->channel_bank);
   else if (argc == 1)
     p->filename = argv[0], --argc;
@@ -738,33 +665,24 @@ static int start(sox_effect_t * effp)
     channel_filter_bank_t *bank = p->channel_bank;
     double *flow_taps;
 
-    if (!bank->ready && (effp->flow ||
-        prepare_channel_bank(effp, bank) != SOX_SUCCESS))
+    if (!bank->ready && (effp->flow || prepare_channel_bank(effp, bank) != SOX_SUCCESS))
       return SOX_EOF;
     if (effp->global_info->plot != sox_plot_off) {
       char title[120];
 
       if (effp->flow)
         return SOX_EOF;
-      sprintf(
-          title, "SoX effect: fir channel 1 (%d normalized coefficients)",
-          bank->tap_count);
+      sprintf(title, "SoX effect: fir channel 1 (%d normalized coefficients)", bank->tap_count);
       lsx_report("fir --plot displays resolved channel 1");
-      lsx_plot_fir(
-          bank->taps[0], bank->tap_count,
-          effp->in_signal.rate, effp->global_info->plot,
-          title, -30., 30.);
+      lsx_plot_fir(bank->taps[0], bank->tap_count, effp->in_signal.rate, effp->global_info->plot, title, -30., 30.);
       return SOX_EOF;
     }
     if (effp->flow >= bank->channels)
       return SOX_EOF;
     p->base.filter_ptr = &p->base.filter;
     f = p->base.filter_ptr;
-    flow_taps = lsx_memdup(
-        bank->taps[effp->flow],
-        (size_t)bank->tap_count * sizeof(*flow_taps));
-    lsx_set_dft_filter(
-        f, flow_taps, bank->tap_count, bank->post_peak);
+    flow_taps = lsx_memdup(bank->taps[effp->flow], (size_t)bank->tap_count * sizeof(*flow_taps));
+    lsx_set_dft_filter(f, flow_taps, bank->tap_count, bank->post_peak);
 #if HAVE_VULKAN
     if (!effp->flow &&
         sox_globals.vulkan_profile != sox_vulkan_profile_none &&
@@ -823,8 +741,7 @@ sox_effect_handler_t const * lsx_fir_effect_fn(void)
   static sox_effect_handler_t handler;
   handler = *lsx_dft_filter_effect_fn();
   handler.name = "fir";
-  handler.usage =
-      "[coef-file|coefs|channel-list=coef-file ...]";
+  handler.usage = "[coef-file|coefs|channel-list=coef-file ...]";
   handler.getopts = create;
   handler.start = start;
   handler.kill = kill;

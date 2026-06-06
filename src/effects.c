@@ -181,10 +181,8 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
     return SOX_EOF;
   }
 #if HAVE_VULKAN
-  if (chain->length &&
-      sox_globals.vulkan_profile != sox_vulkan_profile_none) {
-    int fused = lsx_fir_vulkan_try_fuse(
-        chain->effects[chain->length - 1u], effp);
+  if (chain->length && sox_globals.vulkan_profile != sox_vulkan_profile_none) {
+    int fused = lsx_fir_vulkan_try_fuse(chain->effects[chain->length - 1u], effp);
 
     if (fused < 0) {
       free(eff0.priv);
@@ -306,8 +304,7 @@ static size_t vulkan_resident_segment_end(sox_effects_chain_t const *chain, size
 
     if (!endpoint)
       break;
-    if (endpoint->consume &&
-        chain->effects[effect]->flows == 1u)
+    if (endpoint->consume && chain->effects[effect]->flows == 1u)
       end = effect;
     if (!endpoint->transform || !endpoint->drain_transform)
       break;
@@ -382,8 +379,7 @@ static void vulkan_resident_segment_state_destroy(vulkan_resident_segment_state_
   memset(state, 0, sizeof(*state));
 }
 
-static size_t vulkan_resident_pending_edges(
-    vulkan_resident_segment_state_t const *state)
+static size_t vulkan_resident_pending_edges(vulkan_resident_segment_state_t const *state)
 {
   size_t pending = 0;
   size_t effect;
@@ -488,9 +484,7 @@ static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, l
   uint64_t input_clips;
   int status;
 
-  status = endpoint->consume(
-      effp, resident, input_consumed, &input_clips,
-      effp->obuf + effp->oend, &produced, active);
+  status = endpoint->consume(effp, resident, input_consumed, &input_clips, effp->obuf + effp->oend, &produced, active);
 
   if (produced % effp->out_signal.channels) {
     lsx_fail("resident multi-channel effect flowed asymmetrically");
@@ -516,10 +510,8 @@ static int flow_vulkan_resident_transform(sox_effects_chain_t *chain, size_t n, 
   int status;
 
   memset(&state->outputs[n], 0, sizeof(state->outputs[n]));
-  if (!state->draining[n] && input_final &&
-      !input->valid_elements) {
-    if (lsx_vulkan_resident_buffer_validate(input) !=
-        SOX_SUCCESS)
+  if (!state->draining[n] && input_final && !input->valid_elements) {
+    if (lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS)
       return SOX_EOF;
     input_consumed = sox_true;
     active = sox_false;
@@ -601,8 +593,7 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
     size_t idone_min = SOX_SIZE_MAX, idone_max = 0;
     size_t odone_min = SOX_SIZE_MAX, odone_max = 0;
 #if defined HAVE_OPENMP
-    int thread_count = (int)min(
-        effp->flows, (size_t)omp_get_max_threads());
+    int thread_count = (int)min(effp->flows, (size_t)omp_get_max_threads());
 #endif
 
 #ifdef HAVE_OPENMP_3_1
@@ -631,8 +622,7 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
       idone_min = min(idonec, idone_min); idone_max = max(idonec, idone_max);
       odone_min = min(odonec, odone_min); odone_max = max(odonec, odone_max);
 
-      if (eff_status_c != SOX_SUCCESS &&
-          (effstatus == SOX_SUCCESS || eff_status_c != SOX_EOF))
+      if (eff_status_c != SOX_SUCCESS && (effstatus == SOX_SUCCESS || eff_status_c != SOX_EOF))
         effstatus = eff_status_c;
     }
 
@@ -713,8 +703,7 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
       }
       odone_last = odonec;
 
-      if (eff_status_c != SOX_SUCCESS &&
-          (effstatus == SOX_SUCCESS || eff_status_c != SOX_EOF))
+      if (eff_status_c != SOX_SUCCESS && (effstatus == SOX_SUCCESS || eff_status_c != SOX_EOF))
         effstatus = eff_status_c;
     }
 
@@ -841,8 +830,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
           resident_segment.pending[input_index] = sox_false;
           ++resident_segment.boundary_output_slices;
           if (!resident_segment.output_format_reported && input) {
-            report_vulkan_resident_format(
-                chain->effects[e], "output", input);
+            report_vulkan_resident_format(chain->effects[e], "output", input);
             resident_segment.output_format_reported = sox_true;
           }
           if (input_final)
@@ -904,9 +892,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         if (resident_segment.pending[e]) {
           ++resident_segment.boundary_input_slices;
           if (!resident_segment.input_format_reported) {
-            report_vulkan_resident_format(
-                chain->effects[e], "input",
-                &resident_segment.outputs[e]);
+            report_vulkan_resident_format(chain->effects[e], "input", &resident_segment.outputs[e]);
             resident_segment.input_format_reported = sox_true;
           }
         }
@@ -926,9 +912,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         if (resident_segment.pending[e]) {
           ++resident_segment.boundary_input_slices;
           if (!resident_segment.input_format_reported) {
-            report_vulkan_resident_format(
-                chain->effects[e], "input",
-                &resident_segment.outputs[e]);
+            report_vulkan_resident_format(chain->effects[e], "input", &resident_segment.outputs[e]);
             resident_segment.input_format_reported = sox_true;
           }
         }
@@ -950,13 +934,9 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
           resident_segment.maximum_pending_edges,
           vulkan_resident_pending_edges(&resident_segment));
       if (callback && callback(source_e == chain->length, client_data) != SOX_SUCCESS) {
-        sox_effect_t const *effp =
-            chain->effects[resident_segment.first];
+        sox_effect_t const *effp = chain->effects[resident_segment.first];
 
-        lsx_report(
-            "resident segment callback requested exit: "
-            "source=%" PRIuPTR ", cursor=%" PRIuPTR,
-            source_e, e);
+        lsx_report("resident segment callback requested exit: " "source=%" PRIuPTR ", cursor=%" PRIuPTR, source_e, e);
         flow_status = SOX_EOF;
         break;
       }
@@ -1040,10 +1020,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       if (status != SOX_SUCCESS) {
         sox_effect_t const *effp = chain->effects[e];
 
-        lsx_report(
-            "effect scheduler flow exit: effect=%" PRIuPTR
-            " (%s), status=%d",
-            e, effp->handler.name, status);
+        lsx_report("effect scheduler flow exit: effect=%" PRIuPTR " (%s), status=%d", e, effp->handler.name, status);
         flow_status = status;
         if (status != SOX_EOF || e == chain->length - 1)
           break;
@@ -1063,9 +1040,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
     if (callback && callback(source_e == chain->length, client_data) != SOX_SUCCESS) {
       sox_effect_t const *effp = chain->effects[e];
 
-      lsx_report(
-          "effect scheduler callback requested exit: "
-          "cursor=%" PRIuPTR, e);
+      lsx_report("effect scheduler callback requested exit: " "cursor=%" PRIuPTR, e);
       flow_status = SOX_EOF; /* Client has requested to stop the flow. */
       break;
     }
@@ -1086,11 +1061,9 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
   free(chain->il_buf);
 #if HAVE_VULKAN
   if (resident_segment.enabled)
-    report_vulkan_resident_segment(
-        chain, &resident_segment);
+    report_vulkan_resident_segment(chain, &resident_segment);
   if (resident_segment.enabled) {
-    sox_effect_t const *effp =
-        chain->effects[resident_segment.first];
+    sox_effect_t const *effp = chain->effects[resident_segment.first];
 
     lsx_report(
         "Vulkan resident segment exit: status=%d, "

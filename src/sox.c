@@ -686,21 +686,16 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
     }
 
     if (effp->in_signal.packing == SOX_DSD_PACKING_WORD) {
-      len = *isamp ?
-          sox_write_packed_dsd_words(ofile->ft, ibuf, *isamp) : 0;
+      len = *isamp ? sox_write_packed_dsd_words(ofile->ft, ibuf, *isamp) : 0;
       output_samples += 32 * (len / channels);
     } else {
-      len = *isamp ?
-          sox_write_packed_dsd(ofile->ft, ibuf, *isamp) : 0;
-      if (len && SOX_DSD_PACKED_VALID_BITS(ibuf[0]) == 8 &&
-          SOX_DSD_PACKED_VALID_BITS(
-              ibuf[len - channels]) == 8)
+      len = *isamp ? sox_write_packed_dsd(ofile->ft, ibuf, *isamp) : 0;
+      if (len && SOX_DSD_PACKED_VALID_BITS(ibuf[0]) == 8 && SOX_DSD_PACKED_VALID_BITS(ibuf[len - channels]) == 8)
         output_samples += 8 * (len / channels);
       else {
         size_t i;
         for (i = 0; i < len; i += channels)
-          output_samples +=
-              SOX_DSD_PACKED_VALID_BITS(ibuf[i]);
+          output_samples += SOX_DSD_PACKED_VALID_BITS(ibuf[i]);
       }
     }
     output_eof = len != *isamp ? sox_true : sox_false;
@@ -2694,10 +2689,8 @@ static int add_file(file_t const * const opts, char const * const filename)
   file_t * f = lsx_malloc(sizeof(*f));
 
   *f = *opts;
-  f->codec_options = opts->codec_options ?
-      lsx_strdup(opts->codec_options) : NULL;
-  f->channel_layout = opts->channel_layout ?
-      lsx_strdup(opts->channel_layout) : NULL;
+  f->codec_options = opts->codec_options ? lsx_strdup(opts->codec_options) : NULL;
+  f->channel_layout = opts->channel_layout ? lsx_strdup(opts->channel_layout) : NULL;
   if (!filename)
     usage("missing filename"); /* No return */
   f->filename = lsx_strdup(filename);
@@ -2776,8 +2769,7 @@ static void parse_options_and_filenames(int argc, char **argv)
   }
 
   lsx_getopt_init(argc, argv, getoptstr, long_options, lsx_getopt_flag_opterr, 1, &optstate);
-  for (; optstate.ind < argc && !sox_find_effect(argv[optstate.ind]);
-       clear_file_options(&opts), init_file(&opts)) {
+  for (; optstate.ind < argc && !sox_find_effect(argv[optstate.ind]); clear_file_options(&opts), init_file(&opts)) {
     char c = parse_gopts_and_fopts(&opts);
     if (c == 'n') { /* is null file? */
       if (opts.filetype != NULL && strcmp(opts.filetype, "null") != 0)
@@ -3140,8 +3132,7 @@ int main(int argc, char **argv)
   for (;;) {
     err = process();
 
-    if (err != SOX_SUCCESS || user_abort ||
-        current_input >= input_count)
+    if (err != SOX_SUCCESS || user_abort || current_input >= input_count)
       break;
 
     if (advance_eff_chain() == SOX_EOF)

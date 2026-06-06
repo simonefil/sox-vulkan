@@ -584,8 +584,7 @@ void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, 
 static lsx_save_samples_observer_t save_samples_observer;
 static void *save_samples_observer_data;
 
-void lsx_set_save_samples_observer(
-    lsx_save_samples_observer_t observer, void *client_data)
+void lsx_set_save_samples_observer(lsx_save_samples_observer_t observer, void *client_data)
 {
   save_samples_observer = observer;
   save_samples_observer_data = observer ? client_data : NULL;
@@ -613,9 +612,7 @@ void lsx_save_samples(sox_sample_t * const dest, double const * const src,
 {
   size_t i;
   if (save_samples_observer)
-    save_samples_observer(
-        src, n, 1. / SOX_SAMPLE_MAX,
-        save_samples_observer_data);
+    save_samples_observer(src, n, 1. / SOX_SAMPLE_MAX, save_samples_observer_data);
   feclearexcept(FE_INVALID);
   for (i = 0; i < (n & ~7);) {
     _ _ _ _ _ _ _ _ 0;
@@ -635,8 +632,7 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     dest[i] = src[i];
 }
 
-void lsx_normalize_samples(double * const dest, double const * const src,
-    size_t const n)
+void lsx_normalize_samples(double * const dest, double const * const src, size_t const n)
 {
   size_t i;
   double const scale = 1. / SOX_SAMPLE_MAX;
@@ -659,8 +655,7 @@ void lsx_save_samples(sox_sample_t * const dest, double const * const src,
   SOX_SAMPLE_LOCALS;
   size_t i;
   if (save_samples_observer)
-    save_samples_observer(
-        src, n, 1., save_samples_observer_data);
+    save_samples_observer(src, n, 1., save_samples_observer_data);
   for (i = 0; i < n; ++i)
     dest[i] = SOX_FLOAT_64BIT_TO_SAMPLE(src[i], *clips);
 }
@@ -673,8 +668,7 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     dest[i] = SOX_SAMPLE_TO_FLOAT_64BIT(src[i],);
 }
 
-void lsx_normalize_samples(double * const dest, double const * const src,
-    size_t const n)
+void lsx_normalize_samples(double * const dest, double const * const src, size_t const n)
 {
   if (dest != src)
     memcpy(dest, src, n * sizeof(*dest));

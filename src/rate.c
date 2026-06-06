@@ -206,11 +206,9 @@ static void cubic_stage_fn(stage_t * p, fifo_t * output_fifo)
  * difference on every block.  Where the geometry does not hold, stuff the
  * zeros in the time domain instead -- slower, but it tracks the offset in
  * remL. */
-static sox_bool dft_stage_f_domain_exact(
-    dft_filter_t const * f, int L, int remL)
+static sox_bool dft_stage_f_domain_exact(dft_filter_t const * f, int L, int remL)
 {
-  return lsx_is_power_of_2(L) && !remL &&
-      (f->dft_length - (f->num_taps - 1)) % L == 0;
+  return lsx_is_power_of_2(L) && !remL && (f->dft_length - (f->num_taps - 1)) % L == 0;
 }
 
 static void dft_stage_fn(stage_t * p, fifo_t * output_fifo)
@@ -584,8 +582,7 @@ static sample_t * rate_cpu_input(rate_t * p, sample_t const * samples, size_t n)
   return fifo_write(&p->plan.stages[0].fifo, n, samples);
 }
 
-static sample_t const * rate_cpu_output(
-    rate_t * p, sample_t * samples, size_t * n)
+static sample_t const * rate_cpu_output(rate_t * p, sample_t * samples, size_t * n)
 {
   fifo_t * fifo = &p->plan.stages[p->plan.num_stages].fifo;
 
@@ -665,15 +662,12 @@ typedef struct rate_vulkan_stage_executor {
   sox_rate_t output_rate;
 } rate_vulkan_stage_executor_t;
 
-static sox_bool rate_vulkan_executor_is_fft(
-    rate_vulkan_stage_executor_t const *executor)
+static sox_bool rate_vulkan_executor_is_fft(rate_vulkan_stage_executor_t const *executor)
 {
-  return executor->kind == rate_stage_dft &&
-      !executor->dft_polyphase;
+  return executor->kind == rate_stage_dft && !executor->dft_polyphase;
 }
 
-static size_t rate_vulkan_resident_element_size(
-    lsx_vulkan_resident_format_t format)
+static size_t rate_vulkan_resident_element_size(lsx_vulkan_resident_format_t format)
 {
   switch (format) {
     case lsx_vulkan_resident_format_f32:
@@ -698,8 +692,7 @@ static int process_vulkan_resident_polyphase_to_host(
   lsx_vulkan_resident_buffer_t remaining;
   size_t element_size;
 
-  if (!polyphase || !polyphase->polyphase || !resident ||
-      !output_fifo || !channels)
+  if (!polyphase || !polyphase->polyphase || !resident || !output_fifo || !channels)
     return SOX_EINVAL;
   element_size = rate_vulkan_resident_element_size(resident->format);
   if (!element_size)
@@ -709,17 +702,12 @@ static int process_vulkan_resident_polyphase_to_host(
     lsx_vulkan_resident_buffer_t slice = remaining;
     double const *output;
     size_t output_frames;
-    size_t slice_frames = min(
-        remaining.valid_elements,
-        lsx_rate_polyphase_vulkan_block_frames());
-    VkDeviceSize consumed_bytes =
-        (VkDeviceSize)slice_frames *
-        remaining.frame_stride_elements * element_size;
+    size_t slice_frames = min(remaining.valid_elements, lsx_rate_polyphase_vulkan_block_frames());
+    VkDeviceSize consumed_bytes = (VkDeviceSize)slice_frames * remaining.frame_stride_elements * element_size;
 
     slice.capacity_elements = slice_frames;
     slice.valid_elements = slice_frames;
-    if (remaining.valid_elements > slice_frames &&
-        slice.state == lsx_vulkan_resident_final)
+    if (remaining.valid_elements > slice_frames && slice.state == lsx_vulkan_resident_final)
       slice.state = lsx_vulkan_resident_draining;
     if (lsx_rate_polyphase_vulkan_process_resident_input(
             polyphase->polyphase, &slice, &output,
@@ -733,8 +721,7 @@ static int process_vulkan_resident_polyphase_to_host(
       return SOX_EINVAL;
     }
     if (output_frames)
-      fifo_write(
-          output_fifo, output_frames * channels, output);
+      fifo_write(output_fifo, output_frames * channels, output);
     remaining.offset += consumed_bytes;
     remaining.capacity_elements -= slice_frames;
     remaining.valid_elements -= slice_frames;
@@ -742,9 +729,7 @@ static int process_vulkan_resident_polyphase_to_host(
   return SOX_SUCCESS;
 }
 
-static int process_vulkan_pending_direct_input(
-    sox_effect_t *effp,
-    rate_vulkan_stage_executor_t *final)
+static int process_vulkan_pending_direct_input(sox_effect_t *effp, rate_vulkan_stage_executor_t *final)
 {
   priv_t *p = (priv_t *)effp->priv;
   lsx_vulkan_resident_buffer_t input;
@@ -752,19 +737,13 @@ static int process_vulkan_pending_direct_input(
   size_t output_frames;
   VkDeviceSize consumed_bytes;
 
-  if (!p->vulkan_pending_direct_input_valid ||
-      p->vulkan_pending_output_valid ||
-      !final->dft_polyphase)
+  if (!p->vulkan_pending_direct_input_valid || p->vulkan_pending_output_valid || !final->dft_polyphase)
     return SOX_EOF;
   input = p->vulkan_pending_direct_input;
-  input_frames = min(
-      input.valid_elements,
-      lsx_rate_polyphase_vulkan_block_frames());
+  input_frames = min(input.valid_elements, lsx_rate_polyphase_vulkan_block_frames());
   input.valid_elements = input_frames;
   input.capacity_elements = input_frames;
-  if (p->vulkan_pending_direct_input.valid_elements >
-      input_frames &&
-      input.state == lsx_vulkan_resident_final)
+  if (p->vulkan_pending_direct_input.valid_elements > input_frames && input.state == lsx_vulkan_resident_final)
     input.state = lsx_vulkan_resident_draining;
   if (lsx_rate_polyphase_vulkan_process_resident_input_normalized(
           final->polyphase, &input, NULL, &output_frames,
@@ -778,8 +757,7 @@ static int process_vulkan_pending_direct_input(
         (unsigned long)input_frames);
     return SOX_EOF;
   }
-  p->vulkan_pending_output.frame_offset =
-      p->rate.samples_out / effp->in_signal.channels;
+  p->vulkan_pending_output.frame_offset = p->rate.samples_out / effp->in_signal.channels;
   p->vulkan_pending_output_valid = sox_true;
   consumed_bytes =
       (VkDeviceSize)input_frames *
@@ -790,17 +768,13 @@ static int process_vulkan_pending_direct_input(
   p->vulkan_pending_direct_input.capacity_elements -= input_frames;
   p->vulkan_pending_direct_input.valid_elements -= input_frames;
   if (!p->vulkan_pending_direct_input.valid_elements) {
-    memset(
-        &p->vulkan_pending_direct_input, 0,
-        sizeof(p->vulkan_pending_direct_input));
+    memset(&p->vulkan_pending_direct_input, 0, sizeof(p->vulkan_pending_direct_input));
     p->vulkan_pending_direct_input_valid = sox_false;
   }
   return SOX_SUCCESS;
 }
 
-static void advance_vulkan_resident_input(
-    lsx_vulkan_resident_buffer_t *input,
-    size_t frames)
+static void advance_vulkan_resident_input(lsx_vulkan_resident_buffer_t *input, size_t frames)
 {
   VkDeviceSize consumed_bytes =
       (VkDeviceSize)frames * input->frame_stride_elements *
@@ -821,15 +795,12 @@ static int append_vulkan_final_stream(
     lsx_vulkan_resident_buffer_t const *output,
     sox_bool *appended)
 {
-  rate_vulkan_stage_executor_t *final =
-      &p->vulkan_stages[final_index];
+  rate_vulkan_stage_executor_t *final = &p->vulkan_stages[final_index];
 
   *appended = sox_false;
-  if (output->valid_elements >
-      lsx_rate_vulkan_resident_stream_room(final->dft))
+  if (output->valid_elements > lsx_rate_vulkan_resident_stream_room(final->dft))
     return SOX_SUCCESS;
-  if (lsx_rate_vulkan_append_resident_stream(
-      final->dft, output) != SOX_SUCCESS) {
+  if (lsx_rate_vulkan_append_resident_stream(final->dft, output) != SOX_SUCCESS) {
     lsx_fail(
         "resident Vulkan polyphase slice to DFT stream failed: "
         "stage %lu, %lu frames, format %d, domain %d, state %d",
@@ -841,8 +812,7 @@ static int append_vulkan_final_stream(
   }
   *appended = sox_true;
   p->vulkan_final_stream_active = sox_true;
-  if (++p->vulkan_polyphase_chain_pending ==
-      lsx_rate_vulkan_resident_batch_depth(final->dft)) {
+  if (++p->vulkan_polyphase_chain_pending == lsx_rate_vulkan_resident_batch_depth(final->dft)) {
     if (lsx_rate_vulkan_flush_resident(final->dft) != SOX_SUCCESS)
       return SOX_EOF;
     p->vulkan_polyphase_chain_pending = 0;
@@ -850,9 +820,7 @@ static int append_vulkan_final_stream(
   return SOX_SUCCESS;
 }
 
-static int process_vulkan_pending_polyphase_chain(
-    sox_effect_t *effp,
-    size_t final_index)
+static int process_vulkan_pending_polyphase_chain(sox_effect_t *effp, size_t final_index)
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t index;
@@ -860,48 +828,37 @@ static int process_vulkan_pending_polyphase_chain(
   if (p->vulkan_deferred_append_valid) {
     sox_bool appended;
 
-    if (append_vulkan_final_stream(
-        p, final_index, &p->vulkan_deferred_append,
-        &appended) != SOX_SUCCESS)
+    if (append_vulkan_final_stream(p, final_index, &p->vulkan_deferred_append, &appended) != SOX_SUCCESS)
       return SOX_EOF;
     if (!appended)
       return SOX_SUCCESS;
     p->vulkan_deferred_append_valid = sox_false;
   }
   if (p->vulkan_pending_direct_input_valid)
-    return process_vulkan_pending_direct_input(
-        effp, &p->vulkan_stages[final_index]);
+    return process_vulkan_pending_direct_input(effp, &p->vulkan_stages[final_index]);
   for (index = final_index; index-- > 0;) {
     if (p->vulkan_pending_chain_input_valid[index])
       break;
   }
-  if (index >= final_index ||
-      !p->vulkan_pending_chain_input_valid[index])
+  if (index >= final_index || !p->vulkan_pending_chain_input_valid[index])
     return SOX_EOF;
   for (;;) {
-    rate_vulkan_stage_executor_t *polyphase =
-        &p->vulkan_stages[index];
-    lsx_vulkan_resident_buffer_t *pending =
-        &p->vulkan_pending_chain_input[index];
+    rate_vulkan_stage_executor_t *polyphase = &p->vulkan_stages[index];
+    lsx_vulkan_resident_buffer_t *pending = &p->vulkan_pending_chain_input[index];
     lsx_vulkan_resident_buffer_t slice = *pending;
     lsx_vulkan_resident_buffer_t output;
     size_t output_frames;
-    size_t slice_frames = min(
-        pending->valid_elements,
-        lsx_rate_polyphase_vulkan_block_frames());
+    size_t slice_frames = min(pending->valid_elements, lsx_rate_polyphase_vulkan_block_frames());
 
     /*
      * When the chain ends in a resident stream, the slice is also bounded
      * by the room left in it: a slice whose output does not fit could
      * never be appended, and the walker would spin on it.
      */
-    if (!p->vulkan_stages[final_index].dft_polyphase &&
-        index + 1u == final_index) {
+    if (!p->vulkan_stages[final_index].dft_polyphase && index + 1u == final_index) {
       stage_t const *stage = &p->rate.plan.stages[index];
-      size_t room = lsx_rate_vulkan_resident_stream_room(
-          p->vulkan_stages[final_index].dft);
-      size_t room_frames = stage->L > 0 && stage->M > 0 ?
-          room * (size_t)stage->M / (size_t)stage->L : room;
+      size_t room = lsx_rate_vulkan_resident_stream_room(p->vulkan_stages[final_index].dft);
+      size_t room_frames = stage->L > 0 && stage->M > 0 ? room * (size_t)stage->M / (size_t)stage->L : room;
 
       if (!room_frames)
         return SOX_SUCCESS;
@@ -910,8 +867,7 @@ static int process_vulkan_pending_polyphase_chain(
 
     slice.capacity_elements = slice_frames;
     slice.valid_elements = slice_frames;
-    if (pending->valid_elements > slice_frames &&
-        slice.state == lsx_vulkan_resident_final)
+    if (pending->valid_elements > slice_frames && slice.state == lsx_vulkan_resident_final)
       slice.state = lsx_vulkan_resident_draining;
     if (!slice_frames) {
       /*
@@ -944,8 +900,7 @@ static int process_vulkan_pending_polyphase_chain(
       if (!p->vulkan_stages[final_index].dft_polyphase) {
         sox_bool appended;
 
-        if (append_vulkan_final_stream(
-            p, final_index, &output, &appended) != SOX_SUCCESS)
+        if (append_vulkan_final_stream(p, final_index, &output, &appended) != SOX_SUCCESS)
           return SOX_EOF;
         if (!appended) {
           p->vulkan_deferred_append = output;
@@ -955,15 +910,13 @@ static int process_vulkan_pending_polyphase_chain(
         for (index = final_index; index-- > 0;)
           if (p->vulkan_pending_chain_input_valid[index])
             break;
-        if (index >= final_index ||
-            !p->vulkan_pending_chain_input_valid[index])
+        if (index >= final_index || !p->vulkan_pending_chain_input_valid[index])
           return SOX_SUCCESS;
         continue;
       }
       p->vulkan_pending_direct_input = output;
       p->vulkan_pending_direct_input_valid = sox_true;
-      return process_vulkan_pending_direct_input(
-          effp, &p->vulkan_stages[final_index]);
+      return process_vulkan_pending_direct_input(effp, &p->vulkan_stages[final_index]);
     }
     if (p->vulkan_pending_chain_input_valid[index]) {
       lsx_fail("resident Vulkan polyphase chain state collision");
@@ -974,8 +927,7 @@ static int process_vulkan_pending_polyphase_chain(
   }
 }
 
-static sox_bool vulkan_pending_polyphase_chain(
-    priv_t const *p)
+static sox_bool vulkan_pending_polyphase_chain(priv_t const *p)
 {
   size_t index;
 
@@ -987,8 +939,7 @@ static sox_bool vulkan_pending_polyphase_chain(
   return sox_false;
 }
 
-static size_t rate_vulkan_executor_input_frames(
-    rate_vulkan_stage_executor_t const *executor)
+static size_t rate_vulkan_executor_input_frames(rate_vulkan_stage_executor_t const *executor)
 {
   if (rate_vulkan_executor_is_fft(executor))
     return lsx_rate_vulkan_input_frames(executor->dft);
@@ -996,26 +947,20 @@ static size_t rate_vulkan_executor_input_frames(
     return lsx_rate_cubic_vulkan_block_frames();
   if (executor->dft_polyphase)
     return executor->polyphase_block_frames;
-  return min(
-      (size_t)16384,
-      lsx_rate_polyphase_vulkan_block_frames());
+  return min((size_t)16384, lsx_rate_polyphase_vulkan_block_frames());
 }
 
-static sox_bool rate_vulkan_dft_fft_supported(
-    stage_t const *stage)
+static sox_bool rate_vulkan_dft_fft_supported(stage_t const *stage)
 {
   /* The executor streams a continuous L:1 zero-stuffed convolution, so it
    * carries no per-block offset and needs no relation between post_peak and L:
    * the whole alignment is the initial output skip that create_rate applies. */
-  return stage->L >= 1 && stage->M >= 1 &&
-      lsx_fir_vulkan_block_frames() % stage->L == 0;
+  return stage->L >= 1 && stage->M >= 1 && lsx_fir_vulkan_block_frames() % stage->L == 0;
 }
 
-static sox_bool rate_vulkan_dft_direct_supported(
-    stage_t const *stage)
+static sox_bool rate_vulkan_dft_direct_supported(stage_t const *stage)
 {
-  return stage->L > 1 && stage->M == 1 &&
-      !lsx_is_power_of_2(stage->L);
+  return stage->L > 1 && stage->M == 1 && !lsx_is_power_of_2(stage->L);
 }
 
 static sox_bool rate_vulkan_plan_supported(rate_plan_t const *plan)
@@ -1037,8 +982,7 @@ static sox_bool rate_vulkan_plan_supported(rate_plan_t const *plan)
       if (stage->interp_order != 0 || stage->use_hi_prec_clock || stage->phase_count != stage->L || stage->M < 1 || stage->at.parts.integer < 0 || stage->at.parts.integer >= stage->L)
         return sox_false;
     }
-    else if (stage->kind != rate_stage_half_fir &&
-        stage->kind != rate_stage_cubic)
+    else if (stage->kind != rate_stage_half_fir && stage->kind != rate_stage_cubic)
       return sox_false;
   }
   return sox_true;
@@ -1070,20 +1014,15 @@ static double *rate_vulkan_dft_polyphase_taps(
   uint32_t tap;
 
   *taps_per_phase =
-      ((uint32_t)filter->num_taps + phase_count - 1u) /
-      phase_count;
-  result = lsx_calloc(
-      (size_t)phase_count * *taps_per_phase,
-      sizeof(*result));
+      ((uint32_t)filter->num_taps + phase_count - 1u) / phase_count;
+  result = lsx_calloc((size_t)phase_count * *taps_per_phase, sizeof(*result));
   for (phase = 0; phase < phase_count; ++phase)
     for (tap = 0; tap < *taps_per_phase; ++tap) {
       uint32_t reverse_tap = *taps_per_phase - 1u - tap;
-      uint64_t source =
-          phase + (uint64_t)reverse_tap * phase_count;
+      uint64_t source = phase + (uint64_t)reverse_tap * phase_count;
 
       if (source < (uint32_t)filter->num_taps)
-        result[(size_t)phase * *taps_per_phase + tap] =
-            filter->taps[source] * phase_count;
+        result[(size_t)phase * *taps_per_phase + tap] = filter->taps[source] * phase_count;
     }
   return result;
 }
@@ -1102,12 +1041,8 @@ static int rate_vulkan_start(sox_effect_t *effp)
   p->vulkan_stage_count = (size_t)p->rate.plan.num_stages;
   p->vulkan_stages = lsx_calloc(p->vulkan_stage_count, sizeof(*p->vulkan_stages));
   p->vulkan_fifos = lsx_calloc(p->vulkan_stage_count + 1u, sizeof(*p->vulkan_fifos));
-  p->vulkan_pending_chain_input_valid = lsx_calloc(
-      p->vulkan_stage_count,
-      sizeof(*p->vulkan_pending_chain_input_valid));
-  p->vulkan_pending_chain_input = lsx_calloc(
-      p->vulkan_stage_count,
-      sizeof(*p->vulkan_pending_chain_input));
+  p->vulkan_pending_chain_input_valid = lsx_calloc(p->vulkan_stage_count, sizeof(*p->vulkan_pending_chain_input_valid));
+  p->vulkan_pending_chain_input = lsx_calloc(p->vulkan_stage_count, sizeof(*p->vulkan_pending_chain_input));
   for (index = 0; index <= p->rate.plan.num_stages; ++index) {
     fifo_create(&p->vulkan_fifos[index], sizeof(double));
     ++created_fifos;
@@ -1131,17 +1066,12 @@ static int rate_vulkan_start(sox_effect_t *effp)
         uint32_t taps_per_phase;
         uint32_t phase_start;
         uint32_t preload_frames = (uint32_t)stage->preload;
-        double *coefficients =
-            rate_vulkan_dft_polyphase_taps(
-                filter, (uint32_t)stage->L,
-                &taps_per_phase);
+        double *coefficients = rate_vulkan_dft_polyphase_taps(filter, (uint32_t)stage->L, &taps_per_phase);
 
         /* remL is the sub-L part of the peak that stage->preload cannot
          * hold; the phase origin has to carry it, for every L. */
         {
-          int phase_origin =
-              (filter->num_taps - 1) % stage->L -
-              stage->remL;
+          int phase_origin = (filter->num_taps - 1) % stage->L - stage->remL;
 
           if (phase_origin < 0) {
             phase_origin += stage->L;
@@ -1226,8 +1156,7 @@ static int rate_vulkan_start(sox_effect_t *effp)
 error:
   for (index = 0; index < (int)p->vulkan_stage_count; ++index) {
     lsx_rate_vulkan_destroy(p->vulkan_stages[index].dft);
-    lsx_rate_cubic_vulkan_destroy(
-        p->vulkan_stages[index].cubic);
+    lsx_rate_cubic_vulkan_destroy(p->vulkan_stages[index].cubic);
     lsx_rate_polyphase_vulkan_destroy(p->vulkan_stages[index].polyphase);
   }
   while (created_fifos)
@@ -1377,10 +1306,8 @@ static int start(sox_effect_t * effp)
 
 #if HAVE_VULKAN
   if (sox_globals.vulkan_profile != sox_vulkan_profile_none) {
-    if (!p->vulkan_eligible ||
-        !rate_vulkan_plan_supported(&p->rate.plan)) {
-      lsx_fail(
-          "rate plan is not supported by the Vulkan backend");
+    if (!p->vulkan_eligible || !rate_vulkan_plan_supported(&p->rate.plan)) {
+      lsx_fail("rate plan is not supported by the Vulkan backend");
       rate_plan_destroy(&p->rate.plan);
       return SOX_EOF;
     }
@@ -1389,11 +1316,9 @@ static int start(sox_effect_t * effp)
       return SOX_EOF;
     }
     if (lsx_rate_effect_resident_transform_supported(effp))
-      effp->internal_chain_endpoint =
-          &vulkan_resident_transform_endpoint;
+      effp->internal_chain_endpoint = &vulkan_resident_transform_endpoint;
     else if (lsx_rate_effect_resident_supported(effp))
-      effp->internal_chain_endpoint =
-          &vulkan_resident_producer_endpoint;
+      effp->internal_chain_endpoint = &vulkan_resident_producer_endpoint;
     /*
      * A downstream resident consumer reads whole batches of this effect's
      * output, so the batch depth follows this effect's own topology.
@@ -1419,14 +1344,10 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
   size_t channels = effp->in_signal.channels;
   size_t index;
 
-  if (resident_chain &&
-      p->vulkan_pending_direct_input_valid)
-    return process_vulkan_pending_direct_input(
-        effp,
-        &p->vulkan_stages[p->vulkan_stage_count - 1u]);
+  if (resident_chain && p->vulkan_pending_direct_input_valid)
+    return process_vulkan_pending_direct_input(effp, &p->vulkan_stages[p->vulkan_stage_count - 1u]);
   if (resident_chain && vulkan_pending_polyphase_chain(p))
-    return process_vulkan_pending_polyphase_chain(
-        effp, p->vulkan_stage_count - 1u);
+    return process_vulkan_pending_polyphase_chain(effp, p->vulkan_stage_count - 1u);
   for (index = 0; index < stage_count; ++index) {
     rate_vulkan_stage_executor_t *executor = &p->vulkan_stages[index];
     fifo_t *input_fifo = &p->vulkan_fifos[index];
@@ -1438,9 +1359,7 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
       size_t final_stream_index = index + 1u;
       sox_bool final_stream_chain;
 
-      while (final_stream_index < p->vulkan_stage_count &&
-          p->vulkan_stages[final_stream_index].kind !=
-          rate_stage_dft)
+      while (final_stream_index < p->vulkan_stage_count && p->vulkan_stages[final_stream_index].kind != rate_stage_dft)
         ++final_stream_index;
       final_stream_chain =
           resident_chain &&
@@ -1468,19 +1387,13 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
              * final stage consumes.
              */
             p->vulkan_pending_chain_input[index + 1u] = resident;
-            p->vulkan_pending_chain_input_valid[index + 1u] =
-                sox_true;
-            return process_vulkan_pending_polyphase_chain(
-                effp, final_stream_index);
+            p->vulkan_pending_chain_input_valid[index + 1u] = sox_true;
+            return process_vulkan_pending_polyphase_chain(effp, final_stream_index);
           }
-          if (p->vulkan_stages[
-              final_stream_index].dft_polyphase) {
+          if (p->vulkan_stages[final_stream_index].dft_polyphase) {
             p->vulkan_pending_direct_input = resident;
             p->vulkan_pending_direct_input_valid = sox_true;
-            if (process_vulkan_pending_direct_input(
-                    effp,
-                    &p->vulkan_stages[final_stream_index]) !=
-                SOX_SUCCESS)
+            if (process_vulkan_pending_direct_input(effp, &p->vulkan_stages[final_stream_index]) != SOX_SUCCESS)
               return SOX_EOF;
             return SOX_SUCCESS;
           }
@@ -1520,10 +1433,8 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
         ++index;
     }
     else if (executor->kind == rate_stage_cubic) {
-      size_t pre_post =
-          lsx_rate_cubic_vulkan_pre_post(executor->cubic);
-      size_t occupancy_frames =
-          (size_t)fifo_occupancy(input_fifo) / channels;
+      size_t pre_post = lsx_rate_cubic_vulkan_pre_post(executor->cubic);
+      size_t occupancy_frames = (size_t)fifo_occupancy(input_fifo) / channels;
 
       while (occupancy_frames > pre_post) {
         double const *input = fifo_read_ptr(input_fifo);
@@ -1536,27 +1447,20 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
                 &output, &output_frames,
                 &consumed_frames) != SOX_SUCCESS)
           return SOX_EOF;
-        fifo_read(
-            input_fifo, consumed_frames * channels, NULL);
+        fifo_read(input_fifo, consumed_frames * channels, NULL);
         if (output_frames)
-          fifo_write(
-              output_fifo, output_frames * channels, output);
-        occupancy_frames =
-            (size_t)fifo_occupancy(input_fifo) / channels;
+          fifo_write(output_fifo, output_frames * channels, output);
+        occupancy_frames = (size_t)fifo_occupancy(input_fifo) / channels;
       }
     }
     else {
       size_t taps = lsx_rate_polyphase_vulkan_taps(executor->polyphase);
-      size_t block_frames =
-          rate_vulkan_executor_input_frames(executor);
+      size_t block_frames = rate_vulkan_executor_input_frames(executor);
       size_t occupancy_frames = (size_t)fifo_occupancy(input_fifo) / channels;
       size_t final_stream_index = index + 1u;
       sox_bool final_stream_chain;
 
-      while (final_stream_index <
-          p->vulkan_stage_count &&
-          p->vulkan_stages[final_stream_index].kind !=
-          rate_stage_dft)
+      while (final_stream_index < p->vulkan_stage_count && p->vulkan_stages[final_stream_index].kind != rate_stage_dft)
         ++final_stream_index;
       final_stream_chain =
           resident_chain &&
@@ -1580,18 +1484,13 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
           fifo_read(input_fifo, consumed_frames * channels, NULL);
           if (index + 1u < final_stream_index) {
             p->vulkan_pending_chain_input[index + 1u] = resident;
-            p->vulkan_pending_chain_input_valid[index + 1u] =
-                sox_true;
-            return process_vulkan_pending_polyphase_chain(
-                effp, final_stream_index);
+            p->vulkan_pending_chain_input_valid[index + 1u] = sox_true;
+            return process_vulkan_pending_polyphase_chain(effp, final_stream_index);
           }
-          if (p->vulkan_stages[
-              final_stream_index].dft_polyphase) {
+          if (p->vulkan_stages[final_stream_index].dft_polyphase) {
             p->vulkan_pending_direct_input = resident;
             p->vulkan_pending_direct_input_valid = sox_true;
-            return process_vulkan_pending_direct_input(
-                effp,
-                &p->vulkan_stages[final_stream_index]);
+            return process_vulkan_pending_direct_input(effp, &p->vulkan_stages[final_stream_index]);
           }
           if (lsx_rate_vulkan_append_resident_stream(p->vulkan_stages[final_stream_index].dft, &resident) != SOX_SUCCESS)
             return SOX_EOF;
@@ -1638,8 +1537,7 @@ static int flow_vulkan(sox_effect_t *effp, sox_sample_t const *ibuf, sox_sample_
     lsx_load_samples(input, ibuf, idone);
     p->rate.samples_in += idone;
     *isamp = idone;
-    status = process_vulkan_stages(
-        effp, p->vulkan_stage_count, sox_false);
+    status = process_vulkan_stages(effp, p->vulkan_stage_count, sox_false);
     if (status != SOX_SUCCESS) {
       *osamp = odone;
       return SOX_EINVAL;
@@ -1666,9 +1564,7 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
     return SOX_EOF;
   if (p->vulkan_pending_output_valid) {
     *resident = p->vulkan_pending_output;
-    memset(
-        &p->vulkan_pending_output, 0,
-        sizeof(p->vulkan_pending_output));
+    memset(&p->vulkan_pending_output, 0, sizeof(p->vulkan_pending_output));
     p->vulkan_pending_output_valid = sox_false;
     *produced = sox_true;
     return SOX_SUCCESS;
@@ -1680,42 +1576,31 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
     return SOX_EOF;
   }
   if (last->dft_polyphase) {
-    size_t taps =
-        lsx_rate_polyphase_vulkan_taps(last->polyphase);
-    size_t occupancy_frames =
-        (size_t)fifo_occupancy(
-            &p->vulkan_fifos[last_index]) /
-        channels;
+    size_t taps = lsx_rate_polyphase_vulkan_taps(last->polyphase);
+    size_t occupancy_frames = (size_t)fifo_occupancy(&p->vulkan_fifos[last_index]) / channels;
     size_t processable_frames;
     size_t consumed_frames;
     size_t output_frames;
 
     if (occupancy_frames <= taps - 1u)
       return SOX_SUCCESS;
-    processable_frames = min(
-        last->polyphase_block_frames,
-        occupancy_frames - (taps - 1u));
-    input = fifo_read_ptr(
-        &p->vulkan_fifos[last_index]);
+    processable_frames = min(last->polyphase_block_frames, occupancy_frames - (taps - 1u));
+    input = fifo_read_ptr(&p->vulkan_fifos[last_index]);
     if (lsx_rate_polyphase_vulkan_process_resident_normalized(
         last->polyphase, input, processable_frames,
         &output_frames, &consumed_frames,
         effp->out_signal.rate, state, normalize,
         resident) != SOX_SUCCESS)
       return SOX_EOF;
-    fifo_read(
-        &p->vulkan_fifos[last_index],
-        consumed_frames * channels, NULL);
-    resident->frame_offset =
-        p->rate.samples_out / channels;
+    fifo_read(&p->vulkan_fifos[last_index], consumed_frames * channels, NULL);
+    resident->frame_offset = p->rate.samples_out / channels;
     *produced = sox_true;
     return SOX_SUCCESS;
   }
   if (p->vulkan_final_stream_active)
     return lsx_rate_vulkan_process_resident_stream(last->dft, effp->out_signal.rate, p->rate.samples_out / channels, state, normalize, resident, produced);
   input_fifo = &p->vulkan_fifos[last_index];
-  block_samples =
-      lsx_rate_vulkan_input_frames(last->dft) * channels;
+  block_samples = lsx_rate_vulkan_input_frames(last->dft) * channels;
   if ((size_t)fifo_occupancy(input_fifo) < block_samples)
     return SOX_SUCCESS;
   input = fifo_read(input_fifo, block_samples, NULL);
@@ -1725,22 +1610,17 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
   return SOX_SUCCESS;
 }
 
-sox_bool lsx_rate_effect_resident_supported(
-    sox_effect_t const *effp)
+sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
 
   if (!effp)
     return sox_false;
   p = (priv_t const *)effp->priv;
-  return p->vulkan_stage_count &&
-      p->vulkan_stages[
-          p->vulkan_stage_count - 1u].kind ==
-          rate_stage_dft;
+  return p->vulkan_stage_count && p->vulkan_stages[p->vulkan_stage_count - 1u].kind == rate_stage_dft;
 }
 
-lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(
-    sox_effect_t const *effp)
+lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t const *effp)
 {
   priv_t const *p;
   size_t index;
@@ -1749,8 +1629,7 @@ lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(
     return lsx_vulkan_resident_topology_chained;
   p = (priv_t const *)effp->priv;
   for (index = 0; index < p->vulkan_stage_count; ++index)
-    if (!rate_vulkan_executor_is_fft(
-        &p->vulkan_stages[index]))
+    if (!rate_vulkan_executor_is_fft(&p->vulkan_stages[index]))
       return lsx_vulkan_resident_topology_chained;
   return lsx_vulkan_resident_topology_dft_only;
 }
@@ -1764,21 +1643,17 @@ sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp)
   if (!effp)
     return sox_false;
   p = (priv_t const *)effp->priv;
-  if (!p->vulkan_stage_count ||
-      !rate_vulkan_executor_is_fft(
-          &p->vulkan_stages[0]))
+  if (!p->vulkan_stage_count || !rate_vulkan_executor_is_fft(&p->vulkan_stages[0]))
     return sox_false;
   if (p->vulkan_stage_count == 1u)
     return sox_true;
   if (p->vulkan_stage_count < 3u)
     return sox_false;
   last = &p->vulkan_stages[p->vulkan_stage_count - 1u];
-  if (!rate_vulkan_executor_is_fft(last) &&
-      !last->dft_polyphase)
+  if (!rate_vulkan_executor_is_fft(last) && !last->dft_polyphase)
     return sox_false;
   for (index = 1u; index + 1u < p->vulkan_stage_count; ++index) {
-    if (rate_vulkan_executor_is_fft(
-        &p->vulkan_stages[index]))
+    if (rate_vulkan_executor_is_fft(&p->vulkan_stages[index]))
       return sox_false;
   }
   return sox_true;
@@ -1791,8 +1666,7 @@ sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp)
   if (!lsx_rate_effect_resident_input_supported(effp))
     return sox_false;
   p = (priv_t const *)effp->priv;
-  return rate_vulkan_executor_is_fft(
-      &p->vulkan_stages[p->vulkan_stage_count - 1u]);
+  return rate_vulkan_executor_is_fft(&p->vulkan_stages[p->vulkan_stage_count - 1u]);
 }
 
 sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp)
@@ -1843,19 +1717,13 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
   if (p->vulkan_stage_count == 1u)
     return SOX_SUCCESS;
   if (p->vulkan_pending_direct_input_valid) {
-    if (process_vulkan_pending_direct_input(
-            effp,
-            &p->vulkan_stages[
-                p->vulkan_stage_count - 1u]) !=
-            SOX_SUCCESS)
+    if (process_vulkan_pending_direct_input(effp, &p->vulkan_stages[p->vulkan_stage_count - 1u]) != SOX_SUCCESS)
       return SOX_EOF;
     *advanced = sox_true;
     return SOX_SUCCESS;
   }
   if (vulkan_pending_polyphase_chain(p)) {
-    if (process_vulkan_pending_polyphase_chain(
-            effp, p->vulkan_stage_count - 1u) !=
-        SOX_SUCCESS)
+    if (process_vulkan_pending_polyphase_chain(effp, p->vulkan_stage_count - 1u) != SOX_SUCCESS)
       return SOX_EOF;
     *advanced = sox_true;
     return SOX_SUCCESS;
@@ -1864,13 +1732,10 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
     return SOX_EOF;
   if (!first_produced)
     return SOX_SUCCESS;
-  if (p->vulkan_stages[
-      p->vulkan_stage_count - 1u].dft_polyphase) {
+  if (p->vulkan_stages[p->vulkan_stage_count - 1u].dft_polyphase) {
     p->vulkan_pending_chain_input[1u] = current;
     p->vulkan_pending_chain_input_valid[1u] = sox_true;
-    if (process_vulkan_pending_polyphase_chain(
-            effp, p->vulkan_stage_count - 1u) !=
-        SOX_SUCCESS)
+    if (process_vulkan_pending_polyphase_chain(effp, p->vulkan_stage_count - 1u) != SOX_SUCCESS)
       return SOX_EOF;
     *advanced = sox_true;
     return SOX_SUCCESS;
@@ -1884,11 +1749,9 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
     current = output;
   }
   {
-    rate_vulkan_stage_executor_t *last =
-        &p->vulkan_stages[p->vulkan_stage_count - 1u];
+    rate_vulkan_stage_executor_t *last = &p->vulkan_stages[p->vulkan_stage_count - 1u];
 
-    if (lsx_rate_vulkan_append_resident_stream(
-            last->dft, &current) != SOX_SUCCESS)
+    if (lsx_rate_vulkan_append_resident_stream(last->dft, &current) != SOX_SUCCESS)
       return SOX_EOF;
     p->vulkan_final_stream_active = sox_true;
   }
@@ -1905,8 +1768,7 @@ static int flow_vulkan_resident_input_mode(sox_effect_t *effp, lsx_vulkan_reside
   if (!effp || !input_consumed || !resident || !produced || !lsx_rate_effect_resident_input_supported(effp))
     return SOX_EINVAL;
   p = (priv_t *)effp->priv;
-  if (p->vulkan_external_input_active &&
-      p->vulkan_external_output_normalize != normalize_output)
+  if (p->vulkan_external_input_active && p->vulkan_external_output_normalize != normalize_output)
     return SOX_EINVAL;
   if (!p->vulkan_external_input_active)
     p->vulkan_external_output_normalize = normalize_output;
@@ -2024,8 +1886,7 @@ int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, 
       return SOX_EINVAL;
     }
     if (*produced)
-      p->rate.samples_out +=
-          resident->valid_elements * channels;
+      p->rate.samples_out += resident->valid_elements * channels;
   }
   *isamp = idone;
   return SOX_SUCCESS;
@@ -2106,35 +1967,26 @@ int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffe
     return SOX_SUCCESS;
   first = &p->vulkan_stages[0];
   input_fifo = &p->vulkan_fifos[0];
-  block_frames =
-      rate_vulkan_executor_input_frames(first);
+  block_frames = rate_vulkan_executor_input_frames(first);
   block_samples = block_frames * channels;
   while (!*produced) {
-    if (take_vulkan_resident_output(
-        effp, lsx_vulkan_resident_draining, sox_true,
-        resident, produced) != SOX_SUCCESS) {
+    if (take_vulkan_resident_output(effp, lsx_vulkan_resident_draining, sox_true, resident, produced) != SOX_SUCCESS) {
       lsx_fail("resident Vulkan rate drain output failed");
       return SOX_EINVAL;
     }
     if (*produced)
       break;
-    if (process_vulkan_stages(
-        effp, p->vulkan_stage_count - 1u,
-        sox_true) != SOX_SUCCESS) {
+    if (process_vulkan_stages(effp, p->vulkan_stage_count - 1u, sox_true) != SOX_SUCCESS) {
       lsx_fail("resident Vulkan rate drain stages failed");
       return SOX_EINVAL;
     }
-    if (take_vulkan_resident_output(
-        effp, lsx_vulkan_resident_draining, sox_true,
-        resident, produced) != SOX_SUCCESS) {
+    if (take_vulkan_resident_output(effp, lsx_vulkan_resident_draining, sox_true, resident, produced) != SOX_SUCCESS) {
       lsx_fail("resident Vulkan rate drain final output failed");
       return SOX_EINVAL;
     }
     if (*produced)
       break;
-    memset(
-        fifo_write(input_fifo, block_samples, NULL),
-        0, block_samples * sizeof(double));
+    memset(fifo_write(input_fifo, block_samples, NULL), 0, block_samples * sizeof(double));
   }
   remaining /= channels;
   if (resident->valid_elements > remaining)
@@ -2143,8 +1995,7 @@ int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffe
     resident->state = lsx_vulkan_resident_final;
     *done = sox_true;
   }
-  p->rate.samples_out +=
-      resident->valid_elements * channels;
+  p->rate.samples_out += resident->valid_elements * channels;
   return SOX_SUCCESS;
 }
 
@@ -2182,8 +2033,7 @@ static int flush_vulkan(sox_effect_t *effp)
   rate_vulkan_stage_executor_t *first = &p->vulkan_stages[0];
   fifo_t *input_fifo = &p->vulkan_fifos[0];
   fifo_t *output_fifo = &p->vulkan_fifos[p->vulkan_stage_count];
-  size_t block_frames =
-      rate_vulkan_executor_input_frames(first);
+  size_t block_frames = rate_vulkan_executor_input_frames(first);
   size_t block_samples = block_frames * channels;
   size_t remaining = vulkan_remaining_samples(effp);
 
@@ -2192,8 +2042,7 @@ static int flush_vulkan(sox_effect_t *effp)
     int status;
 
     memset(zeros, 0, block_samples * sizeof(*zeros));
-    status = process_vulkan_stages(
-        effp, p->vulkan_stage_count, sox_false);
+    status = process_vulkan_stages(effp, p->vulkan_stage_count, sox_false);
     if (status != SOX_SUCCESS)
       return SOX_EINVAL;
   }
@@ -2267,8 +2116,7 @@ static int stop(sox_effect_t * effp)
 
     for (index = 0; index < p->vulkan_stage_count; ++index) {
       lsx_rate_vulkan_destroy(p->vulkan_stages[index].dft);
-      lsx_rate_cubic_vulkan_destroy(
-          p->vulkan_stages[index].cubic);
+      lsx_rate_cubic_vulkan_destroy(p->vulkan_stages[index].cubic);
       lsx_rate_polyphase_vulkan_destroy(p->vulkan_stages[index].polyphase);
       fifo_delete(&p->vulkan_fifos[index]);
     }

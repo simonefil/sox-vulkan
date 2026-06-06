@@ -290,10 +290,7 @@ static int sox_noisered_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_
 
     if (whole_window) {
         for (i = 0; i < tracks; ++i)
-            if (process_window(
-                effp, data, (unsigned)i, (unsigned)tracks,
-                obuf, (unsigned)(oldbuf + ncopy)) ==
-                SOX_EOF)
+            if (process_window(effp, data, (unsigned)i, (unsigned)tracks, obuf, (unsigned)(oldbuf + ncopy)) == SOX_EOF)
                 status = SOX_EOF;
     }
 

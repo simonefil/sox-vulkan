@@ -50,9 +50,7 @@ int lsx_set_dft_filter_vulkan_channels(
     dft_filter_priv_t *p, double const *const *taps,
     int num_taps, int post_peak, uint32_t channels);
 void lsx_clear_dft_filter_vulkan_channels(dft_filter_priv_t *p);
-int lsx_dft_filter_restart_vulkan(
-    sox_effect_t *effp, double *taps,
-    int num_taps, int post_peak);
+int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak);
 int lsx_dft_filter_restart_vulkan_reference_dd(
     sox_effect_t *effp, double *tap_highs,
     double *tap_lows, int num_taps, int post_peak);
@@ -63,6 +61,5 @@ int lsx_dft_filter_restart_vulkan_reference_dd_channels(
     sox_effect_t *effp, double **tap_highs,
     double **tap_lows, uint32_t channels,
     int num_taps, int post_peak);
-int lsx_fir_vulkan_try_fuse(
-    sox_effect_t *first, sox_effect_t const *second);
+int lsx_fir_vulkan_try_fuse(sox_effect_t *first, sox_effect_t const *second);
 #endif

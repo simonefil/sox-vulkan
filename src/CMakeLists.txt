@@ -182,230 +182,129 @@ set(LIBSOX_FORMAT_HEADERS
 )
 
 if(HAVE_VULKAN)
-    set(SDM_VULKAN_MASH_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_mash2_fsm.comp")
-    set(SDM_VULKAN_RESIDENT_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_f32.comp")
-    set(SDM_VULKAN_RESIDENT_STRICT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_strict_f32.comp")
-    set(SDM_VULKAN_RESIDENT_REFERENCE_DD_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_reference_dd.comp")
-    set(SDM_VULKAN_RESIDENT_F64_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_f64.comp")
-    set(FIR_VULKAN_PARTITION_F64_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f64.comp")
-    set(FIR_VULKAN_PARTITION_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f32.comp")
-    set(FIR_VULKAN_PARTITION_ACCURATE_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_accurate_f32.comp")
-    set(FIR_VULKAN_PARTITION_STRICT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_strict_f32.comp")
-    set(FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_precise_f64.comp")
-    set(VULKAN_DOUBLE_DOUBLE_HEADER
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/double_double.glsl")
-    set(FIR_VULKAN_PARTITION_REFERENCE_DD_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_reference_dd.comp")
+    set(SDM_VULKAN_MASH_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_mash2_fsm.comp")
+    set(SDM_VULKAN_RESIDENT_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_f32.comp")
+    set(SDM_VULKAN_RESIDENT_STRICT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_strict_f32.comp")
+    set(SDM_VULKAN_RESIDENT_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_reference_dd.comp")
+    set(SDM_VULKAN_RESIDENT_F64_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_f64.comp")
+    set(FIR_VULKAN_PARTITION_F64_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f64.comp")
+    set(FIR_VULKAN_PARTITION_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f32.comp")
+    set(FIR_VULKAN_PARTITION_ACCURATE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_accurate_f32.comp")
+    set(FIR_VULKAN_PARTITION_STRICT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_strict_f32.comp")
+    set(FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_precise_f64.comp")
+    set(VULKAN_DOUBLE_DOUBLE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/double_double.glsl")
+    set(FIR_VULKAN_PARTITION_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_reference_dd.comp")
     set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_spectrum_multiply_reference_dd.comp")
-    set(RATE_VULKAN_POLYPHASE_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f64.comp")
-    set(RATE_VULKAN_POLYPHASE_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f32.comp")
-    set(RATE_VULKAN_POLYPHASE_ACCURATE_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_accurate_f32.comp")
-    set(RATE_VULKAN_POLYPHASE_STRICT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_strict_f32.comp")
-    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_reference_dd.comp")
+    set(RATE_VULKAN_POLYPHASE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f64.comp")
+    set(RATE_VULKAN_POLYPHASE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f32.comp")
+    set(RATE_VULKAN_POLYPHASE_ACCURATE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_accurate_f32.comp")
+    set(RATE_VULKAN_POLYPHASE_STRICT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_strict_f32.comp")
+    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_reference_dd.comp")
     set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_reference_dd_normalized_f32.comp")
-    set(RATE_VULKAN_CUBIC_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f64.comp")
-    set(RATE_VULKAN_CUBIC_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f32.comp")
-    set(RATE_VULKAN_CUBIC_ACCURATE_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_accurate_f32.comp")
-    set(RATE_VULKAN_CUBIC_STRICT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_strict_f32.comp")
-    set(RATE_VULKAN_CUBIC_REFERENCE_DD_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_reference_dd.comp")
-    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_normalized_f32.comp")
-    set(RATE_VULKAN_SELECT_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f64.comp")
-    set(RATE_VULKAN_SELECT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f32.comp")
-    set(RATE_VULKAN_SELECT_STRICT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_strict_f32.comp")
-    set(RATE_VULKAN_SELECT_REFERENCE_DD_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_reference_dd.comp")
-    set(RATE_VULKAN_PREPARE_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f64.comp")
-    set(RATE_VULKAN_PREPARE_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f32.comp")
-    set(RATE_VULKAN_PREPARE_STRICT_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_strict_f32.comp")
-    set(RATE_VULKAN_PREPARE_REFERENCE_DD_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_reference_dd.comp")
-    set(RATE_VULKAN_STREAM_APPEND_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f64.comp")
-    set(RATE_VULKAN_STREAM_APPEND_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f32.comp")
+    set(RATE_VULKAN_CUBIC_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f64.comp")
+    set(RATE_VULKAN_CUBIC_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f32.comp")
+    set(RATE_VULKAN_CUBIC_ACCURATE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_accurate_f32.comp")
+    set(RATE_VULKAN_CUBIC_STRICT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_strict_f32.comp")
+    set(RATE_VULKAN_CUBIC_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_reference_dd.comp")
+    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_normalized_f32.comp")
+    set(RATE_VULKAN_SELECT_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f64.comp")
+    set(RATE_VULKAN_SELECT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f32.comp")
+    set(RATE_VULKAN_SELECT_STRICT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_strict_f32.comp")
+    set(RATE_VULKAN_SELECT_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_reference_dd.comp")
+    set(RATE_VULKAN_PREPARE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f64.comp")
+    set(RATE_VULKAN_PREPARE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_f32.comp")
+    set(RATE_VULKAN_PREPARE_STRICT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_strict_f32.comp")
+    set(RATE_VULKAN_PREPARE_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_prepare_reference_dd.comp")
+    set(RATE_VULKAN_STREAM_APPEND_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f64.comp")
+    set(RATE_VULKAN_STREAM_APPEND_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_f32.comp")
     set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_strict_f32.comp")
     set(RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_stream_append_reference_dd.comp")
-    set(SDM_VULKAN_MASH_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm.comp.spv")
-    set(SDM_VULKAN_RESIDENT_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f32.comp.spv")
-    set(SDM_VULKAN_RESIDENT_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_strict_f32.comp.spv")
-    set(SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_reference_dd.comp.spv")
-    set(SDM_VULKAN_RESIDENT_F64_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f64.comp.spv")
-    set(FIR_VULKAN_PARTITION_F64_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64.comp.spv")
-    set(FIR_VULKAN_PARTITION_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32.comp.spv")
-    set(FIR_VULKAN_PARTITION_ACCURATE_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_accurate_f32.comp.spv")
-    set(FIR_VULKAN_PARTITION_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_strict_f32.comp.spv")
-    set(FIR_VULKAN_PARTITION_PRECISE_F64_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64.comp.spv")
-    set(FIR_VULKAN_PARTITION_REFERENCE_DD_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd.comp.spv")
+    set(SDM_VULKAN_MASH_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm.comp.spv")
+    set(SDM_VULKAN_RESIDENT_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f32.comp.spv")
+    set(SDM_VULKAN_RESIDENT_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_strict_f32.comp.spv")
+    set(SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_reference_dd.comp.spv")
+    set(SDM_VULKAN_RESIDENT_F64_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f64.comp.spv")
+    set(FIR_VULKAN_PARTITION_F64_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64.comp.spv")
+    set(FIR_VULKAN_PARTITION_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32.comp.spv")
+    set(FIR_VULKAN_PARTITION_ACCURATE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_accurate_f32.comp.spv")
+    set(FIR_VULKAN_PARTITION_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_strict_f32.comp.spv")
+    set(FIR_VULKAN_PARTITION_PRECISE_F64_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64.comp.spv")
+    set(FIR_VULKAN_PARTITION_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd.comp.spv")
     set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/fir_spectrum_multiply_reference_dd.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_ACCURATE_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_accurate_f32.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_strict_f32.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_ACCURATE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_accurate_f32.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_strict_f32.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd.comp.spv")
     set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_normalized_f32.comp.spv")
-    set(RATE_VULKAN_CUBIC_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f64.comp.spv")
-    set(RATE_VULKAN_CUBIC_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32.comp.spv")
-    set(RATE_VULKAN_CUBIC_ACCURATE_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_accurate_f32.comp.spv")
-    set(RATE_VULKAN_CUBIC_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_strict_f32.comp.spv")
-    set(RATE_VULKAN_CUBIC_REFERENCE_DD_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_reference_dd.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32.comp.spv")
-    set(RATE_VULKAN_SELECT_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64.comp.spv")
-    set(RATE_VULKAN_SELECT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32.comp.spv")
-    set(RATE_VULKAN_SELECT_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_strict_f32.comp.spv")
-    set(RATE_VULKAN_SELECT_REFERENCE_DD_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_reference_dd.comp.spv")
-    set(RATE_VULKAN_PREPARE_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64.comp.spv")
-    set(RATE_VULKAN_PREPARE_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32.comp.spv")
-    set(RATE_VULKAN_PREPARE_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_strict_f32.comp.spv")
-    set(RATE_VULKAN_PREPARE_REFERENCE_DD_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_reference_dd.comp.spv")
-    set(RATE_VULKAN_STREAM_APPEND_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64.comp.spv")
-    set(RATE_VULKAN_STREAM_APPEND_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32.comp.spv")
-    set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_strict_f32.comp.spv")
+    set(RATE_VULKAN_CUBIC_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f64.comp.spv")
+    set(RATE_VULKAN_CUBIC_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32.comp.spv")
+    set(RATE_VULKAN_CUBIC_ACCURATE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_accurate_f32.comp.spv")
+    set(RATE_VULKAN_CUBIC_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_strict_f32.comp.spv")
+    set(RATE_VULKAN_CUBIC_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_reference_dd.comp.spv")
+    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32.comp.spv")
+    set(RATE_VULKAN_SELECT_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64.comp.spv")
+    set(RATE_VULKAN_SELECT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32.comp.spv")
+    set(RATE_VULKAN_SELECT_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_strict_f32.comp.spv")
+    set(RATE_VULKAN_SELECT_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_reference_dd.comp.spv")
+    set(RATE_VULKAN_PREPARE_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64.comp.spv")
+    set(RATE_VULKAN_PREPARE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32.comp.spv")
+    set(RATE_VULKAN_PREPARE_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_strict_f32.comp.spv")
+    set(RATE_VULKAN_PREPARE_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_reference_dd.comp.spv")
+    set(RATE_VULKAN_STREAM_APPEND_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64.comp.spv")
+    set(RATE_VULKAN_STREAM_APPEND_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32.comp.spv")
+    set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_strict_f32.comp.spv")
     set(RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_SPV
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_reference_dd.comp.spv")
-    set(SDM_VULKAN_MASH_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm_spv.inc")
-    set(SDM_VULKAN_RESIDENT_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f32_spv.inc")
-    set(SDM_VULKAN_RESIDENT_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_strict_f32_spv.inc")
-    set(SDM_VULKAN_RESIDENT_REFERENCE_DD_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_reference_dd_spv.inc")
-    set(SDM_VULKAN_RESIDENT_F64_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f64_spv.inc")
-    set(FIR_VULKAN_PARTITION_F64_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64_spv.inc")
-    set(FIR_VULKAN_PARTITION_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32_spv.inc")
-    set(FIR_VULKAN_PARTITION_ACCURATE_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_accurate_f32_spv.inc")
-    set(FIR_VULKAN_PARTITION_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_strict_f32_spv.inc")
-    set(FIR_VULKAN_PARTITION_PRECISE_F64_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64_spv.inc")
-    set(FIR_VULKAN_PARTITION_REFERENCE_DD_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd_spv.inc")
+    set(SDM_VULKAN_MASH_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_mash2_fsm_spv.inc")
+    set(SDM_VULKAN_RESIDENT_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f32_spv.inc")
+    set(SDM_VULKAN_RESIDENT_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_strict_f32_spv.inc")
+    set(SDM_VULKAN_RESIDENT_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_reference_dd_spv.inc")
+    set(SDM_VULKAN_RESIDENT_F64_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f64_spv.inc")
+    set(FIR_VULKAN_PARTITION_F64_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64_spv.inc")
+    set(FIR_VULKAN_PARTITION_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32_spv.inc")
+    set(FIR_VULKAN_PARTITION_ACCURATE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_accurate_f32_spv.inc")
+    set(FIR_VULKAN_PARTITION_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_strict_f32_spv.inc")
+    set(FIR_VULKAN_PARTITION_PRECISE_F64_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64_spv.inc")
+    set(FIR_VULKAN_PARTITION_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_reference_dd_spv.inc")
     set(FIR_VULKAN_SPECTRUM_MULTIPLY_REFERENCE_DD_INC
         "${CMAKE_CURRENT_BINARY_DIR}/fir_spectrum_multiply_reference_dd_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_ACCURATE_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_accurate_f32_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_strict_f32_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f64_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_ACCURATE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_accurate_f32_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_strict_f32_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_spv.inc")
     set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_normalized_f32_spv.inc")
-    set(RATE_VULKAN_CUBIC_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f64_spv.inc")
-    set(RATE_VULKAN_CUBIC_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32_spv.inc")
-    set(RATE_VULKAN_CUBIC_ACCURATE_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_accurate_f32_spv.inc")
-    set(RATE_VULKAN_CUBIC_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_strict_f32_spv.inc")
-    set(RATE_VULKAN_CUBIC_REFERENCE_DD_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_reference_dd_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_NORMALIZED_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32_spv.inc")
-    set(RATE_VULKAN_SELECT_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64_spv.inc")
-    set(RATE_VULKAN_SELECT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32_spv.inc")
-    set(RATE_VULKAN_SELECT_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_strict_f32_spv.inc")
-    set(RATE_VULKAN_SELECT_REFERENCE_DD_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_select_reference_dd_spv.inc")
-    set(RATE_VULKAN_PREPARE_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64_spv.inc")
-    set(RATE_VULKAN_PREPARE_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32_spv.inc")
-    set(RATE_VULKAN_PREPARE_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_strict_f32_spv.inc")
-    set(RATE_VULKAN_PREPARE_REFERENCE_DD_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_reference_dd_spv.inc")
-    set(RATE_VULKAN_STREAM_APPEND_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64_spv.inc")
-    set(RATE_VULKAN_STREAM_APPEND_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32_spv.inc")
-    set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_strict_f32_spv.inc")
+    set(RATE_VULKAN_CUBIC_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f64_spv.inc")
+    set(RATE_VULKAN_CUBIC_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32_spv.inc")
+    set(RATE_VULKAN_CUBIC_ACCURATE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_accurate_f32_spv.inc")
+    set(RATE_VULKAN_CUBIC_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_strict_f32_spv.inc")
+    set(RATE_VULKAN_CUBIC_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_reference_dd_spv.inc")
+    set(RATE_VULKAN_POLYPHASE_NORMALIZED_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32_spv.inc")
+    set(RATE_VULKAN_SELECT_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64_spv.inc")
+    set(RATE_VULKAN_SELECT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32_spv.inc")
+    set(RATE_VULKAN_SELECT_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_strict_f32_spv.inc")
+    set(RATE_VULKAN_SELECT_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_reference_dd_spv.inc")
+    set(RATE_VULKAN_PREPARE_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f64_spv.inc")
+    set(RATE_VULKAN_PREPARE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_f32_spv.inc")
+    set(RATE_VULKAN_PREPARE_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_strict_f32_spv.inc")
+    set(RATE_VULKAN_PREPARE_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_prepare_reference_dd_spv.inc")
+    set(RATE_VULKAN_STREAM_APPEND_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f64_spv.inc")
+    set(RATE_VULKAN_STREAM_APPEND_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_f32_spv.inc")
+    set(RATE_VULKAN_STREAM_APPEND_STRICT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_strict_f32_spv.inc")
     set(RATE_VULKAN_STREAM_APPEND_REFERENCE_DD_INC
         "${CMAKE_CURRENT_BINARY_DIR}/rate_stream_append_reference_dd_spv.inc")
 
-    add_executable(sox_embed_binary
-        "${CMAKE_CURRENT_SOURCE_DIR}/embed_binary.c")
+    add_executable(sox_embed_binary "${CMAKE_CURRENT_SOURCE_DIR}/embed_binary.c")
     if(MSVC)
-        target_compile_definitions(
-            sox_embed_binary PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(sox_embed_binary PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
     add_custom_command(
         OUTPUT "${SDM_VULKAN_MASH_SPV}"
@@ -1065,13 +964,10 @@ if(HAVE_VULKAN)
     if(IS_MACOS)
         target_link_libraries(libsox PRIVATE "${GLSLANG_LIBRARY}")
     endif()
-    target_include_directories(libsox PRIVATE
-        "${CMAKE_CURRENT_BINARY_DIR}")
-    target_include_directories(libsox SYSTEM PRIVATE
-        "${VKFFT_INCLUDE_DIR}")
+    target_include_directories(libsox PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(libsox SYSTEM PRIVATE "${VKFFT_INCLUDE_DIR}")
     if(IS_WINDOWS)
-        target_include_directories(libsox SYSTEM PRIVATE
-            "$ENV{VULKAN_SDK}/Include/glslang/Include")
+        target_include_directories(libsox SYSTEM PRIVATE "$ENV{VULKAN_SDK}/Include/glslang/Include")
     else()
         target_include_directories(libsox SYSTEM PRIVATE
             "${GLSLANG_INCLUDE_DIR}"
@@ -1441,9 +1337,7 @@ install(TARGETS sox_exe
 )
 
 if(HAVE_VULKAN AND IS_WINDOWS)
-    install(FILES "${GLSLANG_RUNTIME_DLL}"
-        DESTINATION ${CMAKE_INSTALL_BINDIR}
-    )
+    install(FILES "${GLSLANG_RUNTIME_DLL}" DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
 # Install header

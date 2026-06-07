@@ -64,16 +64,10 @@ endif()
 # Options
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(BUILD_STATIC_EXECUTABLE "Build executable with static dependencies" OFF)
-option(SOX_REQUIRE_STATIC_DEPENDENCIES
-    "Reject shared codec libraries and require static codec dependencies"
-    OFF)
+option(SOX_REQUIRE_STATIC_DEPENDENCIES "Reject shared codec libraries and require static codec dependencies" OFF)
 option(WITH_OPENMP "Enable OpenMP support" ON)
-option(SOX_REQUIRE_OPENMP
-    "Fail configuration when OpenMP support is unavailable"
-    OFF)
-option(WITH_VULKAN
-    "Enable the Vulkan backend for FIR and DSD modulation"
-    OFF)
+option(SOX_REQUIRE_OPENMP "Fail configuration when OpenMP support is unavailable" OFF)
+option(WITH_VULKAN "Enable the Vulkan backend for FIR and DSD modulation" OFF)
 
 if(BUILD_STATIC_EXECUTABLE)
     set(BUILD_SHARED_LIBS OFF)
@@ -103,24 +97,20 @@ if(EXISTS "${STATIC_LIBS_DIR}")
 endif()
 
 if(SOX_REQUIRE_STATIC_DEPENDENCIES AND BUILD_SHARED_LIBS)
-    message(FATAL_ERROR
-        "SOX_REQUIRE_STATIC_DEPENDENCIES requires BUILD_SHARED_LIBS=OFF")
+    message(FATAL_ERROR "SOX_REQUIRE_STATIC_DEPENDENCIES requires BUILD_SHARED_LIBS=OFF")
 endif()
 
 if(SOX_REQUIRE_OPENMP AND NOT WITH_OPENMP)
-    message(FATAL_ERROR
-        "SOX_REQUIRE_OPENMP requires WITH_OPENMP=ON")
+    message(FATAL_ERROR "SOX_REQUIRE_OPENMP requires WITH_OPENMP=ON")
 endif()
 
 if(SOX_REQUIRE_STATIC_DEPENDENCIES)
     if(NOT EXISTS "${STATIC_LIBS_DIR}/lib")
-        message(FATAL_ERROR
-            "Static dependency directory not found: ${STATIC_LIBS_DIR}/lib")
+        message(FATAL_ERROR "Static dependency directory not found: ${STATIC_LIBS_DIR}/lib")
     endif()
     # Prevent pkg-config from falling through to Homebrew, MacPorts, or system
     # shared-library metadata during a release build.
-    set(ENV{PKG_CONFIG_LIBDIR}
-        "${STATIC_LIBS_DIR}/lib/pkgconfig:${STATIC_LIBS_DIR}/share/pkgconfig")
+    set(ENV{PKG_CONFIG_LIBDIR} "${STATIC_LIBS_DIR}/lib/pkgconfig:${STATIC_LIBS_DIR}/share/pkgconfig")
 endif()
 
 # Optional format/device support
@@ -227,26 +217,20 @@ if(WITH_OPENMP)
     if(OpenMP_C_FOUND)
         set(HAVE_OPENMP TRUE)
     elseif(SOX_REQUIRE_OPENMP)
-        message(FATAL_ERROR
-            "OpenMP support is required but was not found for the C compiler")
+        message(FATAL_ERROR "OpenMP support is required but was not found for the C compiler")
     endif()
 endif()
 
 if(WITH_VULKAN)
     if(NOT IS_WINDOWS AND NOT IS_MACOS)
-        message(FATAL_ERROR
-            "The Vulkan FIR and DSD backends support Windows and macOS")
+        message(FATAL_ERROR "The Vulkan FIR and DSD backends support Windows and macOS")
     endif()
     find_package(Vulkan REQUIRED)
     find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
     if(IS_WINDOWS)
-        find_file(GLSLANG_RUNTIME_DLL NAMES glslang.dll
-            PATHS "$ENV{VULKAN_SDK}/Bin"
-            NO_DEFAULT_PATH REQUIRED)
+        find_file(GLSLANG_RUNTIME_DLL NAMES glslang.dll PATHS "$ENV{VULKAN_SDK}/Bin" NO_DEFAULT_PATH REQUIRED)
     else()
-        find_path(GLSLANG_INCLUDE_DIR
-            NAMES glslang/Include/glslang_c_interface.h
-            REQUIRED)
+        find_path(GLSLANG_INCLUDE_DIR NAMES glslang/Include/glslang_c_interface.h REQUIRED)
         find_library(GLSLANG_LIBRARY NAMES glslang REQUIRED)
     endif()
     find_path(VKFFT_INCLUDE_DIR NAMES vkFFT.h
@@ -367,16 +351,14 @@ if(WITH_OGGVORBIS)
         pkg_check_modules(VORBIS IMPORTED_TARGET vorbisfile vorbisenc vorbis)
         pkg_check_modules(OGG IMPORTED_TARGET ogg)
         if(VORBIS_FOUND)
-            if(SOX_REQUIRE_STATIC_DEPENDENCIES AND
-                    (IS_LINUX OR IS_BSD))
+            if(SOX_REQUIRE_STATIC_DEPENDENCIES AND (IS_LINUX OR IS_BSD))
                 set(VORBIS_LIBRARIES ${VORBIS_STATIC_LINK_LIBRARIES})
             else()
                 set(VORBIS_LIBRARIES PkgConfig::VORBIS)
             endif()
         endif()
         if(OGG_FOUND)
-            if(SOX_REQUIRE_STATIC_DEPENDENCIES AND
-                    (IS_LINUX OR IS_BSD))
+            if(SOX_REQUIRE_STATIC_DEPENDENCIES AND (IS_LINUX OR IS_BSD))
                 set(OGG_LIBRARIES ${OGG_STATIC_LINK_LIBRARIES})
             else()
                 set(OGG_LIBRARIES PkgConfig::OGG)
@@ -441,8 +423,7 @@ if(WITH_OPUS)
     if(NOT OPUSENC_FOUND)
         find_library(OPUSENC_LIBRARY opusenc)
         find_path(OPUSENC_INCLUDE_DIR opusenc.h PATH_SUFFIXES opus)
-        if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR AND
-                OPUSENC_LIBRARY AND OPUSENC_INCLUDE_DIR)
+        if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR AND OPUSENC_LIBRARY AND OPUSENC_INCLUDE_DIR)
             set(OPUSENC_LIBRARIES ${OPUSENC_LIBRARY} ${OPUS_LIBRARY})
             set(OPUSENC_INCLUDE_DIRS
                 ${OPUSENC_INCLUDE_DIR}
@@ -494,8 +475,7 @@ if(WITH_FFMPEG_CODECS)
         find_library(AVUTIL_LIBRARY avutil)
         find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
         find_path(AVUTIL_INCLUDE_DIR libavutil/avutil.h)
-        if(AVCODEC_LIBRARY AND AVUTIL_LIBRARY AND
-                AVCODEC_INCLUDE_DIR AND AVUTIL_INCLUDE_DIR)
+        if(AVCODEC_LIBRARY AND AVUTIL_LIBRARY AND AVCODEC_INCLUDE_DIR AND AVUTIL_INCLUDE_DIR)
             set(FFMPEG_CODECS_LIBRARIES
                 ${AVCODEC_LIBRARY}
                 ${AVUTIL_LIBRARY}
@@ -515,9 +495,7 @@ endif()
 # FFmpeg containers
 if(WITH_FFMPEG_FORMATS AND HAVE_FFMPEG_CODECS)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(FFMPEG_FORMATS IMPORTED_TARGET
-            libavformat>=61
-        )
+        pkg_check_modules(FFMPEG_FORMATS IMPORTED_TARGET libavformat>=61)
         if(FFMPEG_FORMATS_FOUND)
             set(FFMPEG_FORMATS_LIBRARIES PkgConfig::FFMPEG_FORMATS)
         endif()
@@ -634,8 +612,7 @@ if(WITH_SNDFILE)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(SNDFILE IMPORTED_TARGET sndfile)
         if(SNDFILE_FOUND)
-            if(SOX_REQUIRE_STATIC_DEPENDENCIES AND
-                    (IS_LINUX OR IS_BSD))
+            if(SOX_REQUIRE_STATIC_DEPENDENCIES AND (IS_LINUX OR IS_BSD))
                 set(SNDFILE_LIBRARIES ${SNDFILE_STATIC_LINK_LIBRARIES})
             else()
                 set(SNDFILE_LIBRARIES PkgConfig::SNDFILE)
@@ -740,8 +717,7 @@ if(WITH_PULSEAUDIO AND (IS_LINUX OR IS_FREEBSD))
             set(PULSEAUDIO_LIBRARIES ${PULSE_SIMPLE_LIBRARY} ${PULSE_LIBRARY})
             set(PULSEAUDIO_INCLUDE_DIRS ${PULSE_INCLUDE_DIR})
             set(PULSEAUDIO_FOUND TRUE)
-            message(STATUS
-                "Using shared-only PulseAudio client libraries")
+            message(STATUS "Using shared-only PulseAudio client libraries")
         endif()
     endif()
     if(PULSEAUDIO_FOUND)

@@ -295,8 +295,7 @@ install_vkfft() {
         extract_archive "$archive" "$SRC_DIR"
     fi
 
-    mkdir -p "${STATIC_LIBS_DIR}/include" \
-        "${STATIC_LIBS_DIR}/share/licenses/VkFFT"
+    mkdir -p "${STATIC_LIBS_DIR}/include" "${STATIC_LIBS_DIR}/share/licenses/VkFFT"
     cp -R "${src}/vkFFT" "${STATIC_LIBS_DIR}/include/"
     cp "${src}/LICENSE" "${STATIC_LIBS_DIR}/share/licenses/VkFFT/"
 
@@ -503,9 +502,7 @@ build_libopusenc() {
 
     cd "$src"
 
-    ./configure $(get_common_flags) \
-        --disable-examples \
-        PKG_CONFIG_PATH="${STATIC_LIBS_DIR}/lib/pkgconfig"
+    ./configure $(get_common_flags) --disable-examples PKG_CONFIG_PATH="${STATIC_LIBS_DIR}/lib/pkgconfig"
 
     make -j${JOBS}
     make install
@@ -594,9 +591,7 @@ update_config_scripts() {
                 "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" \
                 --output "$temporary" || true
         elif command -v wget &> /dev/null; then
-            wget -q \
-                "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" \
-                -O "$temporary" || true
+            wget -q "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" -O "$temporary" || true
         fi
 
         if [ -s "$temporary" ] &&

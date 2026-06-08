@@ -409,16 +409,12 @@ This lists all formats enabled in the current build. Look for:
 ./output/sox input-24bit.wav -C 2 output.m4a
 
 # Encode TrueHD, MLP, and DTS
-./output/sox input-5.1-side.wav -b 24 \
-  --channel-layout '5.1(side)' output.thd
+./output/sox input-5.1-side.wav -b 24 --channel-layout '5.1(side)' output.thd
 ./output/sox input-24bit.wav -b 24 output.mlp
-./output/sox input-5.1-side.wav -C 1536 \
-  --channel-layout '5.1(side)' output.dts
+./output/sox input-5.1-side.wav -C 1536 --channel-layout '5.1(side)' output.dts
 
 # Encode PCM to DSD512
-./output/sox --multi-threaded --buffer 524288 input.wav \
-  -r 22579200 output.dsf \
-  rate -v 22579200 sdm -f sdm-8
+./output/sox --multi-threaded --buffer 524288 input.wav -r 22579200 output.dsf rate -v 22579200 sdm -f sdm-8
 
 # Generate a five-second test tone
 ./output/sox -n test.wav synth 5 sine 440
@@ -537,12 +533,10 @@ ALAC uses these noncanonical orders:
 
 ```bash
 # Label eight channels already prepared in MPEG 7.1 B order
-./output/sox prepared-8ch.wav -b 24 \
-  --channel-layout '7.1(wide)' output.m4a
+./output/sox prepared-8ch.wav -b 24 --channel-layout '7.1(wide)' output.m4a
 
 # Label seven channels already prepared in AAC 6.1(back) order
-./output/sox prepared-7ch.wav -C 448 \
-  --channel-layout '6.1(back)' output.aac
+./output/sox prepared-7ch.wav -C 448 --channel-layout '6.1(back)' output.aac
 ```
 
 #### FFmpeg Options
@@ -551,8 +545,7 @@ Use `--ffmpeg-opts key=value:key=value` immediately before an FFmpeg-backed inpu
 
 ```bash
 # E-AC-3 encoder options
-./output/sox input.wav -C 640 \
-  --ffmpeg-opts 'dialnorm=-27:dmix_mode=loro:stereo_rematrixing=0' output.eac3
+./output/sox input.wav -C 640 --ffmpeg-opts 'dialnorm=-27:dmix_mode=loro:stereo_rematrixing=0' output.eac3
 
 # E-AC-3 decoder options
 ./output/sox --ffmpeg-opts 'drc_scale=0.5' input.eac3 output.wav

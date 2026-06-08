@@ -1059,11 +1059,7 @@ function Patch-FfmpegMsvcEmptyCbsTable($src) {
         throw "FFmpeg CBS compatibility patch failed: table loop not found"
     }
 
-    [IO.File]::WriteAllLines(
-        $cbsPath,
-        $lines,
-        [Text.UTF8Encoding]::new($false)
-    )
+    [IO.File]::WriteAllLines($cbsPath, $lines, [Text.UTF8Encoding]::new($false))
     Write-Info "Applied FFmpeg MSVC empty CBS table compatibility patch"
 }
 
@@ -1207,8 +1203,7 @@ function Test-SoxExecutable($binary) {
 
     if ($EnableVulkan) {
         $help = & $binary --help 2>&1
-        if ($LASTEXITCODE -ne 0 -or
-            -not ($help | Select-String -SimpleMatch "--vulkan")) {
+        if ($LASTEXITCODE -ne 0 -or -not ($help | Select-String -SimpleMatch "--vulkan")) {
             throw "sox.exe help does not expose the enabled Vulkan backend"
         }
         Write-Success "sox.exe Vulkan help check passed"

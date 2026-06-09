@@ -157,14 +157,10 @@ static double const *host_samples(lsx_rate_polyphase_vulkan_t *context, size_t c
 static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *coefficients)
 {
   VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-  VkDeviceSize sample_size = context->reference_dd ?
-      2u * sizeof(double) :
-      context->strict_fp32 ?
-      2u * sizeof(float) :
-      context->double_precision ? sizeof(double) : sizeof(float);
-  VkDeviceSize coefficient_size = (VkDeviceSize)context->parameters.phase_count * context->parameters.taps * sample_size;
-  VkDeviceSize input_size = (VkDeviceSize)(RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u) * context->parameters.channels * sample_size;
-  VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_size;
+  VkDeviceSize sample_bytes = sample_size(context);
+  VkDeviceSize coefficient_size = (VkDeviceSize)context->parameters.phase_count * context->parameters.taps * sample_bytes;
+  VkDeviceSize input_size = (VkDeviceSize)(RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u) * context->parameters.channels * sample_bytes;
+  VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_bytes;
   VkDeviceSize normalized_output_size =
       (VkDeviceSize)context->max_output_frames *
       context->parameters.channels *
@@ -224,6 +220,8 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   VkDescriptorBufferInfo buffer_info[RATE_POLYPHASE_BINDINGS];
   VkWriteDescriptorSet writes[RATE_POLYPHASE_BINDINGS];
   lsx_vulkan_buffer_t *buffers[RATE_POLYPHASE_BINDINGS] = {&context->coefficients, &context->input, &context->output};
+  uint32_t const *kernel_spirv, *normalized_spirv;
+  size_t kernel_size, normalized_size;
   uint32_t index;
 
   memset(bindings, 0, sizeof(bindings));
@@ -242,25 +240,41 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   layout_info.pSetLayouts = &context->descriptor_layout;
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_range;
-  if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS ||
-      (context->reference_dd ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_reference_dd_spv, sizeof(rate_polyphase_reference_dd_spv), context->pipeline_layout, &context->pipeline) :
-       context->double_precision ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f64_spv, sizeof(rate_polyphase_f64_spv), context->pipeline_layout, &context->pipeline) :
-       context->strict_fp32 ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_strict_f32_spv, sizeof(rate_polyphase_strict_f32_spv), context->pipeline_layout, &context->pipeline) :
-       context->accurate_fp32 ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_accurate_f32_spv, sizeof(rate_polyphase_accurate_f32_spv), context->pipeline_layout, &context->pipeline) :
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->pipeline)) != SOX_SUCCESS ||
-      (context->reference_dd ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_reference_dd_normalized_f32_spv, sizeof(rate_polyphase_reference_dd_normalized_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
-       context->double_precision ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_normalized_f32_spv, sizeof(rate_polyphase_normalized_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
-       context->strict_fp32 ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_strict_f32_spv, sizeof(rate_polyphase_strict_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
-       context->accurate_fp32 ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_accurate_f32_spv, sizeof(rate_polyphase_accurate_f32_spv), context->pipeline_layout, &context->normalized_pipeline) :
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_polyphase_f32_spv, sizeof(rate_polyphase_f32_spv), context->pipeline_layout, &context->normalized_pipeline)) != SOX_SUCCESS)
+  if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS)
+    return SOX_EOF;
+  /* Pick each kernel once, so its SPIR-V blob and the size passed with it can
+   * never disagree.  Only the first test is order-sensitive: reference_dd is
+   * set as double_precision && profile == reference, so it has to come before
+   * the plain FP64 family; strict_fp32 and accurate_fp32 are set only when
+   * double_precision is false and exclude each other.
+   *
+   * The two selections are deliberately not the same mapping.  The normalized
+   * kernel writes host-scaled FP32 samples, so above FP32 it uses a dedicated
+   * shader -- reference_dd_normalized_f32 for the reference profile and
+   * normalized_f32 for plain FP64 -- while the strict and accurate profiles
+   * share the kernel they already use for the resident path. */
+  if (context->reference_dd) {
+    kernel_spirv = rate_polyphase_reference_dd_spv;
+    kernel_size = sizeof(rate_polyphase_reference_dd_spv);
+    normalized_spirv = rate_polyphase_reference_dd_normalized_f32_spv;
+    normalized_size = sizeof(rate_polyphase_reference_dd_normalized_f32_spv);
+  } else if (context->double_precision) {
+    kernel_spirv = rate_polyphase_f64_spv;
+    kernel_size = sizeof(rate_polyphase_f64_spv);
+    normalized_spirv = rate_polyphase_normalized_f32_spv;
+    normalized_size = sizeof(rate_polyphase_normalized_f32_spv);
+  } else if (context->strict_fp32) {
+    kernel_spirv = normalized_spirv = rate_polyphase_strict_f32_spv;
+    kernel_size = normalized_size = sizeof(rate_polyphase_strict_f32_spv);
+  } else if (context->accurate_fp32) {
+    kernel_spirv = normalized_spirv = rate_polyphase_accurate_f32_spv;
+    kernel_size = normalized_size = sizeof(rate_polyphase_accurate_f32_spv);
+  } else {
+    kernel_spirv = normalized_spirv = rate_polyphase_f32_spv;
+    kernel_size = normalized_size = sizeof(rate_polyphase_f32_spv);
+  }
+  if (lsx_vulkan_create_compute_pipeline(context->vulkan, kernel_spirv, kernel_size, context->pipeline_layout, &context->pipeline) != SOX_SUCCESS ||
+      lsx_vulkan_create_compute_pipeline(context->vulkan, normalized_spirv, normalized_size, context->pipeline_layout, &context->normalized_pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;

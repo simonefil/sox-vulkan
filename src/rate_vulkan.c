@@ -144,8 +144,68 @@ lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t c
   return resident_format(context);
 }
 
+/* Each resident kernel is compiled once per numerical family, and the select,
+ * prepare and stream-append pipelines all choose among the families with the
+ * same rule.  Naming the rule once keeps the three in step: previously each
+ * repeated the test order, and each paired a SPIR-V blob with a separate
+ * sizeof that had to name the same blob. */
+typedef enum {
+  resident_kernel_reference_dd,
+  resident_kernel_f64,
+  resident_kernel_strict_f32,
+  resident_kernel_f32,
+  resident_kernel_count
+} resident_kernel_t;
+
+typedef struct {
+  uint32_t const *spirv;
+  size_t size;
+} resident_kernel_blob_t;
+
+/* Blob and size are taken from one name, so they cannot describe different
+ * modules. */
+#define RESIDENT_KERNEL(name) {name, sizeof(name)}
+
+/* Only the first test is order-sensitive: reference_dd is set as
+ * double_precision && profile == reference, so it has to be recognised before
+ * the plain FP64 family.  strict_fp32 is set only when double_precision is
+ * false, so the families below cannot overlap. */
+static resident_kernel_t resident_kernel(lsx_rate_vulkan_t const *context)
+{
+  if (context->reference_dd)
+    return resident_kernel_reference_dd;
+  if (context->double_precision)
+    return resident_kernel_f64;
+  if (context->strict_fp32)
+    return resident_kernel_strict_f32;
+  return resident_kernel_f32;
+}
+
+/* One entry per resident_kernel_t, in enum order. */
+static resident_kernel_blob_t const select_kernels[resident_kernel_count] = {
+  RESIDENT_KERNEL(rate_select_reference_dd_spv),
+  RESIDENT_KERNEL(rate_select_f64_spv),
+  RESIDENT_KERNEL(rate_select_strict_f32_spv),
+  RESIDENT_KERNEL(rate_select_f32_spv)
+};
+
+static resident_kernel_blob_t const prepare_kernels[resident_kernel_count] = {
+  RESIDENT_KERNEL(rate_prepare_reference_dd_spv),
+  RESIDENT_KERNEL(rate_prepare_f64_spv),
+  RESIDENT_KERNEL(rate_prepare_strict_f32_spv),
+  RESIDENT_KERNEL(rate_prepare_f32_spv)
+};
+
+static resident_kernel_blob_t const stream_append_kernels[resident_kernel_count] = {
+  RESIDENT_KERNEL(rate_stream_append_reference_dd_spv),
+  RESIDENT_KERNEL(rate_stream_append_f64_spv),
+  RESIDENT_KERNEL(rate_stream_append_strict_f32_spv),
+  RESIDENT_KERNEL(rate_stream_append_f32_spv)
+};
+
 static int create_resident_output(lsx_rate_vulkan_t *context)
 {
+  resident_kernel_blob_t const *kernel = &select_kernels[resident_kernel(context)];
   VkDescriptorSetLayoutBinding bindings[RATE_SELECT_BINDINGS];
   VkDescriptorSetLayoutCreateInfo descriptor_info = {
     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
@@ -204,29 +264,7 @@ static int create_resident_output(lsx_rate_vulkan_t *context)
       context->vulkan->device, &layout_info, NULL,
       &context->resident_pipeline_layout),
       "vkCreatePipelineLayout rate select") != SOX_SUCCESS ||
-      (context->reference_dd ?
-      lsx_vulkan_create_compute_pipeline(
-      context->vulkan, rate_select_reference_dd_spv,
-      sizeof(rate_select_reference_dd_spv),
-      context->resident_pipeline_layout,
-      &context->resident_pipeline) :
-      context->double_precision ?
-      lsx_vulkan_create_compute_pipeline(
-      context->vulkan, rate_select_f64_spv,
-      sizeof(rate_select_f64_spv),
-      context->resident_pipeline_layout,
-      &context->resident_pipeline) :
-      context->strict_fp32 ?
-      lsx_vulkan_create_compute_pipeline(
-      context->vulkan, rate_select_strict_f32_spv,
-      sizeof(rate_select_strict_f32_spv),
-      context->resident_pipeline_layout,
-      &context->resident_pipeline) :
-      lsx_vulkan_create_compute_pipeline(
-      context->vulkan, rate_select_f32_spv,
-      sizeof(rate_select_f32_spv),
-      context->resident_pipeline_layout,
-      &context->resident_pipeline)) != SOX_SUCCESS)
+      lsx_vulkan_create_compute_pipeline(context->vulkan, kernel->spirv, kernel->size, context->resident_pipeline_layout, &context->resident_pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
@@ -264,6 +302,7 @@ static int create_resident_output(lsx_rate_vulkan_t *context)
 
 static int create_resident_prepare(lsx_rate_vulkan_t *context)
 {
+  resident_kernel_blob_t const *kernel = &prepare_kernels[resident_kernel(context)];
   VkDescriptorSetLayoutBinding bindings[RATE_PREPARE_BINDINGS];
   VkDescriptorSetLayoutCreateInfo descriptor_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
   VkPushConstantRange push_range = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(prepare_parameters_t)};
@@ -297,13 +336,7 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_range;
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->prepare_pipeline_layout), "vkCreatePipelineLayout rate prepare") != SOX_SUCCESS ||
-      (context->reference_dd ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_reference_dd_spv, sizeof(rate_prepare_reference_dd_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
-       context->double_precision ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_f64_spv, sizeof(rate_prepare_f64_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
-       context->strict_fp32 ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_strict_f32_spv, sizeof(rate_prepare_strict_f32_spv), context->prepare_pipeline_layout, &context->prepare_pipeline) :
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_prepare_f32_spv, sizeof(rate_prepare_f32_spv), context->prepare_pipeline_layout, &context->prepare_pipeline)) != SOX_SUCCESS)
+      lsx_vulkan_create_compute_pipeline(context->vulkan, kernel->spirv, kernel->size, context->prepare_pipeline_layout, &context->prepare_pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
@@ -785,6 +818,7 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
 
 static int create_resident_stream(lsx_rate_vulkan_t *context)
 {
+  resident_kernel_blob_t const *kernel = &stream_append_kernels[resident_kernel(context)];
   VkDescriptorSetLayoutBinding bindings[RATE_STREAM_APPEND_BINDINGS];
   VkDescriptorSetLayoutCreateInfo descriptor_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
   VkPushConstantRange push_range = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(stream_append_parameters_t)};
@@ -819,13 +853,7 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_range;
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->stream_append_pipeline_layout), "vkCreatePipelineLayout rate stream append") != SOX_SUCCESS ||
-      (context->reference_dd ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_reference_dd_spv, sizeof(rate_stream_append_reference_dd_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
-       context->double_precision ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_f64_spv, sizeof(rate_stream_append_f64_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
-       context->strict_fp32 ?
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_strict_f32_spv, sizeof(rate_stream_append_strict_f32_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline) :
-       lsx_vulkan_create_compute_pipeline(context->vulkan, rate_stream_append_f32_spv, sizeof(rate_stream_append_f32_spv), context->stream_append_pipeline_layout, &context->stream_append_pipeline)) != SOX_SUCCESS)
+      lsx_vulkan_create_compute_pipeline(context->vulkan, kernel->spirv, kernel->size, context->stream_append_pipeline_layout, &context->stream_append_pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;

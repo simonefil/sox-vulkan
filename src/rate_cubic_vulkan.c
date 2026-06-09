@@ -61,27 +61,25 @@ static int vk_result(VkResult result, char const *operation)
   return lsx_vulkan_result(result, operation);
 }
 
+/* Bytes one sample occupies in the input and output buffers.  The two emulated
+ * profiles carry a high and a low component per sample, so they need twice the
+ * room of the plain type they are built from.  reference_dd is set as
+ * double_precision && profile == reference, so it has to be tested first;
+ * strict_fp32 is set only when double_precision is false. */
+static size_t sample_size(lsx_rate_cubic_vulkan_t const *context)
+{
+  if (context->reference_dd)
+    return 2u * sizeof(double);
+  if (context->strict_fp32)
+    return 2u * sizeof(float);
+  return context->double_precision ? sizeof(double) : sizeof(float);
+}
+
 static int create_buffers(lsx_rate_cubic_vulkan_t *context)
 {
   VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-  VkDeviceSize input_size =
-      (VkDeviceSize)(RATE_CUBIC_BLOCK_FRAMES +
-      context->pre_post) * context->parameters.channels *
-      (context->reference_dd ?
-       2u * sizeof(double) :
-       context->strict_fp32 ?
-       2u * sizeof(float) :
-       context->double_precision ?
-       sizeof(double) : sizeof(float));
-  VkDeviceSize output_size =
-      (VkDeviceSize)context->max_output_frames *
-      context->parameters.channels *
-      (context->reference_dd ?
-       2u * sizeof(double) :
-       context->strict_fp32 ?
-       2u * sizeof(float) :
-       context->double_precision ?
-       sizeof(double) : sizeof(float));
+  VkDeviceSize input_size = (VkDeviceSize)(RATE_CUBIC_BLOCK_FRAMES + context->pre_post) * context->parameters.channels * sample_size(context);
+  VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_size(context);
 
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->input, input_size,
@@ -125,6 +123,8 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
   lsx_vulkan_buffer_t *buffers[RATE_CUBIC_BINDINGS] = {
     &context->input, &context->output
   };
+  uint32_t const *kernel_spirv;
+  size_t kernel_size;
   uint32_t index;
 
   memset(bindings, 0, sizeof(bindings));
@@ -153,32 +153,29 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
               context->vulkan->device, &layout_info,
               NULL, &context->pipeline_layout),
           "vkCreatePipelineLayout rate cubic") !=
-          SOX_SUCCESS ||
-      (context->reference_dd ?
-      lsx_vulkan_create_compute_pipeline(
-          context->vulkan, rate_cubic_reference_dd_spv,
-          sizeof(rate_cubic_reference_dd_spv),
-          context->pipeline_layout, &context->pipeline) :
-      context->double_precision ?
-      lsx_vulkan_create_compute_pipeline(
-          context->vulkan, rate_cubic_f64_spv,
-          sizeof(rate_cubic_f64_spv),
-          context->pipeline_layout, &context->pipeline) :
-      context->strict_fp32 ?
-      lsx_vulkan_create_compute_pipeline(
-          context->vulkan, rate_cubic_strict_f32_spv,
-          sizeof(rate_cubic_strict_f32_spv),
-          context->pipeline_layout, &context->pipeline) :
-      context->accurate_fp32 ?
-      lsx_vulkan_create_compute_pipeline(
-          context->vulkan, rate_cubic_accurate_f32_spv,
-          sizeof(rate_cubic_accurate_f32_spv),
-          context->pipeline_layout, &context->pipeline) :
-      lsx_vulkan_create_compute_pipeline(
-          context->vulkan, rate_cubic_f32_spv,
-          sizeof(rate_cubic_f32_spv),
-          context->pipeline_layout, &context->pipeline)) !=
           SOX_SUCCESS)
+    return SOX_EOF;
+  /* Pick the kernel once, so its SPIR-V blob and the size passed with it can
+   * never disagree.  Only the first test is order-sensitive: reference_dd
+   * implies double_precision, while strict_fp32 and accurate_fp32 are set only
+   * when double_precision is false and exclude each other. */
+  if (context->reference_dd) {
+    kernel_spirv = rate_cubic_reference_dd_spv;
+    kernel_size = sizeof(rate_cubic_reference_dd_spv);
+  } else if (context->double_precision) {
+    kernel_spirv = rate_cubic_f64_spv;
+    kernel_size = sizeof(rate_cubic_f64_spv);
+  } else if (context->strict_fp32) {
+    kernel_spirv = rate_cubic_strict_f32_spv;
+    kernel_size = sizeof(rate_cubic_strict_f32_spv);
+  } else if (context->accurate_fp32) {
+    kernel_spirv = rate_cubic_accurate_f32_spv;
+    kernel_size = sizeof(rate_cubic_accurate_f32_spv);
+  } else {
+    kernel_spirv = rate_cubic_f32_spv;
+    kernel_size = sizeof(rate_cubic_f32_spv);
+  }
+  if (lsx_vulkan_create_compute_pipeline(context->vulkan, kernel_spirv, kernel_size, context->pipeline_layout, &context->pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_info.maxSets = 1;
   pool_info.poolSizeCount = 1;

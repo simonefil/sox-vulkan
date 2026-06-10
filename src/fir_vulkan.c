@@ -105,6 +105,38 @@ struct lsx_fir_vulkan {
   uint64_t process_calls;
 };
 
+/* Element format the resident output carries.  rate_vulkan.c and
+ * rate_polyphase_vulkan.c name the same rule; the strict profile is checked
+ * first here because it emits an FP32 pair while still being an FP32 build. */
+static lsx_vulkan_resident_format_t resident_format(lsx_fir_vulkan_t const *context)
+{
+  if (context->strict_fp32)
+    return lsx_vulkan_resident_format_f32x2;
+  if (context->reference_dd)
+    return lsx_vulkan_resident_format_f64x2;
+  return context->double_precision ? lsx_vulkan_resident_format_f64 : lsx_vulkan_resident_format_f32;
+}
+
+/* One line of -V3 output describing how this context computes the transform,
+ * the coefficient spectra and the accumulation.  The order is the order the
+ * flags override one another, so the first match is the strategy in force. */
+static char const *strategy_name(lsx_fir_vulkan_t const *context)
+{
+  if (context->strict_fp32)
+    return "double-single FFT + split twiddles + double-single accumulation";
+  if (context->accurate_fp32)
+    return "FP32 FFT + split coefficients + compensated accumulation";
+  if (context->reference_dd)
+    return "FP64 double-double FFT + double-double memory/product/accumulation";
+  if (context->authoritative_fp64_kernels)
+    return context->precise_fp64 ?
+        "FP64 FFT + authoritative coefficient spectra + compensated FP64 accumulation" :
+        "FP64 FFT + authoritative coefficient spectra + FP64 accumulation";
+  if (context->precise_fp64)
+    return "FP64 FFT + compensated FP64 accumulation";
+  return context->double_precision ? "FP64 FFT + FP64 accumulation" : "FP32 FFT + FP32 accumulation";
+}
+
 static double monotonic_seconds(void)
 {
 #ifdef _WIN32
@@ -1502,25 +1534,7 @@ static lsx_fir_vulkan_t *create_fir(
       context->startup_seconds,
       context->reference_dd ? "FP64x2" :
       context->double_precision ? "FP64" : "FP32");
-  lsx_report(
-      "Vulkan FIR strategy: %s",
-      context->strict_fp32 ?
-      "double-single FFT + split twiddles + double-single accumulation" :
-      context->accurate_fp32 ?
-      "FP32 FFT + split coefficients + compensated accumulation" :
-      context->reference_dd ?
-      "FP64 double-double FFT + double-double memory/product/accumulation" :
-      context->authoritative_fp64_kernels &&
-      context->precise_fp64 ?
-      "FP64 FFT + authoritative coefficient spectra + compensated "
-      "FP64 accumulation" :
-      context->authoritative_fp64_kernels ?
-      "FP64 FFT + authoritative coefficient spectra + FP64 accumulation" :
-      context->precise_fp64 ?
-      "FP64 FFT + compensated FP64 accumulation" :
-      context->double_precision ?
-      "FP64 FFT + FP64 accumulation" :
-      "FP32 FFT + FP32 accumulation");
+  lsx_report("Vulkan FIR strategy: %s", strategy_name(context));
   return context;
 
 error: lsx_fir_vulkan_destroy(context);
@@ -1778,13 +1792,7 @@ static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, 
   resident->rate = rate;
   resident->channels = context->channels;
   resident->frames_per_element = 1u;
-  resident->format = context->strict_fp32 ?
-      lsx_vulkan_resident_format_f32x2 :
-      context->reference_dd ?
-      lsx_vulkan_resident_format_f64x2 :
-      context->double_precision ?
-      lsx_vulkan_resident_format_f64 :
-      lsx_vulkan_resident_format_f32;
+  resident->format = resident_format(context);
   resident->domain = lsx_vulkan_resident_domain_sox_sample;
   resident->layout = lsx_vulkan_resident_layout_planar;
   resident->state = state;

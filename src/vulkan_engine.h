@@ -154,6 +154,10 @@ int lsx_vulkan_buffer_create(
     VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryPropertyFlags properties);
 void lsx_vulkan_buffer_destroy(lsx_vulkan_context_t *context, lsx_vulkan_buffer_t *buffer);
+/* Bytes one element of a resident buffer occupies.  Returns zero for a format
+ * the build does not know, so callers can reject it rather than compute a
+ * stride from a guess. */
+VkDeviceSize lsx_vulkan_resident_element_size(lsx_vulkan_resident_format_t format);
 VkDeviceSize lsx_vulkan_resident_buffer_size(lsx_vulkan_resident_buffer_t const *resident);
 int lsx_vulkan_resident_buffer_validate(lsx_vulkan_resident_buffer_t const *resident);
 int lsx_vulkan_download_resident_pcm(

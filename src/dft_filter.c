@@ -317,29 +317,18 @@ static int ensure_vulkan_producer(sox_effect_t *effp)
       if (lows)
         lows[channel] = p->vulkan_channels[channel].reference_low_taps;
     }
-    p->vulkan = lows ?
-        lsx_fir_vulkan_create_reference_dd_channels(
-            p->vulkan_context, highs, lows,
-            (size_t)p->vulkan_source_num_taps,
-            p->vulkan_channel_count) :
-        lsx_fir_vulkan_create_channels(
-            p->vulkan_context, highs,
-            (size_t)p->vulkan_source_num_taps,
-            p->vulkan_channel_count);
+    if (lows)
+      p->vulkan = lsx_fir_vulkan_create_reference_dd_channels(p->vulkan_context, highs, lows, (size_t)p->vulkan_source_num_taps, p->vulkan_channel_count);
+    else
+      p->vulkan = lsx_fir_vulkan_create_channels(p->vulkan_context, highs, (size_t)p->vulkan_source_num_taps, p->vulkan_channel_count);
     free(lows);
     free(highs);
   }
   else
-    p->vulkan = p->vulkan_reference_low_taps ?
-        lsx_fir_vulkan_create_reference_dd(
-            p->vulkan_context, p->vulkan_source_taps,
-            p->vulkan_reference_low_taps,
-            (size_t)p->vulkan_source_num_taps,
-            (uint32_t)effp->in_signal.channels) :
-        lsx_fir_vulkan_create(
-            p->vulkan_context, p->vulkan_source_taps,
-            (size_t)p->vulkan_source_num_taps,
-            (uint32_t)effp->in_signal.channels);
+    if (p->vulkan_reference_low_taps)
+      p->vulkan = lsx_fir_vulkan_create_reference_dd(p->vulkan_context, p->vulkan_source_taps, p->vulkan_reference_low_taps, (size_t)p->vulkan_source_num_taps, (uint32_t)effp->in_signal.channels);
+    else
+      p->vulkan = lsx_fir_vulkan_create(p->vulkan_context, p->vulkan_source_taps, (size_t)p->vulkan_source_num_taps, (uint32_t)effp->in_signal.channels);
   return p->vulkan ? SOX_SUCCESS : SOX_EOF;
 }
 
@@ -363,33 +352,18 @@ static int ensure_vulkan_resident(sox_effect_t *effp)
       if (lows)
         lows[channel] = p->vulkan_channels[channel].reference_low_taps;
     }
-    p->vulkan_resident = lows ?
-        lsx_rate_vulkan_create_reference_dd_channels(
-            p->vulkan_context, highs, lows,
-            (size_t)p->vulkan_source_num_taps,
-            (size_t)p->vulkan_source_post_peak, 1u, 1u,
-            p->vulkan_channel_count) :
-        lsx_rate_vulkan_create_channels(
-            p->vulkan_context, highs,
-            (size_t)p->vulkan_source_num_taps,
-            (size_t)p->vulkan_source_post_peak, 1u, 1u,
-            p->vulkan_channel_count);
+    if (lows)
+      p->vulkan_resident = lsx_rate_vulkan_create_reference_dd_channels(p->vulkan_context, highs, lows, (size_t)p->vulkan_source_num_taps, (size_t)p->vulkan_source_post_peak, 1u, 1u, p->vulkan_channel_count);
+    else
+      p->vulkan_resident = lsx_rate_vulkan_create_channels(p->vulkan_context, highs, (size_t)p->vulkan_source_num_taps, (size_t)p->vulkan_source_post_peak, 1u, 1u, p->vulkan_channel_count);
     free(lows);
     free(highs);
   }
   else
-    p->vulkan_resident = p->vulkan_reference_low_taps ?
-        lsx_rate_vulkan_create_reference_dd(
-            p->vulkan_context, p->vulkan_source_taps,
-            p->vulkan_reference_low_taps,
-            (size_t)p->vulkan_source_num_taps,
-            (size_t)p->vulkan_source_post_peak, 1u, 1u,
-            (uint32_t)effp->in_signal.channels) :
-        lsx_rate_vulkan_create(
-            p->vulkan_context, p->vulkan_source_taps,
-            (size_t)p->vulkan_source_num_taps,
-            (size_t)p->vulkan_source_post_peak, 1u, 1u,
-            (uint32_t)effp->in_signal.channels);
+    if (p->vulkan_reference_low_taps)
+      p->vulkan_resident = lsx_rate_vulkan_create_reference_dd(p->vulkan_context, p->vulkan_source_taps, p->vulkan_reference_low_taps, (size_t)p->vulkan_source_num_taps, (size_t)p->vulkan_source_post_peak, 1u, 1u, (uint32_t)effp->in_signal.channels);
+    else
+      p->vulkan_resident = lsx_rate_vulkan_create(p->vulkan_context, p->vulkan_source_taps, (size_t)p->vulkan_source_num_taps, (size_t)p->vulkan_source_post_peak, 1u, 1u, (uint32_t)effp->in_signal.channels);
   return p->vulkan_resident ? SOX_SUCCESS : SOX_EOF;
 }
 
@@ -428,13 +402,7 @@ static void trim_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_
   priv_t *p = (priv_t *)effp->priv;
   size_t channels = effp->in_signal.channels;
   size_t skip_frames = min(p->vulkan_skip_samples / channels, resident->valid_elements);
-  size_t element_size =
-      resident->format == lsx_vulkan_resident_format_f32 ?
-      sizeof(float) :
-      resident->format == lsx_vulkan_resident_format_f32x2 ?
-      2u * sizeof(float) :
-      resident->format == lsx_vulkan_resident_format_f64x2 ?
-      2u * sizeof(double) : sizeof(double);
+  size_t element_size = (size_t)lsx_vulkan_resident_element_size(resident->format);
 
   p->vulkan_skip_samples -= skip_frames * channels;
   resident->offset += (VkDeviceSize)skip_frames * element_size;

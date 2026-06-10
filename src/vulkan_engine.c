@@ -164,7 +164,7 @@ void lsx_vulkan_buffer_destroy(lsx_vulkan_context_t *context, lsx_vulkan_buffer_
   memset(buffer, 0, sizeof(*buffer));
 }
 
-static VkDeviceSize resident_element_size(lsx_vulkan_resident_format_t format)
+VkDeviceSize lsx_vulkan_resident_element_size(lsx_vulkan_resident_format_t format)
 {
   switch (format) {
     case lsx_vulkan_resident_format_f32: return sizeof(float);
@@ -185,7 +185,7 @@ VkDeviceSize lsx_vulkan_resident_buffer_size(lsx_vulkan_resident_buffer_t const 
 
   if (!resident)
     return 0;
-  element_size = resident_element_size(resident->format);
+  element_size = lsx_vulkan_resident_element_size(resident->format);
   if (!element_size || !resident->channels ||
       !resident->capacity_elements ||
       !resident->frame_stride_elements ||
@@ -388,12 +388,7 @@ int lsx_vulkan_download_resident_pcm(
       context->resident_download_fence,
       lsx_vulkan_wait_resident_output) != SOX_SUCCESS)
     return SOX_EOF;
-  element_size = resident->format == lsx_vulkan_resident_format_f32x2 ?
-      2u * sizeof(float) :
-      resident->format == lsx_vulkan_resident_format_f64x2 ?
-      2u * sizeof(double) :
-      resident->format == lsx_vulkan_resident_format_f64 ?
-      sizeof(double) : sizeof(float);
+  element_size = lsx_vulkan_resident_element_size(resident->format);
   for (frame = 0; frame < resident->valid_elements; ++frame)
     for (channel = 0; channel < resident->channels; ++channel) {
       size_t source = frame * resident->frame_stride_elements + channel * resident->channel_stride_elements;

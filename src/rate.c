@@ -667,23 +667,6 @@ static sox_bool rate_vulkan_executor_is_fft(rate_vulkan_stage_executor_t const *
   return executor->kind == rate_stage_dft && !executor->dft_polyphase;
 }
 
-static size_t rate_vulkan_resident_element_size(lsx_vulkan_resident_format_t format)
-{
-  switch (format) {
-    case lsx_vulkan_resident_format_f32:
-      return sizeof(float);
-    case lsx_vulkan_resident_format_f32x2:
-      return 2u * sizeof(float);
-    case lsx_vulkan_resident_format_f64:
-      return sizeof(double);
-    case lsx_vulkan_resident_format_f64x2:
-      return 2u * sizeof(double);
-    case lsx_vulkan_resident_format_dsd_u32:
-      return sizeof(uint32_t);
-  }
-  return 0;
-}
-
 static int process_vulkan_resident_polyphase_to_host(
     rate_vulkan_stage_executor_t *polyphase,
     lsx_vulkan_resident_buffer_t const *resident,
@@ -694,7 +677,7 @@ static int process_vulkan_resident_polyphase_to_host(
 
   if (!polyphase || !polyphase->polyphase || !resident || !output_fifo || !channels)
     return SOX_EINVAL;
-  element_size = rate_vulkan_resident_element_size(resident->format);
+  element_size = lsx_vulkan_resident_element_size(resident->format);
   if (!element_size)
     return SOX_EINVAL;
   remaining = *resident;
@@ -762,7 +745,7 @@ static int process_vulkan_pending_direct_input(sox_effect_t *effp, rate_vulkan_s
   consumed_bytes =
       (VkDeviceSize)input_frames *
       p->vulkan_pending_direct_input.frame_stride_elements *
-      rate_vulkan_resident_element_size(
+      lsx_vulkan_resident_element_size(
           p->vulkan_pending_direct_input.format);
   p->vulkan_pending_direct_input.offset += consumed_bytes;
   p->vulkan_pending_direct_input.capacity_elements -= input_frames;
@@ -778,7 +761,7 @@ static void advance_vulkan_resident_input(lsx_vulkan_resident_buffer_t *input, s
 {
   VkDeviceSize consumed_bytes =
       (VkDeviceSize)frames * input->frame_stride_elements *
-      rate_vulkan_resident_element_size(input->format);
+      lsx_vulkan_resident_element_size(input->format);
 
   input->offset += consumed_bytes;
   input->capacity_elements -= frames;

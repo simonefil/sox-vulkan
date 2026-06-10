@@ -273,8 +273,9 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
     kernel_spirv = normalized_spirv = rate_polyphase_f32_spv;
     kernel_size = normalized_size = sizeof(rate_polyphase_f32_spv);
   }
-  if (lsx_vulkan_create_compute_pipeline(context->vulkan, kernel_spirv, kernel_size, context->pipeline_layout, &context->pipeline) != SOX_SUCCESS ||
-      lsx_vulkan_create_compute_pipeline(context->vulkan, normalized_spirv, normalized_size, context->pipeline_layout, &context->normalized_pipeline) != SOX_SUCCESS)
+  if (lsx_vulkan_create_compute_pipeline(context->vulkan, kernel_spirv, kernel_size, context->pipeline_layout, &context->pipeline) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_create_compute_pipeline(context->vulkan, normalized_spirv, normalized_size, context->pipeline_layout, &context->normalized_pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;

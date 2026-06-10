@@ -469,8 +469,9 @@ static int create_resident_pipeline(lsx_sdm_vulkan_t *context, lsx_vulkan_reside
       context->channels * input_sample_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(
       context->vulkan, &context->resident_clips,
       sizeof(uint32_t),
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -576,8 +577,9 @@ static int initialize_vulkan(lsx_sdm_vulkan_t *context)
       context, &context->upload, upload_size,
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (create_buffer(
       context, &context->download, sizes[BUFFER_OUTPUT_WORDS],
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -1129,11 +1131,9 @@ static lsx_sdm_vulkan_t *create_with_input_target(
     lsx_fail("Vulkan DSD FSM initialization failed");
     goto error;
   }
-  if (upload_buffer(
-      context, BUFFER_STATES, states, sizeof(states)) != SOX_SUCCESS ||
-      upload_buffer(
-      context, BUFFER_STATE_LOOKUP, lookup, sizeof(lookup)) !=
-      SOX_SUCCESS)
+  if (upload_buffer(context, BUFFER_STATES, states, sizeof(states)) != SOX_SUCCESS)
+    goto error;
+  if (upload_buffer(context, BUFFER_STATE_LOOKUP, lookup, sizeof(lookup)) != SOX_SUCCESS)
     goto error;
   for (channel = 0; channel < channels; ++channel)
     persistent[channel * 4u + 3u] = initial_state;
@@ -1254,13 +1254,9 @@ int lsx_sdm_vulkan_process(
    * the same ingest as a resident producer: no filter, only the interleaved
    * to planar conversion the modulator reads.
    */
-  if (ensure_resident_pipeline(
-      context, lsx_vulkan_resident_format_f32,
-      lsx_vulkan_resident_domain_normalized) != SOX_SUCCESS ||
-      upload_resident_input(
-      context, input,
-      (VkDeviceSize)frames * context->channels * sizeof(float)) !=
-      SOX_SUCCESS)
+  if (ensure_resident_pipeline(context, lsx_vulkan_resident_format_f32, lsx_vulkan_resident_domain_normalized) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (upload_resident_input(context, input, (VkDeviceSize)frames * context->channels * sizeof(float)) != SOX_SUCCESS)
     return SOX_EOF;
   if (process_resident_pending(
       context, (uint32_t)frames, 0, channel_bytes,

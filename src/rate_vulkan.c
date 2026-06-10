@@ -1037,10 +1037,9 @@ int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate
   input.domain = lsx_vulkan_resident_domain_sox_sample;
   input.layout = lsx_vulkan_resident_layout_interleaved;
   input.state = state;
-  if (record_resident_prepare(context, &input) != SOX_SUCCESS ||
-      lsx_fir_vulkan_process_prepared_resident(
-      context->fir, rate * context->down_factor, 0, state,
-      resident) != SOX_SUCCESS)
+  if (record_resident_prepare(context, &input) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_fir_vulkan_process_prepared_resident(context->fir, rate * context->down_factor, 0, state, resident) != SOX_SUCCESS)
     return SOX_EOF;
   {
     lsx_vulkan_resident_buffer_t filtered = *resident;

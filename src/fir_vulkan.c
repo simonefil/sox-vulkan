@@ -300,25 +300,29 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   output_size = (VkDeviceSize)combined_count * 2u * sizeof(double);
   memset(&scratch, 0, sizeof(scratch));
   scratch.vulkan = vulkan;
-  if (create_commands(&scratch) != SOX_SUCCESS ||
-      create_buffer(
+  if (create_commands(&scratch) != SOX_SUCCESS)
+    goto cleanup;
+  if (create_buffer(
       &scratch, &scratch.working, working_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    goto cleanup;
+  if (create_buffer(
       &scratch, &accumulated, working_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    goto cleanup;
+  if (create_buffer(
       &scratch, &scratch.upload, working_size,
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
+    goto cleanup;
+  if (create_buffer(
       &scratch, &download, output_size,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -1342,24 +1346,28 @@ static int create_buffers(lsx_fir_vulkan_t *context)
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (create_buffer(
       context, &context->history, bank_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (create_buffer(
       context, &context->kernels, bank_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (create_buffer(
       context, &context->upload, working_size,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS ||
-      create_buffer(
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (create_buffer(
       context, &context->download, download_size,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -1469,15 +1477,19 @@ static lsx_fir_vulkan_t *create_fir(
       context->double_precision ? sizeof(double) : sizeof(float);
   context->channels = channels;
   context->partitions = (uint32_t)((taps + FIR_BLOCK_FRAMES - 1u) / FIR_BLOCK_FRAMES);
-  if (create_commands(context) != SOX_SUCCESS ||
-      create_buffers(context) != SOX_SUCCESS ||
-      initialize_fft(context) != SOX_SUCCESS ||
-      create_partition_pipeline(context) != SOX_SUCCESS ||
-      initialize_kernels(
-          context, coefficients, coefficient_lows,
-          coefficient_channels, taps) != SOX_SUCCESS ||
-      clear_history(context) != SOX_SUCCESS ||
-      record_process_commands(context) != SOX_SUCCESS)
+  if (create_commands(context) != SOX_SUCCESS)
+    goto error;
+  if (create_buffers(context) != SOX_SUCCESS)
+    goto error;
+  if (initialize_fft(context) != SOX_SUCCESS)
+    goto error;
+  if (create_partition_pipeline(context) != SOX_SUCCESS)
+    goto error;
+  if (initialize_kernels(context, coefficients, coefficient_lows, coefficient_channels, taps) != SOX_SUCCESS)
+    goto error;
+  if (clear_history(context) != SOX_SUCCESS)
+    goto error;
+  if (record_process_commands(context) != SOX_SUCCESS)
     goto error;
   context->startup_seconds = monotonic_seconds() - started;
   lsx_report(

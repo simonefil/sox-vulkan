@@ -84,8 +84,9 @@ static int create_buffers(lsx_rate_cubic_vulkan_t *context)
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->input, input_size,
           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) !=
-          SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(
+          SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(
           context->vulkan, &context->output, output_size,
           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) !=
           SOX_SUCCESS)
@@ -268,9 +269,11 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
   context->parameters.step_integer = (uint32_t)(step >> 32);
   context->parameters.step_fraction = (uint32_t)step;
   context->parameters.channels = channels;
-  if (create_buffers(context) != SOX_SUCCESS ||
-      create_pipeline(context) != SOX_SUCCESS ||
-      create_commands(context) != SOX_SUCCESS)
+  if (create_buffers(context) != SOX_SUCCESS)
+    goto error;
+  if (create_pipeline(context) != SOX_SUCCESS)
+    goto error;
+  if (create_commands(context) != SOX_SUCCESS)
     goto error;
   lsx_report(
       "Vulkan rate cubic: step %u+%u/2^32, %u channel%s",

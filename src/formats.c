@@ -55,11 +55,28 @@
 #define PIPE_AUTO_DETECT_SIZE 256 /* Only as much as we can rewind a pipe */
 #define AUTO_DETECT_SIZE 4096     /* For seekable file, so no restriction */
 
+/* rewind_pipe below reaches into the C library's FILE to put back the bytes
+ * auto-detection consumed.  The UCRT of Visual Studio 2015 and later keeps
+ * nothing that can be reached that way, so on it detection is replayed from a
+ * buffer instead; see auto_detect_format and lsx_readbuf. */
 #if defined(_MSC_VER) && _MSC_VER >= 1900
   #define NO_REWIND_PIPE
 #endif
 
 #ifdef HAVE_FFMPEG_CODECS
+/* Content probes for the FFmpeg-backed formats.  None of these bitstreams
+ * carries a distinctive magic number at offset zero, so the CHECK macro that
+ * serves the other formats cannot express them and they are written out.
+ *
+ * All of them are given the first few kilobytes of the file and must not read
+ * past what they were handed: on a pipe that is all there will ever be.  Each
+ * answers only for its own format and leaves the rest to the next probe, so
+ * the order they are called in is what breaks ties between formats that could
+ * both plausibly match. */
+
+/* An ADTS frame header: sync word, zero layer bits, and a length that at
+ * least covers the header, with av_adts_header_parse having the final say on
+ * whether the remaining fields are coherent. */
 static sox_bool is_adts_header(unsigned char const * data, size_t length)
 {
   unsigned frame_size;
@@ -74,6 +91,11 @@ static sox_bool is_adts_header(unsigned char const * data, size_t length)
   return length >= header_size && frame_size >= header_size && av_adts_header_parse(data, &samples, &frames) >= 0;
 }
 
+/* Find an MLP or TrueHD major sync and report which of the two it names, or
+ * NULL for neither.  The major sync is not on every access unit and need not
+ * be on the first, so the whole probe window is scanned rather than just its
+ * start; the access unit length is checked alongside the signature so that
+ * the same three bytes occurring inside audio data do not match. */
 static char const * detect_mlp_major_sync(unsigned char const * data, size_t length)
 {
   size_t offset;
@@ -91,6 +113,16 @@ static char const * detect_mlp_major_sync(unsigned char const * data, size_t len
   return NULL;
 }
 
+/* Any of the several ways a DTS stream can begin.  The dts and dtshd handlers
+ * share a decoder and separate themselves by profile once it is open, so this
+ * only has to answer "DTS of some kind"; the file is routed to dts, and dtshd
+ * is reached by naming it explicitly.
+ *
+ * A DTS-HD file opens with a container chunk, and a DTS:X one with its own
+ * marker.  A bare core stream opens with a sync word that comes in four
+ * spellings, since the stream may be 14-bit rather than 16-bit coded and may
+ * be stored in either byte order; the extra masked byte in each case is the
+ * neighbouring field the shifted encodings leave partly in view. */
 static sox_bool is_dts_header(unsigned char const * data, size_t length)
 {
   if (length >= 8 && !memcmp(data, "DTSHDHDR", 8))
@@ -99,10 +131,12 @@ static sox_bool is_dts_header(unsigned char const * data, size_t length)
     return sox_true;
   if (length < 6)
     return sox_false;
+  /* 16-bit core, big then little endian. */
   if (data[0] == 0x7f && data[1] == 0xfe && data[2] == 0x80 && data[3] == 0x01 && (data[4] & 0xfc) == 0xfc)
     return sox_true;
   if (data[0] == 0xfe && data[1] == 0x7f && data[2] == 0x01 && data[3] == 0x80 && (data[5] & 0xfc) == 0xfc)
     return sox_true;
+  /* 14-bit core, big then little endian. */
   if (data[0] == 0x1f && data[1] == 0xff &&
       data[2] == 0xe8 && data[3] == 0x00 &&
       data[4] == 0x07 && (data[5] & 0xf0) == 0xf0)
@@ -112,6 +146,12 @@ static sox_bool is_dts_header(unsigned char const * data, size_t length)
       (data[4] & 0xf0) == 0xf0 && data[5] == 0x07;
 }
 
+/* Total size of an ID3v2 tag at the front of data, footer included, or 0 if
+ * there is none.  AAC files routinely open with one, which would otherwise
+ * hide the frame header the ADTS probe is looking for.  The checks are what
+ * keeps a stray "ID3" in audio data from being read as a tag: the version
+ * must be one that exists, and the four size bytes must be synchsafe, that
+ * is, have their high bit clear. */
 static size_t leading_id3v2_size(unsigned char const * data, size_t length)
 {
   size_t size;
@@ -128,6 +168,15 @@ static size_t leading_id3v2_size(unsigned char const * data, size_t length)
 }
 
 #ifdef HAVE_FFMPEG_FORMATS
+/* An MP4 file whose brands include M4A.  The leading atom is ftyp, holding a
+ * major brand and then a list of compatible ones, four bytes each; both are
+ * examined, since an M4A file often declares some other major brand and lists
+ * M4A among the compatible ones.  The search is bounded by the atom's own
+ * size as well as by what was read, so it cannot wander into the next atom.
+ *
+ * Only ALAC is claimed here.  An MP4 carrying anything else matches too and
+ * is then rejected when the container adapter finds no ALAC stream, which is
+ * a clearer outcome than treating the file as an unknown format. */
 static sox_bool is_m4a_header(unsigned char const * data, size_t length)
 {
   size_t atom_size;
@@ -155,6 +204,9 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   char data[AUTO_DETECT_SIZE];
   size_t len = lsx_readbuf(ft, data, ft->seekable? sizeof(data) : PIPE_AUTO_DETECT_SIZE);
 #ifdef NO_REWIND_PIPE
+  /* Where the pipe cannot be rewound, keep what was consumed so lsx_readbuf
+   * can hand it back to the handler before reading any further.  Ownership
+   * passes to ft, which frees it when the file is closed. */
   if (!ft->seekable && len) {
     assert(!ft->read_replay_buffer);
     ft->read_replay_buffer = lsx_memdup(data, len);
@@ -177,6 +229,11 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
   CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
 #ifdef HAVE_FFMPEG_CODECS
+  /* These probes run before the CHECK lines that follow rather than after,
+   * because a bitstream with no magic number at offset zero can happen to
+   * contain any given byte sequence; asking the specific tests first stops a
+   * coincidence from claiming the file.  Within the group the order goes
+   * from the most distinctive signature to the least. */
 #ifdef HAVE_FFMPEG_FORMATS
   if (is_m4a_header((unsigned char const *)data, len))
     return "m4a";
@@ -189,6 +246,8 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
     if (mlp_format != NULL)
       return mlp_format;
   }
+  /* LOAS/LATM carries both AAC and xHE-AAC, and the object type inside the
+   * configuration is the only thing that separates the two handlers. */
   {
     uint32_t object_type;
     int config = lsx_latm_config_object_type((uint8_t const *)data, len, &object_type);
@@ -200,6 +259,10 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
         return "latm";
     }
   }
+  /* Skip any ID3v2 tags before looking for an ADTS frame.  The loop handles
+   * files with several stacked tags; a tag reaching past what was read means
+   * the frame header is beyond the probe window, so the search stops rather
+   * than testing bytes from inside the tag. */
   {
     unsigned char const * bytes = (unsigned char const *)data;
     size_t offset = 0;
@@ -218,6 +281,8 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
     if (offset < len && is_adts_header(bytes + offset, len - offset))
       return "aac";
   }
+  /* AC-3 and E-AC-3 share a sync word; the bitstream identifier in the
+   * header is what separates them, values above 10 being E-AC-3. */
   if (len >= 7 && (unsigned char)data[0] == 0x0b && (unsigned char)data[1] == 0x77) {
     uint8_t bitstream_id;
     uint16_t frame_size;
@@ -534,6 +599,9 @@ static sox_bool is_seekable(sox_format_t const * ft)
   if (!ft->fp)
     return sox_false;
 
+  /* On Windows the fseek below succeeds on a pipe, reporting it as seekable
+   * and leaving the file position wrong ever after, so the file type is
+   * checked directly and only a regular file is accepted. */
 #ifdef _WIN32
   {
     struct stat st;
@@ -742,6 +810,10 @@ static sox_format_t * open_read(
       filetype = auto_detect_format(ft, lsx_find_file_extension(path));
       lsx_rewind(ft);
     }
+    /* A pipe is detected on too, the bytes read being put back either by
+     * rewinding the stdio buffer or, where that is impossible, by the replay
+     * buffer auto_detect_format filled.  Either way the position returns to
+     * the start of the stream, so tell_off does too. */
     else if (!(ft->handler.flags & SOX_FILE_NOSTDIO) &&
         input_bufsiz >= PIPE_AUTO_DETECT_SIZE) {
       filetype = auto_detect_format(ft, lsx_find_file_extension(path));
@@ -786,6 +858,9 @@ static sox_format_t * open_read(
   ft->mode = 'r';
   ft->filetype = lsx_strdup(filetype);
   ft->filename = lsx_strdup(path);
+  /* Refused rather than ignored, so that an option aimed at a format that
+   * cannot use it is not silently dropped.  The check comes after the type
+   * is known, which for a detected type means after detection. */
   ft->codec_options = codec_options;
   if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
     lsx_fail("codec options are unsupported for file type `%s'", filetype);
@@ -848,6 +923,11 @@ sox_format_t * sox_open_read(
   return open_read(path, NULL, (size_t)0, signal, encoding, filetype, NULL);
 }
 
+/* sox_open_read with the extra arguments the FFmpeg-backed handlers need.
+ * Kept internal, and separate from the public entry point, so that the
+ * published API and ABI are unchanged: sox_open_read stays exactly what it
+ * was and passes NULL for the additions.  codec_options is not copied, so it
+ * must outlive the returned format. */
 sox_format_t * lsx_open_read_with_codec_options(
     char               const * path,
     sox_signalinfo_t   const * signal,
@@ -1116,6 +1196,8 @@ static sox_format_t * open_write(
     goto error;
 
   ft->handler = *handler;
+  /* Both are refused rather than ignored when the handler cannot use them,
+   * so that an option aimed at the wrong format is not silently dropped. */
   ft->codec_options = codec_options;
   ft->channel_layout = channel_layout;
   if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
@@ -1234,6 +1316,9 @@ sox_format_t * sox_open_write(
       filetype, oob, overwrite_permitted, NULL, NULL);
 }
 
+/* sox_open_write with the extra arguments the FFmpeg-backed handlers need,
+ * internal for the same reason as its read-side twin.  Neither codec_options
+ * nor channel_layout is copied, so both must outlive the returned format. */
 sox_format_t * lsx_open_write_with_codec_options(
     char               const * path,
     sox_signalinfo_t   const * signal,
@@ -1298,6 +1383,13 @@ size_t sox_write(sox_format_t * ft, const sox_sample_t *buf, size_t len)
   return actual;
 }
 
+/* The packed DSD writers below take the place of sox_write for a chain that
+ * ends in a DSD modulator.  Each validates what the caller handed over,
+ * forwards it to the handler's own writer, and advances olength in bits,
+ * since for these formats the output length is counted in DSD bits rather
+ * than in samples.  A buffer that does not satisfy the contract is rejected
+ * outright rather than partly written, which would leave the channels out of
+ * step with each other for the rest of the file. */
 size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf, size_t len)
 {
   size_t actual;
@@ -1307,6 +1399,9 @@ size_t sox_write_packed_dsd(sox_format_t *ft, const sox_sample_t *buf, size_t le
   if (!ft->write_packed_dsd || !channels || len % channels)
     return 0;
 
+  /* Every channel of a frame must carry the same number of valid bits: the
+   * channels advance through the stream together, so a frame in which one
+   * channel held fewer bits than another would desynchronise them. */
   for (i = 0; i < len; i += channels) {
     unsigned valid = SOX_DSD_PACKED_VALID_BITS(buf[i]);
     size_t channel;

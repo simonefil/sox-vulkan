@@ -450,6 +450,23 @@ Native SoX audio sample type (alias for sox_int32_t).
 */
 typedef sox_int32_t sox_sample_t;
 
+/**
+Client API:
+Packed DSD carried through the sample pipeline.
+
+DSD is one bit per sample, so a chain that moved one bit per sox_sample_t
+would spend 32 bits carrying one.  Instead a modulator may hand whole groups
+of bits across in a single sample, and sox_signalinfo_t.packing says how many
+bits each one holds: SOX_DSD_PACKING_BYTE for the byte form below, or
+SOX_DSD_PACKING_WORD for whole 32-bit words.  Zero means ordinary PCM, which
+is what every effect that has not opted into packing assumes.
+
+The byte form leaves room for a partial group at the end of a stream: the
+low 8 bits are the data and the next 4 a count of how many of them are
+valid, most significant bit first.  The word form has no such count -- every
+word is full -- and is the faster path, so it is what the resident DSD chain
+uses until its final flush.
+*/
 #define SOX_DSD_PACKING_BYTE 8
 #define SOX_DSD_PACKING_WORD 32
 #define SOX_DSD_PACKED_BYTE(data, valid_bits) \
@@ -2068,6 +2085,17 @@ sox_write(
     size_t len /**< Number of samples available in buf. */
     );
 
+/**
+Client API:
+Writes packed DSD bytes, bypassing the PCM sample path.
+
+buf holds SOX_DSD_PACKED_BYTE values interleaved by channel, so len must be a
+whole number of sample frames, and every channel of a frame must declare the
+same valid-bit count.  Only a handler that has installed a packed DSD writer
+accepts these; anything else, including a malformed buffer, returns 0 without
+writing.  buf belongs to the caller and is not retained.
+@returns number of packed values written, which is 0 or all of len.
+*/
 size_t
 LSX_API
 sox_write_packed_dsd(
@@ -2076,6 +2104,15 @@ sox_write_packed_dsd(
     size_t len
     );
 
+/**
+Client API:
+Writes complete 32-bit DSD words, bypassing the PCM sample path.
+
+As sox_write_packed_dsd, but each value is a full word of 32 bits with no
+valid-bit count, so a stream ending part-way through a word must finish
+through sox_write_packed_dsd instead.
+@returns number of packed words written, which is 0 or all of len.
+*/
 size_t
 LSX_API
 sox_write_packed_dsd_words(

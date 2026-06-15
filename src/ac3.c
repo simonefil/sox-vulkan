@@ -15,29 +15,33 @@ typedef struct {
   lsx_ffmpeg_codec_t * codec;
 } priv_t;
 
+/* AC-3 needs nothing beyond the adapter's defaults: its elementary stream is
+ * self-synchronising, so FFmpeg's own bitstream parser finds the frames, and
+ * A/52 fixes the channel order, so the canonical layouts apply as they are.
+ * The bit rate bounds are the ones A/52 allows. */
 static lsx_ffmpeg_codec_definition_t const definition = {
   AV_CODEC_ID_AC3,
   SOX_ENCODING_AC3,
   "AC-3",
-  6,
-  sox_false,
-  6,
-  24,
-  448000,
-  32000,
-  640000,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  sox_false,
-  0,
-  0,
-  0,
-  NULL
+  6,                            /* max_decode_channels */
+  sox_false,                    /* accept_unspecified_decode_layout */
+  6,                            /* max_encode_channels */
+  24,                           /* precision */
+  448000,                       /* default_bit_rate */
+  32000,                        /* minimum_bit_rate */
+  640000,                       /* maximum_bit_rate */
+  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
+  NULL,                         /* ignored_metadata_name */
+  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
+  NULL,                         /* prepare_decoder */
+  NULL,                         /* prepare_encoder */
+  NULL,                         /* packet_reader */
+  NULL,                         /* packet_writer */
+  sox_false,                    /* use_compression_level */
+  0,                            /* default_compression_level */
+  0,                            /* minimum_compression_level */
+  0,                            /* maximum_compression_level */
+  NULL                          /* select_layout */
 };
 
 static int startread(sox_format_t * ft)

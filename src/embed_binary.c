@@ -1,5 +1,16 @@
 /* Convert a binary file to a C uint32_t array.
  *
+ * Build-time tool, run by CMake to turn each compiled SPIR-V shader into a
+ * header the Vulkan host code includes, so that a built SoX carries its
+ * shaders in the executable and needs no data files at run time.
+ *
+ * The output is an array of 32-bit words rather than bytes because that is
+ * what vkCreateShaderModule takes, and because a word array is guaranteed the
+ * 4-byte alignment SPIR-V requires.  The words are assembled little-endian
+ * from the file, which is the byte order SPIR-V modules are written in and,
+ * on every platform SoX targets, the host order too -- so the array reads
+ * back identical to the file it came from.
+ *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
@@ -41,6 +52,8 @@ int main(int argc, char **argv)
   input = fopen(argv[1], "rb");
   if (!input || fseek(input, 0, SEEK_END) || (length = ftell(input)) <= 0 || fseek(input, 0, SEEK_SET))
     fail("cannot open or size input");
+  /* A SPIR-V module is a whole number of words by construction, so an odd
+   * size means the input is not one and the array would be truncated. */
   if ((length & 3) != 0)
     fail("input size is not a multiple of four");
   bytes = malloc((size_t)length);

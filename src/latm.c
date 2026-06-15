@@ -17,16 +17,27 @@
 #include <stdint.h>
 #include <string.h>
 
+/* How often the StreamMuxConfig is repeated when writing, in frames.  LOAS is
+ * meant to be joinable part-way through, which only works if a decoder that
+ * starts anywhere meets a configuration soon after; the cost is a few dozen
+ * bytes every interval. */
 #define LATM_CONFIG_INTERVAL 20
+
+/* Sanity limit on the AudioSpecificConfig the encoder hands back, so a
+ * nonsensical extradata size cannot drive the bit writer below. */
 #define LATM_MAX_ASC_SIZE 1024
 
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
+  /* One whole LOAS frame; used for reading or for writing, never both. */
   uint8_t packet[LSX_LOAS_MAX_PACKET_SIZE];
-  sox_bool configured;
-  unsigned config_counter;
+  sox_bool configured;          /* Read side: a StreamMuxConfig has been seen. */
+  unsigned config_counter;      /* Write side: frames until the config repeats. */
 } priv_t;
 
+/* Append count bits from a byte-aligned source to the writer, which is not
+ * itself aligned -- the config lands at whatever bit offset the preceding
+ * fields left.  Fails without writing if the field would not fit. */
 static int copy_bits(lsx_bit_writer_t * writer, uint8_t const * source, size_t count)
 {
   size_t i;
@@ -42,6 +53,9 @@ static int copy_bits(lsx_bit_writer_t * writer, uint8_t const * source, size_t c
   return SOX_SUCCESS;
 }
 
+/* Write a LATM variable-length integer, the inverse of lsx_latm_read_value:
+ * a two-bit count of the bytes that follow, then the value in as few bytes as
+ * carry it, most significant first. */
 static int write_latm_value(lsx_bit_writer_t * writer, uint32_t value)
 {
   unsigned bytes = 1;
@@ -61,6 +75,11 @@ static int write_latm_value(lsx_bit_writer_t * writer, uint32_t value)
   return SOX_SUCCESS;
 }
 
+/* Read the audioObjectType from the front of a byte-aligned
+ * AudioSpecificConfig.  Unlike the LATM case, the encoder's extradata does
+ * start on a byte boundary, so the two fields are extracted by shifting
+ * rather than through a bit reader.  Escape value 31 means "32 plus the next
+ * 6 bits", which here straddle the first two bytes. */
 static int audio_object_type(uint8_t const * config, size_t config_size, uint32_t * object_type)
 {
   uint32_t value;
@@ -77,11 +96,20 @@ static int audio_object_type(uint8_t const * config, size_t config_size, uint32_
   return SOX_SUCCESS;
 }
 
+/* AAC-LC (2), HE-AAC (5) and HE-AACv2 (29): the object types this handler
+ * claims.  USAC in the same framing belongs to the usac handler, and the
+ * older or more exotic types are refused by name rather than handed to a
+ * decoder that would not produce what the file describes. */
 static sox_bool supported_object_type(uint32_t object_type)
 {
   return object_type == 2 || object_type == 5 || object_type == 29;
 }
 
+/* Supply the next LOAS frame as an AVPacket, framing header included: the
+ * AAC_LATM decoder takes whole frames, so unlike the usac handler this one
+ * does not unwrap the transport itself.  It still looks inside far enough to
+ * reject an object type it does not claim, and to insist that a
+ * configuration arrives before any payload. */
 static int read_latm_packet(sox_format_t * ft, AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -120,6 +148,9 @@ static int read_latm_packet(sox_format_t * ft, AVPacket * packet)
   return 1;
 }
 
+/* Force a programme config element for the layouts the fixed channel
+ * configurations cannot describe, so the file states its own channel order
+ * instead of leaning on a default that means something else. */
 static int prepare_latm_encoder(AVCodecContext * context)
 {
   /* Quad and 6.1 require a PCE.  Force one for 7.1 as well because channel
@@ -129,12 +160,23 @@ static int prepare_latm_encoder(AVCodecContext * context)
   return 0;
 }
 
+/* Emit a StreamMuxConfig describing one synchronous programme and layer,
+ * carrying the encoder's AudioSpecificConfig verbatim.  The whole structure
+ * is constant apart from that config, so the fields are written as literals
+ * rather than derived; a single failed write aborts the lot, which the caller
+ * turns into "config too large". */
 static int write_stream_mux_config(lsx_bit_writer_t * writer, AVCodecContext const * context)
 {
   uint32_t asc_bits = (uint32_t)context->extradata_size * 8;
 
   /* audioMuxVersion 1 makes the AudioSpecificConfig length explicit, so
-   * the complete encoder configuration, including any PCE, is preserved. */
+   * the complete encoder configuration, including any PCE, is preserved.
+   *
+   * In order: audioMuxVersion 1, audioMuxVersionA 0, taraBufferFullness 0,
+   * allStreamsSameTimeFraming, numSubFrames 0, numProgram 0, numLayer 0,
+   * the config length and the config itself, then frameLengthType 0 with
+   * latmBufferFullness 0xff (the "unknown" value, since SoX does not model
+   * the decoder buffer), otherDataPresent 0 and crcCheckPresent 0. */
   if (lsx_bit_write(writer, 1, 1) != SOX_SUCCESS ||
       lsx_bit_write(writer, 1, 0) != SOX_SUCCESS ||
       write_latm_value(writer, 0) != SOX_SUCCESS ||
@@ -152,6 +194,17 @@ static int write_stream_mux_config(lsx_bit_writer_t * writer, AVCodecContext con
   return SOX_SUCCESS;
 }
 
+/* Wrap one encoded AAC frame in LOAS/LATM and write it out.
+ *
+ * The packet is the encoder's raw access unit; this builds the frame in
+ * p->packet and emits header plus body.  The config is written into every
+ * LATM_CONFIG_INTERVAL-th frame, the rest setting useSameStreamMux instead.
+ * The payload length that follows is coded as a chain of 255s ending in a
+ * shorter byte.
+ *
+ * Everything after the first bit is written at an arbitrary bit offset, so
+ * the frame is zeroed first -- lsx_bit_write only ever sets bits -- and the
+ * trailing partial byte ends up padded with zeros. */
 static int write_latm_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -173,6 +226,9 @@ static int write_latm_packet(sox_format_t * ft, AVCodecContext const * context, 
     lsx_fail_errno(ft, SOX_EHDR, "AAC encoder did not provide a valid AudioSpecificConfig");
     return SOX_EOF;
   }
+  /* Encoding is AAC-LC only, even though all three types can be read: the
+   * SBR and PS tools change how the config and the access units relate, and
+   * FFmpeg's native encoder does not produce them anyway. */
   if (object_type != 2) {
     lsx_fail_errno(ft, SOX_EFMT, "AAC LATM encoding supports AAC-LC only");
     return SOX_EOF;
@@ -203,6 +259,17 @@ static int write_latm_packet(sox_format_t * ft, AVCodecContext const * context, 
   if (lsx_bit_write(&writer, 8, (uint32_t)remaining) != SOX_SUCCESS)
     goto too_large;
 
+  /* FFmpeg's AAC encoder opens each access unit with a data stream element
+   * whose data_byte_align_flag is set, which is right for ADTS, where the
+   * payload starts on a byte boundary.  In LATM it does not: the config and
+   * the length bytes leave the payload at an arbitrary bit offset, so a
+   * decoder honouring that flag would align to the wrong place and read the
+   * rest of the frame as rubbish.  The flag is the low bit of the first
+   * byte, and clearing it turns the element into a plain DSE, which is why
+   * the first byte is copied separately from the rest.
+   *
+   * The test matches that element and no other: syn_ele 100 is a DSE, and
+   * the low bit must be the set alignment flag. */
   if (packet->size && (packet->data[0] & 0xe1) == 0x81) {
     uint8_t first = packet->data[0] & 0xfe;
 
@@ -231,54 +298,64 @@ too_large:
   return SOX_EOF;
 }
 
+/* Reading and writing need separate definitions because they use different
+ * libavcodec codecs: AAC_LATM is a decoder that takes whole LOAS frames,
+ * whereas encoding goes through the plain AAC encoder with this file adding
+ * the framing.  Each definition therefore leaves the other direction's limits
+ * at zero, and the handler passes the matching one to each entry point. */
+
 static lsx_ffmpeg_codec_definition_t const read_definition = {
   AV_CODEC_ID_AAC_LATM,
   SOX_ENCODING_AAC,
   "AAC LATM",
-  8,
-  sox_true,
-  0,
-  24,
-  0,
-  0,
-  0,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  NULL,
-  read_latm_packet,
-  NULL,
-  sox_false,
-  0,
-  0,
-  0,
-  NULL
+  8,                            /* max_decode_channels */
+  /* A PCE-configured stream is decoded in the order the file states, which
+   * FFmpeg may report without naming speakers. */
+  sox_true,                     /* accept_unspecified_decode_layout */
+  0,                            /* max_encode_channels */
+  24,                           /* precision */
+  0,                            /* default_bit_rate */
+  0,                            /* minimum_bit_rate */
+  0,                            /* maximum_bit_rate */
+  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
+  NULL,                         /* ignored_metadata_name */
+  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
+  NULL,                         /* prepare_decoder */
+  NULL,                         /* prepare_encoder */
+  read_latm_packet,             /* packet_reader */
+  NULL,                         /* packet_writer */
+  sox_false,                    /* use_compression_level */
+  0,                            /* default_compression_level */
+  0,                            /* minimum_compression_level */
+  0,                            /* maximum_compression_level */
+  NULL                          /* select_layout */
 };
 
 static lsx_ffmpeg_codec_definition_t const write_definition = {
   AV_CODEC_ID_AAC,
   SOX_ENCODING_AAC,
   "AAC LATM",
-  0,
-  sox_false,
-  8,
-  24,
-  128000,
-  0,
-  0,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  prepare_latm_encoder,
-  NULL,
-  write_latm_packet,
-  sox_false,
-  0,
-  0,
-  0,
-  NULL
+  0,                            /* max_decode_channels */
+  sox_false,                    /* accept_unspecified_decode_layout */
+  8,                            /* max_encode_channels */
+  24,                           /* precision */
+  128000,                       /* default_bit_rate */
+  /* AAC has no fixed bit rate range: what is usable depends on the rate and
+   * channel count, so the encoder is left to reject what it cannot do. */
+  0,                            /* minimum_bit_rate */
+  0,                            /* maximum_bit_rate */
+  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
+  NULL,                         /* ignored_metadata_name */
+  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
+  NULL,                         /* prepare_decoder */
+  prepare_latm_encoder,         /* prepare_encoder */
+  NULL,                         /* packet_reader */
+  write_latm_packet,            /* packet_writer */
+  sox_false,                    /* use_compression_level */
+  0,                            /* default_compression_level */
+  0,                            /* minimum_compression_level */
+  0,                            /* maximum_compression_level */
+  NULL                          /* select_layout */
 };
 
 static int startread(sox_format_t * ft)

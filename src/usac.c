@@ -17,6 +17,9 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Upper bound on an AudioSpecificConfig, in bytes.  A USAC config is a few
+ * dozen bytes in practice; this is a sanity limit that keeps the buffers
+ * below fixed-size and rejects an absurd length field before it is used. */
 #define USAC_MAX_CONFIG_SIZE 1024
 
 /* Keep the other FFmpeg-backed formats buildable with libavcodec 61.
@@ -27,15 +30,31 @@
 
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
-  uint8_t loas_frame[LSX_LOAS_MAX_PACKET_SIZE];
+  uint8_t loas_frame[LSX_LOAS_MAX_PACKET_SIZE]; /* One LOAS frame as read from the file. */
+
+  /* The first access unit, pulled early so that prepare_usac_decoder can see
+   * the config that precedes it.  read_usac_packet hands it out before
+   * reading any more, which is what keeps it from being decoded twice. */
   uint8_t pending_packet[LSX_LOAS_MAX_FRAME_SIZE];
   size_t pending_size;
+
+  /* The current AudioSpecificConfig, kept because LATM sends it in band and
+   * may repeat or change it: it becomes the decoder's extradata at open time
+   * and is re-attached to a packet whenever it changes mid-stream.
+   * config_bits is the exact length and config_size its rounding up to whole
+   * bytes; both are needed, since a config need not end on a byte boundary
+   * and a change in the trailing bits alone still counts as a change. */
   uint8_t config[USAC_MAX_CONFIG_SIZE];
   size_t config_size;
   size_t config_bits;
   sox_bool configured;
 } priv_t;
 
+/* Copy count bits out of reader into destination, left-aligned from bit 0 and
+ * zero-padded to the next byte.  A plain memcpy will not do: the config sits
+ * at an arbitrary bit offset inside the LATM element, but FFmpeg wants it
+ * byte-aligned.  Leaves the cursor unmoved and destination zeroed if the
+ * field does not fit. */
 static int copy_bits(lsx_bit_reader_t * reader, uint8_t * destination, size_t count)
 {
   size_t i;
@@ -52,6 +71,9 @@ static int copy_bits(lsx_bit_reader_t * reader, uint8_t * destination, size_t co
   return SOX_SUCCESS;
 }
 
+/* Read the audioObjectType from the front of an AudioSpecificConfig.  It is
+ * 5 bits, with the escape value 31 meaning "6 more bits, biased by 32", which
+ * is how types above 30 -- USAC among them, at 42 -- are spelled. */
 static int audio_object_type(uint8_t const * config, size_t config_bits, uint32_t * object_type)
 {
   lsx_bit_reader_t reader = {config, config_bits, 0};
@@ -70,6 +92,18 @@ static int audio_object_type(uint8_t const * config, size_t config_bits, uint32_
   return SOX_SUCCESS;
 }
 
+/* Parse a StreamMuxConfig and latch the AudioSpecificConfig it carries, with
+ * the cursor left just past the config so the caller can go on to the payload
+ * lengths.  *config_changed says whether this replaced a config already in
+ * force, which is what makes the difference between the decoder's initial
+ * extradata and a mid-stream reconfiguration.  The first config seen is never
+ * a change: it is what the decoder is opened with.
+ *
+ * Only the one LATM shape xHE-AAC is defined for is accepted -- audioMux
+ * version 1, a single synchronous program and layer, no otherData -- so the
+ * fields below are read and required to be their fixed values rather than
+ * being interpreted.  Everything else is refused with a clear message
+ * instead of being misparsed. */
 static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader_t * reader, sox_bool * config_changed)
 {
   uint8_t config[USAC_MAX_CONFIG_SIZE];
@@ -79,6 +113,8 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
   size_t config_size;
   sox_bool was_configured = p->configured;
 
+  /* audioMuxVersion, audioMuxVersionA, taraBufferFullness, allStreamsSameTimeFraming,
+   * numSubFrames, numProgram, numLayer. */
   if (lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 1 ||
       lsx_bit_read(reader, 1, &value) != SOX_SUCCESS || value != 0 ||
       lsx_latm_read_value(reader, &value) != SOX_SUCCESS ||
@@ -102,11 +138,17 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
     lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC AudioSpecificConfig");
     return SOX_EOF;
   }
+  /* Object type 42 is USAC.  Plain AAC in the same framing is handled by the
+   * latm format, so anything else here is a file for that handler, not a
+   * malformed one for this. */
   if (object_type != 42) {
     lsx_fail_errno(ft, SOX_EFMT, "LOAS/LATM AudioSpecificConfig is not xHE-AAC/USAC");
     return SOX_EOF;
   }
 
+  /* frameLengthType 0 and its latmBufferFullness, then otherDataPresent.
+   * Only type 0 puts explicit payload lengths in each frame, which is what
+   * parse_audio_mux_element goes on to read. */
   if (lsx_bit_read(reader, 3, &value) != SOX_SUCCESS || value != 0 || lsx_bit_read(reader, 8, &value) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR, "Unsupported xHE-AAC LATM frame length configuration");
     return SOX_EOF;
@@ -119,6 +161,8 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
     lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC StreamMuxConfig");
     return SOX_EOF;
   }
+  /* crcCheckPresent; the checksum itself is skipped rather than verified,
+   * since the decoder will reject a corrupt access unit anyway. */
   if (value && lsx_bit_read(reader, 8, NULL) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC StreamMuxConfig CRC");
     return SOX_EOF;
@@ -133,6 +177,14 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
   return SOX_SUCCESS;
 }
 
+/* Unpack one AudioMuxElement, already read into p->loas_frame, into the raw
+ * access unit the decoder wants.  destination must have room for
+ * LSX_LOAS_MAX_FRAME_SIZE bytes; *destination_size is what was written.
+ *
+ * The leading useSameStreamMux bit says whether this frame repeats the
+ * previous configuration or carries a new one, so a stream that never sends
+ * one before its first payload cannot be decoded at all.  The payload length
+ * that follows is coded as a chain of bytes, each below 255 ending it. */
 static int parse_audio_mux_element(
     sox_format_t * ft,
     priv_t * p,
@@ -163,6 +215,8 @@ static int parse_audio_mux_element(
     return SOX_EOF;
   }
 
+  /* The subtraction rather than an addition keeps the bound check itself
+   * from overflowing, so an absurd chain of 255s fails instead of wrapping. */
   do {
     if (lsx_bit_read(&reader, 8, &value) != SOX_SUCCESS || payload_size > LSX_LOAS_MAX_FRAME_SIZE - value) {
       lsx_fail_errno(ft, SOX_EHDR, "Invalid xHE-AAC LATM payload length");
@@ -179,6 +233,10 @@ static int parse_audio_mux_element(
   return SOX_SUCCESS;
 }
 
+/* Read the next LOAS frame and unpack its access unit.  Returns 1 on
+ * success, 0 at end of stream, or SOX_EOF on error.  clean_eof is passed
+ * through to the LOAS reader: it says whether running out of input exactly at
+ * a frame boundary is normal here, which it is for every caller in this file. */
 static int read_loas_access_unit(
     sox_format_t * ft,
     priv_t * p,
@@ -197,6 +255,16 @@ static int read_loas_access_unit(
       SOX_EOF;
 }
 
+/* Give the decoder the AudioSpecificConfig before it is opened.  Nothing in a
+ * raw USAC access unit says how to decode it, so the config has to come from
+ * the LATM layer, which means reading the first frame here; it is kept in
+ * p->pending_packet and handed out by the first read_usac_packet.
+ *
+ * The extradata buffer becomes the codec context's property and is freed with
+ * it, so it must come from FFmpeg's allocator and be padded as libavcodec
+ * requires.  The version test is at run time, not compile time, because the
+ * USAC decoder appeared in FFmpeg 8.0 while everything else here builds
+ * against 61; failing with a clear message beats decoding garbage. */
 static int prepare_usac_decoder(sox_format_t * ft, AVCodecContext * context)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -225,6 +293,14 @@ static int prepare_usac_decoder(sox_format_t * ft, AVCodecContext * context)
   return SOX_SUCCESS;
 }
 
+/* Supply the next access unit as an AVPacket, taking the framing off LOAS
+ * rather than letting FFmpeg's parser do it.  The first call hands back the
+ * frame prepare_usac_decoder already consumed.
+ *
+ * A config that changed mid-stream travels with the packet as NEW_EXTRADATA
+ * side data, which is how libavcodec is told to reconfigure at exactly that
+ * packet; putting it on the context instead would apply it at the wrong
+ * point.  Ownership of the packet passes to the caller. */
 static int read_usac_packet(sox_format_t * ft, AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -264,29 +340,35 @@ static int read_usac_packet(sox_format_t * ft, AVPacket * packet)
   return 1;
 }
 
+/* Decode only: FFmpeg has no USAC encoder, so max_encode_channels is 0 and
+ * the handler exposes no write path at all.  The codec is shared with plain
+ * AAC, hence required_decode_profile, which is what stops an AAC-LC file from
+ * being decoded as though it were xHE-AAC.  Unspecified layouts are accepted
+ * up to 8 channels because USAC states its own channel order in the config,
+ * so decoder order is the right order even when FFmpeg names no speakers. */
 static lsx_ffmpeg_codec_definition_t const definition = {
   AV_CODEC_ID_AAC,
   SOX_ENCODING_USAC,
   "xHE-AAC",
-  8,
-  sox_true,
-  0,
-  24,
-  0,
-  0,
-  0,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  AV_PROFILE_AAC_USAC,
-  prepare_usac_decoder,
-  NULL,
-  read_usac_packet,
-  NULL,
-  sox_false,
-  0,
-  0,
-  0,
-  NULL
+  8,                            /* max_decode_channels */
+  sox_true,                     /* accept_unspecified_decode_layout */
+  0,                            /* max_encode_channels */
+  24,                           /* precision */
+  0,                            /* default_bit_rate */
+  0,                            /* minimum_bit_rate */
+  0,                            /* maximum_bit_rate */
+  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
+  NULL,                         /* ignored_metadata_name */
+  AV_PROFILE_AAC_USAC,          /* required_decode_profile */
+  prepare_usac_decoder,         /* prepare_decoder */
+  NULL,                         /* prepare_encoder */
+  read_usac_packet,             /* packet_reader */
+  NULL,                         /* packet_writer */
+  sox_false,                    /* use_compression_level */
+  0,                            /* default_compression_level */
+  0,                            /* minimum_compression_level */
+  0,                            /* maximum_compression_level */
+  NULL                          /* select_layout */
 };
 
 static int startread(sox_format_t * ft)

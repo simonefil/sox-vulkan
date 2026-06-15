@@ -54,42 +54,60 @@ int lsx_bit_write(lsx_bit_writer_t * writer, unsigned count, uint32_t value)
   return SOX_SUCCESS;
 }
 
+/* How much compressed input the parser is fed at a time.  FFmpeg requires the
+ * padding past the end so that its bitstream readers may over-read safely. */
 #define INPUT_BUFFER_SIZE 16384
 
+/* One open codec.  A given state is used for reading or for writing, never
+ * both, so the two groups of fields below are mutually exclusive in practice;
+ * they share a struct because everything above them is common. */
 struct lsx_ffmpeg_codec_t {
-  lsx_ffmpeg_codec_definition_t const * definition;
-  AVCodec const * codec;
+  lsx_ffmpeg_codec_definition_t const * definition; /* Not owned; caller-provided static data. */
+  AVCodec const * codec;        /* Not owned; libavcodec's own registry entry. */
   AVCodecContext * context;
-  AVCodecParserContext * parser;
-  AVPacket * packet;
-  AVFrame * frame;
+  AVCodecParserContext * parser; /* NULL when the definition reads packets itself. */
+  AVPacket * packet;            /* Reused; unreffed after each use, freed once. */
+  AVFrame * frame;              /* Reused; on the encode side it owns its buffers. */
 
+  /* Read side: compressed bytes on their way into the parser.  input_offset
+   * is how much of input_size the parser has consumed.  The three eof flags
+   * are the stages of the drain -- file exhausted, parser drained, decoder
+   * drained -- and only ever move forward. */
   uint8_t input[INPUT_BUFFER_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
   size_t input_offset;
   size_t input_size;
   sox_bool input_eof;
   sox_bool parser_eof;
-  sox_bool parser_zero_progress;
-  sox_bool decoder_flushed;
+  sox_bool parser_zero_progress; /* Set on a no-progress parse; a second one is fatal. */
+  sox_bool decoder_flushed;      /* A NULL packet has been sent. */
   sox_bool decoder_eof;
 
+  /* Read side: one decoded frame converted to interleaved sox samples.
+   * decoded_offset..decoded_size is what the caller has not taken yet.
+   * decoded_channels and decoded_rate are latched from the first frame and
+   * every later frame must match them. */
   sox_sample_t * decoded;
-  size_t decoded_capacity;
+  size_t decoded_capacity;      /* In samples, not bytes; grows, never shrinks. */
   size_t decoded_offset;
   size_t decoded_size;
   unsigned decoded_channels;
   int decoded_rate;
-  sox_bool ignored_metadata_warning_shown;
+  sox_bool ignored_metadata_warning_shown; /* Both warnings are once per file. */
   sox_bool layout_warning_shown;
 
+  /* Write side: interleaved sox samples accumulating towards one full codec
+   * frame.  pending_capacity is frame_samples * channels, and the buffer is
+   * handed to the encoder and reset every time it fills. */
   sox_sample_t * pending;
   size_t pending_capacity;
   size_t pending_size;
-  int frame_samples;
-  int64_t next_pts;
-  sox_bool write_failed;
+  int frame_samples;            /* Samples per channel per codec frame. */
+  int64_t next_pts;             /* In samples; the time base is 1/rate. */
+  sox_bool write_failed;        /* Latched, so a failed write is reported once. */
 };
 
+/* Report an FFmpeg failure as a SoX error, turning the AVERROR into text.
+ * Always returns SOX_EOF, so callers can `return fail_av(...)'. */
 static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int av_error)
 {
   char message[AV_ERROR_MAX_STRING_SIZE];
@@ -100,6 +118,9 @@ static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int
   return SOX_EOF;
 }
 
+/* Options SoX derives from the signal and encoding it was given.  Letting
+ * --ffmpeg-opts set them too would silently disagree with what SoX has told
+ * the rest of the chain, so they are refused rather than overridden. */
 static sox_bool is_reserved_codec_option(char const * key)
 {
   static char const * const reserved[] = {
@@ -119,6 +140,10 @@ static sox_bool is_reserved_codec_option(char const * key)
   return sox_false;
 }
 
+/* Open state->context, applying --ffmpeg-opts on the way in.  avcodec_open2
+ * consumes the options it recognises and leaves the rest in the dictionary,
+ * so anything still there afterwards is a user typo worth failing on rather
+ * than ignoring silently. */
 static int open_codec(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool encoding)
 {
   AVDictionary * options = NULL;
@@ -163,6 +188,9 @@ static int open_codec(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool en
   return SOX_SUCCESS;
 }
 
+/* Free everything the state owns and clear the caller's pointer.  Tolerates a
+ * partly built state, so the failure paths in allocate_state and the two
+ * start functions can all unwind through it. */
 static void destroy_state(lsx_ffmpeg_codec_t ** state)
 {
   lsx_ffmpeg_codec_t * p;
@@ -181,6 +209,8 @@ static void destroy_state(lsx_ffmpeg_codec_t ** state)
   *state = NULL;
 }
 
+/* Look the codec up and allocate the context, packet and frame every path
+ * needs.  On failure nothing is left allocated and *state is untouched. */
 static int allocate_state(
     sox_format_t * ft,
     lsx_ffmpeg_codec_t ** state,
@@ -210,6 +240,10 @@ static int allocate_state(
   return SOX_SUCCESS;
 }
 
+/* The layout SoX assumes for a bare channel count, matching the order the
+ * rest of SoX uses for multichannel files.  Follows the libavutil convention:
+ * 0 on success, negative AVERROR otherwise.  The native layouts it returns
+ * hold no allocation, so they need no av_channel_layout_uninit. */
 static int canonical_layout(unsigned channels, AVChannelLayout * layout)
 {
   switch (channels) {
@@ -242,6 +276,7 @@ static int canonical_layout(unsigned channels, AVChannelLayout * layout)
   }
 }
 
+/* canonical_layout unless the definition overrides it. */
 static int select_layout(lsx_ffmpeg_codec_definition_t const * definition, unsigned channels, AVChannelLayout * layout)
 {
   return definition->select_layout != NULL ?
@@ -249,6 +284,11 @@ static int select_layout(lsx_ffmpeg_codec_definition_t const * definition, unsig
       canonical_layout(channels, layout);
 }
 
+/* Fallback list of layouts for codecs that do not publish a layout list of
+ * their own.  FFmpeg's native AAC encoder is the only such codec here: it
+ * accepts everything its PCE writer can describe but advertises nothing, so
+ * without this table --help-format would print an empty list and any layout
+ * check would have to pass everything through. */
 static char const * const aac_layout_names[] = {
   "mono",
   "stereo",
@@ -284,6 +324,10 @@ static char const * const * codec_layout_names(enum AVCodecID codec_id)
   return codec_id == AV_CODEC_ID_AAC ? aac_layout_names : NULL;
 }
 
+/* Map a SoX format name, including its aliases, to the codec and channel
+ * limit its handler encodes with.  Kept separate from the handler tables so
+ * that --help-format can answer without opening a file.  Returns 0 for a
+ * format with no FFmpeg encoder behind it. */
 static int format_encoder(char const * format_name, enum AVCodecID * codec_id, unsigned * max_channels)
 {
   if (!strcmp(format_name, "aac") ||
@@ -327,6 +371,8 @@ static int format_encoder(char const * format_name, enum AVCodecID * codec_id, u
   return 0;
 }
 
+/* Print the speaker names in the order the codec expects the channels, which
+ * is what a caller needs in order to line its own channels up. */
 static void print_channel_order(AVChannelLayout const * layout)
 {
   int i;
@@ -341,6 +387,8 @@ static void print_channel_order(AVChannelLayout const * layout)
   }
 }
 
+/* One --help-format line: the layout name to pass to --channel-layout, then
+ * the channel order it implies. */
 static void print_layout(AVChannelLayout const * layout)
 {
   char description[128];
@@ -374,6 +422,9 @@ void lsx_ffmpeg_codec_print_format_layouts(char const * format_name)
     return;
 
   puts("Output channel layouts (--channel-layout LAYOUT):");
+  /* An encoder that publishes no layout list accepts anything it can
+   * describe, so fall back to the table above; codec_layout_names returning
+   * NULL means we have nothing useful to say and print nothing. */
   if (configurations == NULL || count <= 0) {
     layout_names = codec_layout_names(codec_id);
     if (layout_names == NULL)
@@ -400,6 +451,12 @@ void lsx_ffmpeg_codec_print_format_layouts(char const * format_name)
   }
 }
 
+/* Whether a layout the decoder reported is one this handler will pass on.  A
+ * definition with its own selector accepts only the layout that selector
+ * would have chosen for that channel count.  Otherwise anything with real
+ * speaker positions is fine, and an unspecified layout is accepted up to 6
+ * channels -- beyond that the channel order is too likely to be wrong to
+ * guess at, unless the definition says the format's order is fixed anyway. */
 static sox_bool is_supported_layout(AVChannelLayout const * layout, lsx_ffmpeg_codec_definition_t const * definition)
 {
   AVChannelLayout expected = {0};
@@ -415,6 +472,10 @@ static sox_bool is_supported_layout(AVChannelLayout const * layout, lsx_ffmpeg_c
   return sox_true;
 }
 
+/* Warn once when the decoded layout is not the one SoX would assume for that
+ * channel count.  SoX carries no channel map, so the samples are handed on in
+ * decoder order and it is the user who has to account for the difference; the
+ * canonical layouts pass silently because for those the two orders agree. */
 static void warn_decoded_layout(sox_format_t * ft, lsx_ffmpeg_codec_t * state, AVChannelLayout const * layout)
 {
   AVChannelLayout canonical = {0};
@@ -442,9 +503,14 @@ static void warn_decoded_layout(sox_format_t * ft, lsx_ffmpeg_codec_t * state, A
   state->layout_warning_shown = sox_true;
 }
 
+/* Check a freshly decoded frame against what the handler supports and against
+ * the first frame, then latch its rate and channel count.  SoX fixes both for
+ * the whole file at startread time, so a mid-stream change cannot be honoured
+ * and is refused instead of being silently misinterpreted. */
 static int validate_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   AVChannelLayout const * layout = &state->frame->ch_layout;
+  /* Some decoders leave the rate on the context rather than on each frame. */
   int rate = state->frame->sample_rate ? state->frame->sample_rate : state->context->sample_rate;
   char description[128];
 
@@ -483,6 +549,11 @@ static int validate_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   return SOX_SUCCESS;
 }
 
+/* Warn once for the formats that carry an object or spatial layer on top of a
+ * channel bed.  FFmpeg decodes the bed only, which is a correct result but
+ * not the whole file, so say so rather than let it pass for the full mix.
+ * Deferred until after the first frame, since the profile is not reliably
+ * known before then. */
 static void warn_ignored_metadata(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   if (!state->ignored_metadata_warning_shown &&
@@ -496,6 +567,10 @@ static void warn_ignored_metadata(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   }
 }
 
+/* Address of one sample in a decoded frame, hiding the planar/interleaved
+ * split: planar formats keep each channel in its own extended_data plane,
+ * packed formats put everything in plane 0.  channels is passed in because a
+ * frame that reported no layout is described by the context instead. */
 static void const * decoded_sample_address(AVFrame const * frame, int sample, int channel, unsigned channels)
 {
   enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
@@ -507,6 +582,15 @@ static void const * decoded_sample_address(AVFrame const * frame, int sample, in
   return frame->extended_data[planar ? channel : 0] + index * bytes;
 }
 
+/* Convert one decoded sample to SoX's 32-bit signed scale.  The integer
+ * formats are exact shifts, so they cannot clip.  The float formats can:
+ * they are scaled by 2^31 and rounded to nearest, and a value outside the
+ * representable range is clamped and counted in ft->clips.  Full-scale
+ * negative is deliberately not a clip -- -1.0 maps exactly onto INT32_MIN --
+ * whereas +1.0 has no exact image and is clamped without counting, so that a
+ * plain full-scale signal does not report clipping on every peak.
+ * Unsupported formats are filtered out beforehand by supported_sample_format;
+ * the default arm exists only to keep the switch total. */
 static sox_sample_t decoded_sample_to_sox(
     sox_format_t * ft,
     AVFrame const * frame,
@@ -550,6 +634,8 @@ static sox_sample_t decoded_sample_to_sox(
   }
 }
 
+/* The PCM formats decoded_sample_to_sox knows how to read, in either their
+ * planar or their packed spelling. */
 static sox_bool supported_sample_format(enum AVSampleFormat format)
 {
   switch (av_get_packed_sample_fmt(format)) {
@@ -565,6 +651,9 @@ static sox_bool supported_sample_format(enum AVSampleFormat format)
   }
 }
 
+/* Interleave a decoded frame into the state's sox-sample buffer, replacing
+ * whatever was there; the caller has already consumed it.  The buffer only
+ * ever grows, so a stream of equal-sized frames allocates once. */
 static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   size_t required;
@@ -595,6 +684,15 @@ static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   return SOX_SUCCESS;
 }
 
+/* Produce the next compressed packet, either from the handler's own framing
+ * or by feeding file bytes through the FFmpeg bitstream parser.  Returns 1
+ * with state->packet filled, 0 once both the file and the parser are drained,
+ * or SOX_EOF on error.
+ *
+ * The loop iterates because a parse call can legitimately produce no packet:
+ * the parser may be accumulating a frame, or the refill may have been empty.
+ * Once the file is exhausted the parser is called once with a NULL buffer to
+ * flush whatever it still holds. */
 static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   if (state->definition->packet_reader != NULL)
@@ -637,6 +735,11 @@ static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
       if (consumed < 0)
         return fail_av(ft, SOX_EHDR, "Unable to parse compressed audio", consumed);
       state->input_offset += (size_t)consumed;
+      /* A parse that consumes nothing and emits nothing is retried once and
+       * then treated as fatal.  Without the guard the loop would call the
+       * parser forever on the same bytes: the buffer is only refilled once
+       * it has been fully consumed, so nothing about the next call would
+       * differ.  Failing here turns that hang into an error. */
       if (consumed == 0 && packet_size == 0) {
         if (!state->parser_zero_progress) {
           state->parser_zero_progress = sox_true;
@@ -658,6 +761,15 @@ static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   }
 }
 
+/* Run the libavcodec receive/send cycle until one frame comes out.  Returns 1
+ * with the frame stored in state->decoded, 0 once the decoder is drained, or
+ * SOX_EOF on error.
+ *
+ * The order is receive-then-send, as the API requires: the decoder is asked
+ * for output first and only fed when it reports EAGAIN, and end of input is
+ * signalled by sending a NULL packet exactly once.  A decoder that asks for
+ * more input after that flush would leave the loop spinning, so it is treated
+ * as an error rather than retried. */
 static int decode_next_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   for (;;) {
@@ -724,6 +836,10 @@ int lsx_ffmpeg_codec_startread(
     destroy_state(state);
     return SOX_EOF;
   }
+  /* Decode one frame up front: for these formats the rate, channel count and
+   * precision are only reliably known once the decoder has seen real data,
+   * and SoX needs all three before the first read.  The frame is kept in the
+   * state, so nothing is decoded twice. */
   result = decode_next_frame(ft, p);
   if (result <= 0) {
     if (result == 0)
@@ -735,9 +851,13 @@ int lsx_ffmpeg_codec_startread(
   ft->signal.rate = (sox_rate_t)p->decoded_rate;
   ft->signal.channels = p->decoded_channels;
   ft->signal.precision = definition->precision ? definition->precision : (unsigned)p->context->bits_per_raw_sample;
+  /* None of these streams carry a reliable sample count in their header, so
+   * the length stays unknown rather than being guessed from the file size. */
   if (ft->signal.length == SOX_IGNORE_LENGTH)
     ft->signal.length = SOX_UNSPEC;
   ft->encoding.encoding = definition->encoding;
+  /* A definition with a fixed precision is a lossy format: reporting bits per
+   * sample for it would suggest a word size the bitstream does not have. */
   ft->encoding.bits_per_sample = definition->precision ? 0 : ft->signal.precision;
   return SOX_SUCCESS;
 }
@@ -773,6 +893,10 @@ int lsx_ffmpeg_codec_stopread(lsx_ffmpeg_codec_t ** state)
   return SOX_SUCCESS;
 }
 
+/* Reject a rate the encoder does not support, before anything is committed.
+ * An encoder that publishes no rate list accepts any rate.  SoX will not
+ * resample silently on the way out, so the message points at the rate effect
+ * instead. */
 static int codec_supports_rate(sox_format_t * ft, AVCodec const * codec, int rate)
 {
   void const * configurations;
@@ -794,6 +918,10 @@ static int codec_supports_rate(sox_format_t * ft, AVCodec const * codec, int rat
   return SOX_EOF;
 }
 
+/* Reject a channel layout the encoder does not support.  Encoders that
+ * publish no layout list are checked against the name table instead, and if
+ * there is no table for them either the layout is accepted and the encoder is
+ * left to complain at open time. */
 static int codec_supports_layout(sox_format_t * ft, AVCodec const * codec, AVChannelLayout const * layout)
 {
   void const * configurations;
@@ -836,6 +964,13 @@ static int codec_supports_layout(sox_format_t * ft, AVCodec const * codec, AVCha
   return SOX_EOF;
 }
 
+/* Pick the PCM format to hand the encoder.  A requested precision wins if the
+ * encoder offers an integer format that carries it exactly, since going
+ * through float would round samples that did not need rounding.  Otherwise
+ * the preference list below decides, ordered by how little it costs to
+ * convert a sox sample into it and by how much of the sample survives.  An
+ * encoder that publishes no format list gets planar float, which every such
+ * encoder in FFmpeg accepts. */
 static int choose_sample_format(
     sox_format_t * ft,
     AVCodec const * codec,
@@ -888,6 +1023,11 @@ static int choose_sample_format(
   return SOX_EOF;
 }
 
+/* Turn -C into whatever quality knob this codec actually has.  For the
+ * lossless codecs that is an integer compression level, passed through as
+ * given; for the lossy ones it is a bit rate in kbit/s, so the value is
+ * scaled to bit/s and range-checked.  -C absent is HUGE_VAL, which selects
+ * the definition's default. */
 static int set_encoder_bit_rate(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   int64_t bit_rate = state->definition->default_bit_rate;
@@ -938,6 +1078,9 @@ static int set_encoder_bit_rate(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   return SOX_SUCCESS;
 }
 
+/* Address of one sample in the encoder's input frame; the write-side twin of
+ * decoded_sample_address.  Here the channel count is the frame's own, since
+ * the frame was built by this file. */
 static void * encoded_sample_address(AVFrame * frame, int sample, int channel)
 {
   enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
@@ -949,6 +1092,13 @@ static void * encoded_sample_address(AVFrame * frame, int sample, int channel)
   return frame->extended_data[planar ? channel : 0] + index * bytes;
 }
 
+/* Store one sox sample into the encoder's input frame in its own PCM format.
+ * The narrowing integer cases round to nearest away from zero and clamp, the
+ * arithmetic being done in int64 so that adding the rounding offset cannot
+ * itself overflow.  No clip is counted: the target format was chosen to carry
+ * the requested precision, so any loss here was asked for.  The float cases
+ * divide by 2^31, which is exact.  Formats outside this set are never
+ * selected by choose_sample_format. */
 static void sox_sample_to_encoded(AVFrame * frame, int sample, int channel, sox_sample_t value)
 {
   enum AVSampleFormat format = av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
@@ -997,6 +1147,12 @@ static void sox_sample_to_encoded(AVFrame * frame, int sample, int channel, sox_
   }
 }
 
+/* Drain every packet the encoder currently has and write it out, through the
+ * definition's packet writer if it has one.  EAGAIN means the encoder simply
+ * wants more input, which is the normal way out mid-stream; during the final
+ * flush it must not happen, since a flushed encoder is required to answer
+ * with packets until AVERROR_EOF, so there it is an error.  The packet is
+ * unreffed on every path, including the failing one. */
 static int write_available_packets(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool flushing)
 {
   for (;;) {
@@ -1022,6 +1178,15 @@ static int write_available_packets(sox_format_t * ft, lsx_ffmpeg_codec_t * state
   }
 }
 
+/* Convert the buffered sox samples into the encoder's frame and submit it.
+ * samples_per_channel is normally the codec's frame size and is smaller only
+ * for a final partial frame, which is why it is a parameter rather than read
+ * from the state.
+ *
+ * The frame is reused across calls, so it has to be made writable again each
+ * time -- the encoder may still hold a reference to the buffers it was given
+ * last time.  Presentation timestamps are counted in samples, matching the
+ * 1/rate time base set at startwrite. */
 static int encode_pending_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state, int samples_per_channel)
 {
   int channel;
@@ -1059,6 +1224,10 @@ int lsx_ffmpeg_codec_startwrite(
   unsigned precision = ft->encoding.bits_per_sample ? ft->encoding.bits_per_sample : definition->precision;
   int result;
 
+  /* Everything the encoder cannot change later is settled before the state is
+   * allocated or the context is opened, so that a rejected request leaves
+   * nothing behind.  The layout is the one exception: it may hold an
+   * allocation, so every exit from here on has to uninit it. */
   if (ft->signal.channels < 1 || ft->signal.channels > definition->max_encode_channels) {
     lsx_fail_errno(ft, SOX_EFMT,
         "%s encoding supports layouts with 1 to %u channels",
@@ -1138,6 +1307,9 @@ int lsx_ffmpeg_codec_startwrite(
     destroy_state(state);
     return SOX_EOF;
   }
+  /* The frame size is only known once the encoder is open, and the whole
+   * write path is built around buffering exactly that many samples, so an
+   * encoder that does not fix one cannot be driven by this adapter. */
   if (p->context->frame_size <= 0) {
     lsx_fail_errno(ft, SOX_EFMT, "%s encoder did not provide a fixed audio frame size", definition->name);
     destroy_state(state);
@@ -1184,6 +1356,9 @@ size_t lsx_ffmpeg_codec_write(
     done += count;
     if (state->pending_size == state->pending_capacity) {
       if (encode_pending_frame(ft, state, state->frame_samples) != SOX_SUCCESS) {
+        /* The samples just copied in were not encoded, so they are not
+         * reported as written; the failure is latched and stopwrite will
+         * neither flush nor try again. */
         state->write_failed = sox_true;
         return done - count;
       }
@@ -1201,6 +1376,8 @@ int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
   if (state == NULL || *state == NULL)
     return SOX_SUCCESS;
   p = *state;
+  /* The state is destroyed on every path below, failure included, so that a
+   * caller which ignores the return value still does not leak. */
   if (p->write_failed)
     result = SOX_EOF;
   else if (p->pending_size) {
@@ -1213,6 +1390,10 @@ int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
     }
     else {
       samples_per_channel = (int)(p->pending_size / channels);
+      /* An encoder that cannot take a short last frame is given a full one
+       * padded with silence, which lengthens the file by up to one frame.
+       * There is no alternative: the codecs here have no way to record a
+       * partial final frame. */
       if (!(p->codec->capabilities & AV_CODEC_CAP_SMALL_LAST_FRAME)) {
         memset(p->pending + p->pending_size, 0, (p->pending_capacity - p->pending_size) * sizeof(*p->pending));
         samples_per_channel = p->frame_samples;

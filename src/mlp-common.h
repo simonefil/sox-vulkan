@@ -11,6 +11,10 @@
 
 #include "sox.h"
 
+/* The two handlers mlp.c and truehd.c register.  Both live in mlp-common.c
+ * because TrueHD is MLP extended: same access unit framing, same major sync,
+ * and only a stream type byte and a codec id to tell them apart.  Each
+ * returns a pointer to static data that outlives any file. */
 sox_format_handler_t const * lsx_mlp_format_handler(void);
 sox_format_handler_t const * lsx_truehd_format_handler(void);
 

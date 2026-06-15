@@ -15,17 +15,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Size of the buffer handed to avio_alloc_context.  libavformat owns it from
+ * then on and reallocates it as it likes, so it is freed through the context
+ * rather than directly. */
 #define AVIO_BUFFER_SIZE 32768
 
 struct lsx_ffmpeg_container_t {
-  sox_format_t * ft;
+  sox_format_t * ft;            /* Not owned; the file the I/O callbacks act on. */
   AVFormatContext * format;
-  AVIOContext * io;
-  int stream_index;
-  sox_bool writing;
-  sox_bool header_written;
+  AVIOContext * io;             /* Owned, along with its buffer. */
+  int stream_index;             /* The audio stream, in format->streams. */
+  sox_bool writing;             /* Selects how format is torn down. */
+  sox_bool header_written;      /* Only then does a trailer have to be written. */
 };
 
+/* Report an FFmpeg failure as a SoX error; always returns SOX_EOF.  The
+ * messages below name M4A directly rather than format_name, since that is the
+ * only container routed through here. */
 static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int av_error)
 {
   char message[AV_ERROR_MAX_STRING_SIZE];
@@ -36,6 +42,11 @@ static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int
   return SOX_EOF;
 }
 
+/* AVIOContext callbacks, all three taking the container state as opaque and
+ * speaking to the file through SoX's own buffered I/O.  They follow the
+ * libavformat convention of returning a negative AVERROR on failure, so a
+ * short read has to be told apart from a real one: lsx_readbuf returning
+ * nothing is end of file unless the stream's error flag is set. */
 static int read_packet(void * opaque, uint8_t * buffer, int size)
 {
   lsx_ffmpeg_container_t * state = opaque;
@@ -54,6 +65,12 @@ static int write_packet(void * opaque, uint8_t const * buffer, int size)
   return count == (size_t)size ? size : AVERROR(EIO);
 }
 
+/* Seek or, for the AVSEEK_SIZE pseudo-whence, report the file length.  ENOSYS
+ * is the documented way to tell libavformat an operation is unavailable, so
+ * it is what a non-seekable file and an unknown length both answer; the
+ * muxers and demuxers then fall back to a streaming strategy instead of
+ * failing.  AVSEEK_FORCE carries no meaning for a plain file and is masked
+ * off.  Returns the resulting absolute position, as the API expects. */
 static int64_t seek(void * opaque, int64_t offset, int whence)
 {
   lsx_ffmpeg_container_t * state = opaque;
@@ -79,6 +96,10 @@ static int64_t seek(void * opaque, int64_t offset, int whence)
   return position >= 0 ? position : AVERROR(EIO);
 }
 
+/* Build the custom AVIOContext.  Only one of the two data callbacks is
+ * installed, matching the direction; installing both would let libavformat
+ * believe the file is bidirectional.  The buffer must come from av_malloc,
+ * since libavformat may reallocate it with its own allocator. */
 static int allocate_io(sox_format_t * ft, lsx_ffmpeg_container_t * state, sox_bool writing)
 {
   uint8_t * buffer = av_malloc(AVIO_BUFFER_SIZE);
@@ -97,6 +118,14 @@ static int allocate_io(sox_format_t * ft, lsx_ffmpeg_container_t * state, sox_bo
   return SOX_SUCCESS;
 }
 
+/* Free everything the state owns and clear the caller's pointer.  Tolerates a
+ * partly built state, so every failure path can unwind through it.
+ *
+ * The teardown is asymmetric because libavformat's is: an output context is
+ * freed directly, whereas an input context has to be closed, which also
+ * releases what the demuxer allocated while probing.  The AVIOContext is
+ * taken apart afterwards, buffer first, because it is only detached from the
+ * format context by then and avio_context_free does not free the buffer. */
 static void destroy_state(lsx_ffmpeg_container_t ** state)
 {
   lsx_ffmpeg_container_t * p;
@@ -143,6 +172,11 @@ int lsx_ffmpeg_container_startread(
     lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate FFmpeg input container");
     return SOX_EOF;
   }
+  /* The context is allocated here rather than left to avformat_open_input so
+   * that the custom I/O is already in place when the demuxer starts probing;
+   * CUSTOM_IO also stops avformat_close_input from closing a file it never
+   * opened.  The demuxer is named explicitly, so nothing is probed by
+   * content: the SoX handler has already decided what this file is. */
   p->format->pb = p->io;
   p->format->flags |= AVFMT_FLAG_CUSTOM_IO;
   result = avformat_open_input(&p->format, NULL, input_format, NULL);
@@ -158,6 +192,9 @@ int lsx_ffmpeg_container_startread(
     return SOX_EOF;
   }
 
+  /* Take the first audio stream of the expected codec.  A file may hold
+   * several streams, but SoX reads exactly one, and one that does not match
+   * the handler's codec could not be decoded by it anyway. */
   p->stream_index = -1;
   for (i = 0; i < p->format->nb_streams; ++i)
     if (p->format->streams[i]->codecpar->codec_type ==
@@ -177,6 +214,11 @@ int lsx_ffmpeg_container_startread(
     destroy_state(&p);
     return SOX_EOF;
   }
+  /* Unlike the raw bitstream formats, a container records its duration, so
+   * SoX can report a length and drive a progress meter.  It is converted from
+   * the stream time base to samples and then to SoX's unit, which counts
+   * every channel; anything missing, non-positive or wide enough to overflow
+   * that product leaves the length unknown rather than wrong. */
   if (ft->signal.length != SOX_IGNORE_LENGTH) {
     AVStream const * stream = p->format->streams[p->stream_index];
 
@@ -262,9 +304,15 @@ int lsx_ffmpeg_container_startwrite(
     destroy_state(&p);
     return SOX_EOF;
   }
+  /* The tag is cleared so the muxer picks the one this container wants: the
+   * value copied out of the codec context belongs to whatever container the
+   * parameters were last used with.  The stream keeps the codec's time base,
+   * which is 1/rate, so packet timestamps stay in samples. */
   stream->codecpar->codec_tag = 0;
   stream->time_base = codec_context->time_base;
   p->stream_index = stream->index;
+  /* faststart moves the index to the front of the file once the trailer is
+   * written, which is why the output has to be seekable. */
   av_dict_set(&options, "movflags", "faststart", 0);
   result = avformat_write_header(p->format, &options);
   av_dict_free(&options);
@@ -284,6 +332,10 @@ int lsx_ffmpeg_container_write_packet(
     AVCodecContext const * codec_context,
     AVPacket const * packet)
 {
+  /* The packet belongs to the codec adapter, which reuses it, whereas
+   * av_interleaved_write_frame takes over what it is given and may hold it
+   * until a later packet lets it be ordered.  Hence the clone, which shares
+   * the payload buffer by reference rather than copying it. */
   AVPacket * copy = av_packet_clone(packet);
   AVStream * stream = state->format->streams[state->stream_index];
   int result;

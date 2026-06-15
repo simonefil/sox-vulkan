@@ -16,11 +16,23 @@
 
 #include <errno.h>
 
+/* ALAC is the one format here that needs both adapters: the codec adapter
+ * drives the encoder and decoder, and the container adapter supplies its
+ * packet hooks from the surrounding M4A.  The two are started and stopped in
+ * a fixed order below, since the codec's decoder cannot be configured until
+ * the container has produced its parameters, while on the write side the
+ * container cannot be described until the encoder is open. */
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
   lsx_ffmpeg_container_t * container;
 } priv_t;
 
+/* Apple's channel layouts, which differ from SoX's canonical ones above four
+ * channels: 4.0 rather than quad, 6.1 back rather than 6.1, and 7.1 wide back
+ * rather than 7.1.  A file written with the canonical layouts would be read
+ * by Apple software with its channels in the wrong places, so the layouts the
+ * format actually uses are what this handler selects.  Follows the libavutil
+ * convention: 0 on success, negative AVERROR otherwise. */
 static int select_alac_layout(unsigned channels, AVChannelLayout * layout)
 {
   switch (channels) {
@@ -54,6 +66,10 @@ static int select_alac_layout(unsigned channels, AVChannelLayout * layout)
   }
 }
 
+/* Spell out the channel order for the layouts where Apple's choice is not the
+ * one SoX would otherwise assume, since the samples are passed through
+ * unremixed and it is the user who has to line them up.  Silent when
+ * --channel-layout was given: the order was then stated deliberately. */
 static void warn_alac_layout(sox_format_t * ft, char const * operation)
 {
   if (ft->channel_layout != NULL)
@@ -75,6 +91,10 @@ static void warn_alac_layout(sox_format_t * ft, char const * operation)
   }
 }
 
+/* Open the M4A and configure the decoder from the stream inside it.  An ALAC
+ * packet says nothing about its own sample rate, channel count or bit depth,
+ * so the container's magic cookie is the only source for them; this hook runs
+ * before the decoder is opened, which is exactly when it is needed. */
 static int prepare_alac_decoder(sox_format_t * ft, AVCodecContext * context)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -89,6 +109,10 @@ static int read_alac_packet(sox_format_t * ft, AVPacket * packet)
   return lsx_ffmpeg_container_read_packet(ft, p->container, packet);
 }
 
+/* Mux one encoded packet.  The container is opened after the encoder, so a
+ * packet could in principle arrive before it exists; nothing in the current
+ * ordering produces one, and the guard turns that into a clear failure rather
+ * than a null dereference. */
 static int write_alac_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -100,29 +124,33 @@ static int write_alac_packet(sox_format_t * ft, AVCodecContext const * context, 
   return lsx_ffmpeg_container_write_packet(ft, p->container, context, packet);
 }
 
+/* Being lossless, ALAC has no bit rate to set and no fixed precision to
+ * report: the depth comes from the file on the way in and from -b on the way
+ * out, so precision stays 0 and the adapter reports the real bits per sample.
+ * -C is a compression level instead, 0 to 2, where 2 is FFmpeg's default. */
 static lsx_ffmpeg_codec_definition_t const definition = {
   AV_CODEC_ID_ALAC,
   SOX_ENCODING_ALAC,
   "ALAC",
-  8,
-  sox_false,
-  8,
-  0,
-  0,
-  0,
-  0,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  AV_PROFILE_UNKNOWN,
-  prepare_alac_decoder,
-  NULL,
-  read_alac_packet,
-  write_alac_packet,
-  sox_true,
-  2,
-  0,
-  2,
-  select_alac_layout
+  8,                            /* max_decode_channels */
+  sox_false,                    /* accept_unspecified_decode_layout */
+  8,                            /* max_encode_channels */
+  0,                            /* precision */
+  0,                            /* default_bit_rate */
+  0,                            /* minimum_bit_rate */
+  0,                            /* maximum_bit_rate */
+  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
+  NULL,                         /* ignored_metadata_name */
+  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
+  prepare_alac_decoder,         /* prepare_decoder */
+  NULL,                         /* prepare_encoder */
+  read_alac_packet,             /* packet_reader */
+  write_alac_packet,            /* packet_writer */
+  sox_true,                     /* use_compression_level */
+  2,                            /* default_compression_level */
+  0,                            /* minimum_compression_level */
+  2,                            /* maximum_compression_level */
+  select_alac_layout            /* select_layout */
 };
 
 static int startread(sox_format_t * ft)
@@ -130,6 +158,9 @@ static int startread(sox_format_t * ft)
   priv_t * p = (priv_t *)ft->priv;
   int result = lsx_ffmpeg_codec_startread(ft, &p->codec, &definition);
 
+  /* prepare_alac_decoder may have opened the container before the codec went
+   * on to fail, and the codec adapter knows nothing about it, so the cleanup
+   * belongs here. */
   if (result != SOX_SUCCESS)
     lsx_ffmpeg_container_stopread(&p->container);
   return result;
@@ -157,6 +188,7 @@ static int startwrite(sox_format_t * ft)
   AVCodecContext const * context;
   int result;
 
+  /* FFmpeg's ALAC encoder implements only these two depths. */
   if (ft->encoding.bits_per_sample != 16 && ft->encoding.bits_per_sample != 24) {
     lsx_fail_errno(ft, SOX_EFMT, "ALAC encoding supports 16-bit or 24-bit PCM");
     return SOX_EOF;
@@ -165,6 +197,10 @@ static int startwrite(sox_format_t * ft)
   if (result != SOX_SUCCESS)
     return result;
   warn_alac_layout(ft, "Encoding");
+  /* The container has to describe the stream it will carry, which is only
+   * settled once the encoder is open -- hence this order, and hence the
+   * codec's context being handed over rather than rebuilt.  "ipod" is the
+   * MP4 variant whose brand and tags Apple software expects for M4A. */
   context = lsx_ffmpeg_codec_context(p->codec);
   result = lsx_ffmpeg_container_startwrite(ft, &p->container, "ipod", context);
   if (result != SOX_SUCCESS) {
@@ -184,6 +220,10 @@ static size_t write_samples(sox_format_t * ft, sox_sample_t const * samples, siz
 static int stopwrite(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
+  /* The codec is stopped first so its final packets reach the muxer before
+   * the trailer is written.  Both run whatever happens -- stopping only one
+   * would leak the other, and a file without its trailer is unplayable -- so
+   * the first failure is the one reported. */
   int codec_result = lsx_ffmpeg_codec_stopwrite(ft, &p->codec);
   int container_result = lsx_ffmpeg_container_stopwrite(ft, &p->container);
 

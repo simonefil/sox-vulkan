@@ -4,6 +4,11 @@
 
 #ifdef HAVE_FFMPEG_CODECS
 
+/* Read exactly size bytes, looping because lsx_readbuf may return fewer.
+ * Returns 1 on success, 0 only when nothing at all was left and the caller
+ * said that is a clean end of stream, and SOX_EOF otherwise -- which is how a
+ * file that stops in the middle of a frame is told from one that ends
+ * between frames. */
 static int read_exact(sox_format_t * ft, uint8_t * data, size_t size, sox_bool clean_eof, char const * codec_name)
 {
   size_t done = 0;
@@ -55,9 +60,13 @@ int lsx_loas_read_packet(
     lsx_fail_errno(ft, SOX_EINVAL, "Internal LOAS packet buffer is too small");
     return SOX_EOF;
   }
+  /* Only the header may end the stream cleanly; once it has been accepted the
+   * payload must be there in full, so the second read never forgives EOF. */
   result = read_exact(ft, packet, LSX_LOAS_HEADER_SIZE, clean_eof, codec_name);
   if (result != 1)
     return result;
+  /* The 11-bit sync word 0x2b7, spread over the first byte and the top three
+   * bits of the second. */
   if (packet[0] != 0x56 || (packet[1] & 0xe0) != 0xe0) {
     lsx_fail_errno(ft, SOX_EHDR, "Invalid %s LOAS sync word", codec_name);
     return SOX_EOF;
@@ -85,15 +94,26 @@ int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint
   declared_size = ((size_t)(packet[1] & 0x1f) << 8) | packet[2];
   if (declared_size == 0)
     return SOX_EOF;
+  /* Read within whichever is smaller, what the frame claims or what the
+   * caller actually has: the object type sits near the front, so a partial
+   * frame is usually enough, and the reader's bounds turn "not enough" into
+   * a clean failure rather than an over-read. */
   available_size = min(declared_size, packet_size - LSX_LOAS_HEADER_SIZE);
   reader.data = packet + LSX_LOAS_HEADER_SIZE;
   reader.size_bits = available_size * 8;
   reader.position = 0;
 
+  /* useSameStreamMux: this frame repeats the previous configuration and so
+   * carries nothing to inspect.  Not an error -- just no answer here. */
   if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS)
     return SOX_EOF;
   if (value)
     return 0;
+  /* Both audioMuxVersions are handled, unlike the stricter parse in usac.c:
+   * this runs during format detection, where being able to read the object
+   * type of any well-formed stream is the whole point.  Version 1 inserts
+   * audioMuxVersionA and taraBufferFullness, and states the config length
+   * explicitly, which version 0 does not. */
   if (lsx_bit_read(&reader, 1, &audio_mux_version) != SOX_SUCCESS)
     return SOX_EOF;
   if (audio_mux_version) {
@@ -101,6 +121,10 @@ int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint
         lsx_latm_read_value(&reader, &value) != SOX_SUCCESS)
       return SOX_EOF;
   }
+  /* allStreamsSameTimeFraming, numSubFrames, numProgram, numLayer.  Anything
+   * other than a single synchronous program and layer puts the config
+   * somewhere this shortcut does not follow, so it is reported as unreadable
+   * rather than parsed further. */
   if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS || value != 1 ||
       lsx_bit_read(&reader, 6, &value) != SOX_SUCCESS || value != 0 ||
       lsx_bit_read(&reader, 4, &value) != SOX_SUCCESS || value != 0 ||
@@ -117,6 +141,8 @@ int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint
       return SOX_EOF;
     *object_type = 32 + value;
   }
+  /* When the config length was stated, check the object type actually fitted
+   * inside it; a type read from past the end would be someone else's bits. */
   if (asc_bits && reader.position - asc_start > asc_bits)
     return SOX_EOF;
   return 1;

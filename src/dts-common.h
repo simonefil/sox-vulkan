@@ -11,6 +11,10 @@
 
 #include "sox.h"
 
+/* The two handlers dts.c and dtshd.c register.  Both live in dts-common.c
+ * because a DTS-HD stream is a DTS core with extension substreams appended,
+ * so one decoder reads both and only a profile check separates them.  Each
+ * returns a pointer to static data that outlives any file. */
 sox_format_handler_t const * lsx_dts_format_handler(void);
 sox_format_handler_t const * lsx_dtshd_format_handler(void);
 

@@ -12,42 +12,56 @@
 
 #ifdef HAVE_FFMPEG_CODECS
 
+/* The dts and dtshd handlers share everything but one check.  A DTS-HD file
+ * is a DTS core with extension substreams appended, so the same decoder reads
+ * both and the profile it reports is what tells them apart -- which is why
+ * this file exists rather than two independent handlers. */
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
   sox_bool spatial_metadata_warning_shown;
 } priv_t;
 
+/* FFmpeg's DTS encoder is marked experimental and refuses to open otherwise.
+ * It only ever writes a core stream, which is why encoding is offered by the
+ * dts handler alone. */
 static int prepare_encoder(AVCodecContext * context)
 {
   context->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
   return 0;
 }
 
+/* Decoding covers every DTS profile, up to the 8 channels an extension
+ * substream can carry; encoding is core only, hence 5.1.  The bit rate range
+ * is what the core stream allows. */
 static lsx_ffmpeg_codec_definition_t const definition = {
   AV_CODEC_ID_DTS,
   SOX_ENCODING_DTS,
   "DTS",
-  8,
-  sox_false,
-  6,
-  24,
-  768000,
-  32000,
-  3840000,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  AV_PROFILE_UNKNOWN,
-  NULL,
-  prepare_encoder,
-  NULL,
-  NULL,
-  sox_false,
-  0,
-  0,
-  0,
-  NULL
+  8,                            /* max_decode_channels */
+  sox_false,                    /* accept_unspecified_decode_layout */
+  6,                            /* max_encode_channels */
+  24,                           /* precision */
+  768000,                       /* default_bit_rate */
+  32000,                        /* minimum_bit_rate */
+  3840000,                      /* maximum_bit_rate */
+  /* The Atmos-style warning is issued by warn_spatial_metadata instead,
+   * which distinguishes the two DTS:X profiles by name. */
+  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
+  NULL,                         /* ignored_metadata_name */
+  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
+  NULL,                         /* prepare_decoder */
+  prepare_encoder,              /* prepare_encoder */
+  NULL,                         /* packet_reader */
+  NULL,                         /* packet_writer */
+  sox_false,                    /* use_compression_level */
+  0,                            /* default_compression_level */
+  0,                            /* minimum_compression_level */
+  0,                            /* maximum_compression_level */
+  NULL                          /* select_layout */
 };
 
+/* The profiles that carry an extension substream, and so count as DTS-HD.
+ * DTS Express is included: it is a low-rate substream profile, not a core. */
 static sox_bool is_dtshd_profile(int profile)
 {
   switch (profile) {
@@ -62,6 +76,8 @@ static sox_bool is_dtshd_profile(int profile)
   }
 }
 
+/* Name a profile for the "this is X, not DTS-HD" message, so a rejected file
+ * says what it actually is. */
 static char const * profile_name(int profile)
 {
   switch (profile) {
@@ -86,6 +102,10 @@ static char const * profile_name(int profile)
   }
 }
 
+/* Warn once that a DTS:X file is being decoded as its channel bed, the object
+ * metadata being dropped because SoX cannot carry it.  Called from startread
+ * and from every read because the profile is only known once the decoder has
+ * seen the substream, which for some files is not on the first frame. */
 static void warn_spatial_metadata(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -106,6 +126,15 @@ static void warn_spatial_metadata(sox_format_t * ft)
   p->spatial_metadata_warning_shown = sox_true;
 }
 
+/* Open a DTS stream for reading, optionally insisting that it be DTS-HD.
+ *
+ * The precision is corrected afterwards because the adapter reports what the
+ * definition declares, whereas DTS carries a real source word length: the
+ * decoder's value is used when it is one DTS can express, and 16 bits stands
+ * in when it says nothing, that being the core's own depth.
+ *
+ * A file rejected for not being DTS-HD has already been opened, so the codec
+ * state is released before failing. */
 static int startread_common(sox_format_t * ft, sox_bool require_dtshd)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -161,6 +190,9 @@ static int stopread(sox_format_t * ft)
   return lsx_ffmpeg_codec_stopread(&p->codec);
 }
 
+/* Spell out the channel order for the layouts DTS defines with side rather
+ * than back speakers, since the samples are written unremixed and the order
+ * differs from the one SoX assumes.  Silent when --channel-layout was given. */
 static void warn_encoded_layout(sox_format_t * ft)
 {
   if (ft->channel_layout != NULL)
@@ -180,6 +212,14 @@ static void warn_encoded_layout(sox_format_t * ft)
   }
 }
 
+/* Open a DTS stream for writing, defaulting to the side-speaker layouts DTS
+ * actually uses where the canonical back-speaker ones would be wrong.
+ *
+ * This is done by substituting into ft->channel_layout rather than through a
+ * select_layout hook, so that a layout the user asked for still takes
+ * precedence and still reaches the adapter's validation unchanged.  The field
+ * is restored afterwards, whatever the outcome, since it belongs to the
+ * caller and is read again later. */
 static int startwrite(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;

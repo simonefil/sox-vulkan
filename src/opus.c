@@ -46,6 +46,15 @@
  * SoX PCM follows the canonical WAVE channel order used by wav.c, while
  * Opus mapping family 1 uses Vorbis channel order.  Each row maps a Vorbis
  * channel index to the corresponding SoX channel index.
+ *
+ * Indexed by channel count, so row n has n meaningful entries and the rest
+ * are padding; rows 0 and 1 exist only to keep the count usable as an index.
+ * Mono and stereo agree in both orders, which is why the reordering below
+ * skips them outright.
+ *
+ * One row serves both directions, no inverse being needed: the relation it
+ * states is sox[row[v]] == vorbis[v], which the reader applies by writing to
+ * row[v] and the writer by reading from it.
  */
 static unsigned char const vorbis_channel_from_sox[9][8] = {
   {0},
@@ -114,6 +123,15 @@ static opus_int64 callback_tell(void* ft_data)
 
 /********************* End callbacks *****************************/
 
+/* Check that an Opus ID header describes a layout this handler can carry,
+ * and, when expected_channels is non-zero, that it agrees with the stream
+ * already being read.
+ *
+ * An Ogg file may chain several logical streams, each with its own header,
+ * and only families 0 and 1 have a channel order SoX can map -- family 255
+ * is unmapped channels, and 2 and 3 are ambisonic.  SoX fixes the channel
+ * count for the whole file at startread, so a chain that changes it cannot
+ * be honoured and is refused rather than misinterpreted. */
 static int validate_opus_layout(sox_format_t * ft, const OpusHead * head, unsigned expected_channels)
 {
   if (head == NULL) {
@@ -139,6 +157,9 @@ static int validate_opus_layout(sox_format_t * ft, const OpusHead * head, unsign
   return SOX_SUCCESS;
 }
 
+/* Permute frames sample frames in place from Vorbis order to SoX order.
+ * Each frame is copied aside first, since a permutation applied in place
+ * would overwrite entries it has not yet moved. */
 static void reorder_vorbis_to_sox(opus_int16 * pcm, int frames, unsigned channels)
 {
   int frame;
@@ -190,6 +211,9 @@ static int startread(sox_format_t * ft)
     vb->of = NULL;
     return SOX_EOF;
   }
+  /* On a seekable file every link is checked up front, so an incompatible
+   * one is reported before any audio is produced.  On a pipe the links are
+   * not known in advance and each is checked as refill_buffer reaches it. */
   if (ft->seekable) {
     int links = op_link_count(vb->of);
 
@@ -258,10 +282,15 @@ static int refill_buffer(sox_format_t * ft)
     else if (num_read < 0)
       return (BUF_ERROR);
     else {
+      /* op_read reports which link this data came from; a change means a new
+       * logical stream has begun and its header has to be vetted before its
+       * samples are accepted.  On a seekable file this has already been done
+       * in startread, so the check only ever fires on a pipe. */
       if (vb->current_section != previous_section &&
           validate_opus_layout(ft, op_head(vb->of, vb->current_section),
             ft->signal.channels) != SOX_SUCCESS)
         return BUF_ERROR;
+      /* num_read counts sample frames, not samples. */
       reorder_vorbis_to_sox(pcm, num_read, ft->signal.channels);
       vb->end += num_read * sizeof(opus_int16) * ft->signal.channels;
     }
@@ -326,6 +355,9 @@ static int seek(sox_format_t * ft, uint64_t offset)
 #endif
 
 #ifdef HAVE_OPUSENC
+/* libopusenc write callback: 0 on success, non-zero on failure.  Routed
+ * through SoX's own buffered I/O so that the muxer never opens the file and
+ * pipes and stdout keep working. */
 static int callback_write(void * ft_data, const unsigned char * ptr, opus_int32 len)
 {
   sox_format_t * ft = (sox_format_t *)ft_data;
@@ -337,6 +369,10 @@ static int callback_write(void * ft_data, const unsigned char * ptr, opus_int32 
   return lsx_writebuf(ft, ptr, bytes) == bytes ? 0 : 1;
 }
 
+/* Copy SoX's out-of-band comments into the Opus tags.  A Vorbis comment is a
+ * NAME=value pair, so one already in that shape is passed through as it
+ * stands and anything else is filed under a generic name rather than being
+ * dropped or turned into a malformed tag. */
 static int add_comments(sox_format_t * ft, OggOpusComments * comments)
 {
   int i;
@@ -353,6 +389,14 @@ static int add_comments(sox_format_t * ft, OggOpusComments * comments)
   return SOX_SUCCESS;
 }
 
+/* Configure and open the encoder.  Everything that cannot be changed later --
+ * channel count, rate, mapping family, tags -- is settled here, and the
+ * header is flushed so that a file which fails afterwards is at least a
+ * well-formed empty stream.
+ *
+ * The rate is required to be 48 kHz rather than resampled silently: Opus
+ * codes at 48 kHz internally, and having SoX resample without being asked
+ * would hide a conversion the user did not choose. */
 static int startwrite(sox_format_t * ft)
 {
   static const OpusEncCallbacks callbacks = {
@@ -374,6 +418,8 @@ static int startwrite(sox_format_t * ft)
   }
 
   ft->encoding.encoding = SOX_ENCODING_OPUS;
+  /* Opus is lossy and has no word length; 24 is what the decoder side
+   * reports too, so a round trip through SoX keeps one precision. */
   ft->signal.precision = 24;
 
   comments = ope_comments_create();
@@ -386,6 +432,8 @@ static int startwrite(sox_format_t * ft)
     return SOX_EOF;
   }
 
+  /* Family 0 is mono and stereo only; anything wider needs family 1, whose
+   * channel order is the Vorbis one the table above maps to. */
   mapping_family = ft->signal.channels <= 2 ? 0 : 1;
   vb->encoder = ope_encoder_create_callbacks(&callbacks, ft, comments,
       OPUS_OUTPUT_RATE, (int)ft->signal.channels, mapping_family, &result);
@@ -395,6 +443,9 @@ static int startwrite(sox_format_t * ft)
     return SOX_EOF;
   }
 
+  /* -C is a bit rate in kbit/s; absent, it is HUGE_VAL and libopusenc's own
+   * default stands.  The bounds are what Opus itself allows: 6 kbit/s at the
+   * bottom, and 256 per channel at the top. */
   if (ft->encoding.compression != HUGE_VAL) {
     double bitrate = ft->encoding.compression;
     double maximum = 256. * ft->signal.channels;
@@ -429,6 +480,15 @@ static int startwrite(sox_format_t * ft)
   return SOX_SUCCESS;
 }
 
+/* Convert a buffer of sox samples to float, reordering it into Vorbis channel
+ * order on the way, and hand it to the encoder.  The float path is used
+ * rather than the 16-bit one because Opus codes in float internally, so
+ * narrowing here would throw away resolution the encoder could have used.
+ *
+ * The scratch buffer only grows, so a steady stream of equal-sized writes
+ * allocates once; it is freed in stopwrite.  Either the whole buffer is
+ * consumed or none of it is, since a partial frame would leave the channels
+ * out of step for the rest of the file. */
 static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf, size_t len)
 {
   priv_t * vb = (priv_t *)ft->priv;
@@ -464,6 +524,9 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf, size_t 
   return len;
 }
 
+/* Drain the encoder, which is what writes the final pages and the correct
+ * granule position, then release it.  The teardown runs whether or not the
+ * drain succeeded, so a failure does not also leak. */
 static int stopwrite(sox_format_t * ft)
 {
   priv_t * vb = (priv_t *)ft->priv;
@@ -477,6 +540,10 @@ static int stopwrite(sox_format_t * ft)
 }
 #endif
 
+/* Reading needs libopusfile and writing libopusenc, and either may be absent:
+ * the handler is still registered, with the missing direction's entry points
+ * left NULL so that SoX reports the format as read-only or write-only rather
+ * than not existing at all. */
 #ifdef HAVE_OPUSFILE
 #define OPUS_STARTREAD startread
 #define OPUS_READ read_samples

@@ -92,6 +92,14 @@ int lsx_check_read_params(sox_format_t * ft, unsigned channels,
 
 /* Read in a buffer of data of length len bytes.
  * Returns number of bytes read.
+ *
+ * Where a pipe cannot be rewound after format auto-detection, the bytes it
+ * consumed were kept in ft->read_replay_buffer; they are handed back here
+ * before anything more is read from the file, so a handler sees the stream
+ * from its start regardless.  The buffer is used up once and never refilled,
+ * so this costs one comparison per call thereafter.  A request that spans the
+ * end of the replay is served from both, which is why the two reads add into
+ * the same count rather than returning separately.
  */
 size_t lsx_readbuf(sox_format_t * ft, void *buf, size_t len)
 {
@@ -166,6 +174,9 @@ off_t lsx_tell(sox_format_t * ft)
   return ft->seekable? (off_t)ftello((FILE*)ft->fp) : (off_t)ft->tell_off;
 }
 
+/* The file may already be at end of file while replay bytes are still to be
+ * handed out, so both have to be exhausted before the stream counts as
+ * finished. */
 int lsx_eof(sox_format_t * ft)
 {
   return ft->read_replay_pos == ft->read_replay_size && feof((FILE*)ft->fp);
@@ -188,6 +199,13 @@ void lsx_clearerr(sox_format_t * ft)
   ft->sox_errno = 0;
 }
 
+/* Put one byte back.  While the replay buffer is being read the byte belongs
+ * in it, not in the file's own pushback: ungetc would place it in front of
+ * the file, which is behind the replay bytes still to come, and it would
+ * surface in the wrong order.  Writing into the buffer also means an
+ * unlimited number of bytes can be put back there, whereas ungetc guarantees
+ * only one.  Once the replay is spent, or before it has begun, ungetc is
+ * correct and is what is used. */
 int lsx_unreadb(sox_format_t * ft, unsigned b)
 {
   if (ft->read_replay_pos < ft->read_replay_size && ft->read_replay_pos > 0) {
@@ -210,6 +228,10 @@ int lsx_seeki(sox_format_t * ft, off_t offset, int whence)
     if (ft->seekable == 0) {
         /* If a stream peel off chars else EPERM */
         if (whence == SEEK_CUR) {
+            /* Discarded through lsx_readb rather than getc so that the
+             * replay buffer is consumed too; going straight to the FILE
+             * would skip bytes the handler has not been given yet, and
+             * would leave tell_off disagreeing with the position. */
             while (offset > 0 && !lsx_eof(ft)) {
                 unsigned char byte;
 

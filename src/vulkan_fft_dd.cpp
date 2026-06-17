@@ -77,6 +77,19 @@ bool starts_types(uint32_t opcode)
   return opcode >= 19u && opcode <= 39u;
 }
 
+/* Return a copy of a SPIR-V module with NoContraction on every arithmetic
+ * result that does not already carry it.
+ *
+ * Done in one pass that both collects the result ids needing decoration and
+ * finds where the new annotations may go, since SPIR-V fixes the order of its
+ * sections and decorations must precede the first type declaration.  Ids
+ * already decorated are skipped, as are duplicates within one module, because
+ * SPIR-V forbids the same decoration twice on one id.
+ *
+ * Anything that does not parse -- wrong magic, a zero-length instruction, a
+ * length running past the end, no type section -- returns the module
+ * unchanged rather than a partly rewritten one.  The result is then whatever
+ * VkFFT produced, which still works; only the extra precision is lost. */
 std::vector<uint32_t> decorate_no_contraction(uint32_t const *words, size_t word_count)
 {
   std::vector<uint32_t> result(words, words + word_count);
@@ -126,6 +139,10 @@ std::vector<uint32_t> decorate_no_contraction(uint32_t const *words, size_t word
   return result;
 }
 
+/* Stands in for vkCreateShaderModule inside the VkFFT code included below,
+ * rewriting the module on its way to the driver.  Matches the real function's
+ * signature exactly, so the macro substitution needs no other change, and
+ * leaves the caller's create_info untouched. */
 VkResult create_decorated_shader_module(
     VkDevice device, VkShaderModuleCreateInfo const *create_info,
     VkAllocationCallbacks const *allocator, VkShaderModule *module)

@@ -90,6 +90,9 @@ static int disk_enabled(void)
   return lsx_vulkan_fft_cache_enabled() && (!setting || strcmp(setting, "0") != 0);
 }
 
+/* FNV-1a over the whole blob.  Only has to catch a truncated or corrupted
+ * file, so a non-cryptographic hash is enough; the key check above is what
+ * establishes that the file is the right one. */
 static uint64_t blob_hash(void const *blob, uint64_t size)
 {
   unsigned char const *bytes = blob;
@@ -103,6 +106,12 @@ static uint64_t blob_hash(void const *blob, uint64_t size)
   return hash;
 }
 
+/* Integers go to and from the file byte by byte, least significant first,
+ * rather than by writing the object: the file may be read by a build with a
+ * different byte order or alignment, and the header is what decides whether
+ * the rest is trusted.  Write errors are not checked here -- disk_store
+ * tests the stream once at the end, and a file that failed is discarded
+ * whole. */
 static void put_u32(FILE *file, uint32_t value)
 {
   unsigned char bytes[4];
@@ -222,6 +231,10 @@ static char const *cache_directory(void)
 /* The sox version is verified from the file header rather than named here,
  * so that a new version overwrites the stale file instead of leaving it
  * behind to accumulate. */
+/* Build the file name for a key.  Every key field appears in it, the booleans
+ * packed into one hexadecimal byte, so that distinct plans cannot collide on
+ * one file; the key is written into the file as well and checked on read, so
+ * the name is a lookup shortcut rather than the thing relied upon. */
 static int entry_path(lsx_vulkan_fft_cache_key_t const *key, char *path, size_t size)
 {
   char const *directory = cache_directory();
@@ -258,6 +271,10 @@ static void write_key(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
   put_u32(file, key->use_lut);
 }
 
+/* Read a key back and compare it with the one wanted.  Rebuilt into a struct
+ * and compared field by field rather than checked as it is read, so that the
+ * file and the memory cache agree on what equality means.  The booleans were
+ * written as words and are narrowed back here. */
 static int read_key_matches(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
 {
   lsx_vulkan_fft_cache_key_t stored;
@@ -285,6 +302,11 @@ static int read_key_matches(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
   return key_equal(&stored, key);
 }
 
+/* The SoX version is part of what a file must match.  The key describes the
+ * plan but not the code that generated it, so a build with a different VkFFT
+ * or different generation options would otherwise load kernels that are no
+ * longer what this build would produce.  Tying entries to the version means
+ * an upgrade simply misses and recompiles. */
 static int version_matches(FILE *file)
 {
   char const *version = sox_version();
@@ -299,6 +321,11 @@ static int version_matches(FILE *file)
   return strcmp(stored, version) == 0;
 }
 
+/* Read one cache file, returning a newly allocated blob the caller owns, or
+ * NULL for a miss.  Everything is verified before the blob is trusted -- and
+ * in that order, cheapest first, so a foreign or stale file is rejected
+ * without reading its body.  There is no error path distinct from a miss: a
+ * bad file just means compiling. */
 static void *disk_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
 {
   char path[1024];
@@ -384,6 +411,9 @@ static void disk_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, 
 
 /* ------------------------------------------------------------- in process */
 
+/* Take ownership of blob and add it to the in-process list.  A plain linked
+ * list with linear search: the header explains why there are at most a few
+ * dozen entries, which is far too few for anything cleverer to pay. */
 static void memory_store(lsx_vulkan_fft_cache_key_t const *key, void *blob, uint64_t size)
 {
   cache_entry_t *entry = lsx_calloc(1, sizeof(*entry));
@@ -410,6 +440,9 @@ void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key, u
         *size = entry->size;
       return entry->blob;
     }
+  /* Memory first, disk second: within one run the same plan is asked for once
+   * per effect, and only the first of those should touch the filesystem.  A
+   * file that is found is kept in memory too, so the rest hit there. */
   blob = disk_enabled() ? disk_lookup(key, &blob_size) : NULL;
   if (blob) {
     ++disk_hits;
@@ -436,6 +469,10 @@ void lsx_vulkan_fft_cache_store(lsx_vulkan_fft_cache_key_t const *key, void cons
     disk_store(key, blob, size);
 }
 
+/* Free every in-process entry and report what the cache did.  The counters
+ * are the way to tell a working cache from one that misses every time: what
+ * should appear is one compile and the rest served, or on a second run
+ * nothing compiled at all. */
 void lsx_vulkan_fft_cache_clear(void)
 {
   cache_entry_t *entry = entries;

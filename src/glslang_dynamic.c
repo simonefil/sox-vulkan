@@ -1,5 +1,22 @@
 /* Dynamic glslang C API loader for the Windows VkFFT backend.
  *
+ * VkFFT compiles the GLSL it generates through glslang, calling its C API
+ * directly.  On Windows the Vulkan SDK ships glslang as a DLL whose import
+ * library is not usable from a build that does not otherwise link the SDK,
+ * so this file defines the same entry points under the same names and
+ * forwards each to the DLL, resolved at run time.  VkFFT links against these
+ * without knowing, and the rest of SoX is unaffected: the whole file is
+ * Windows-only, and every other platform links glslang normally.
+ *
+ * The library is loaded on the first glslang_initialize_process and freed by
+ * glslang_finalize_process, which mirrors the reference counting in
+ * vulkan_fft.c -- so glslang is loaded only if a Vulkan effect actually runs,
+ * and a build that never reaches one never touches the DLL.
+ *
+ * The forwarders below are deliberately unguarded: reaching any of them
+ * without a successful initialisation is a programming error, not a run-time
+ * condition, since VkFFT only calls them between initialize and finalize.
+ *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
@@ -30,6 +47,9 @@ static size_t (*program_spirv_get_size_impl)(glslang_program_t *);
 static unsigned int *(*program_spirv_get_ptr_impl)(glslang_program_t *);
 static char const *(*program_spirv_get_messages_impl)(glslang_program_t *);
 
+/* Every pointer is cleared whenever the library is unloaded, so that a
+ * failed load cannot leave a stale address behind that a later call would
+ * jump through. */
 static void clear_functions(void)
 {
   initialize_process_impl = NULL;
@@ -62,6 +82,12 @@ static FARPROC load_function(char const *name)
 #define LOAD_FUNCTION(variable, name) \
   variable##_impl = (void *)load_function("glslang_" #name)
 
+/* Load the DLL and resolve every entry point.  All of them are looked up
+ * before any is tested, so a DLL missing several reports each by name rather
+ * than only the first; the load then fails as a whole, because a partly
+ * resolved glslang is of no use.  Note the two spellings: the SPIRV functions
+ * are capitalised in the API and lower case in the local variables, which is
+ * why the macro takes both. */
 static int load_functions(void)
 {
   module = LoadLibraryA("glslang.dll");
@@ -103,6 +129,10 @@ static int load_functions(void)
   return 1;
 }
 
+/* Load the library if it is not loaded, then initialise glslang.  Returns
+ * non-zero on success, matching the real API.  An initialisation that fails
+ * unloads the library again, so a later attempt starts from scratch instead
+ * of forwarding into a process glslang believes is uninitialised. */
 int glslang_initialize_process(void)
 {
   if (!module && !load_functions())

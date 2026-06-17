@@ -17,14 +17,20 @@
 #include <stdlib.h>
 
 struct lsx_vulkan_fft {
-  lsx_vulkan_context_t *vulkan;
-  VkFFTApplication application;
+  lsx_vulkan_context_t *vulkan;  /* Not owned. */
+  VkFFTApplication application;  /* Used unless double_double is set. */
+  /* VkFFT takes the address of this rather than the value, so it has to
+   * live as long as the plan does. */
   uint64_t buffer_size;
-  sox_bool initialized;
-  sox_bool compiler_acquired;
-  void *double_double;
+  sox_bool initialized;          /* application needs deleteVkFFT. */
+  sox_bool compiler_acquired;    /* This plan holds a reference on glslang. */
+  void *double_double;           /* Opaque handle to the paired-double plan. */
 };
 
+/* glslang has one process-wide initialisation, and VkFFT compiles through it,
+ * so it is reference counted across plans: initialised on the first and
+ * finalised with the last.  Not thread safe, which matches the rest of the
+ * backend -- a chain drives its device from one thread. */
 static unsigned compiler_users;
 
 static int compiler_acquire(void)
@@ -111,6 +117,10 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   configuration.size[0] = length;
   configuration.numberBatches = batches;
   configuration.doublePrecision = double_precision ? 1u : 0u;
+  /* Single precision uses a precomputed twiddle table, since recomputing the
+   * factors in float loses more than the table costs; double precision
+   * computes them, being accurate enough either way.  The choice reaches the
+   * generated kernels, so it is part of the cache key. */
   configuration.useLUT = !double_precision ? 1 : 0;
   configuration.performR2C = real_to_complex ? 1u : 0u;
   configuration.normalize = normalize_inverse ? 1u : 0u;
@@ -121,6 +131,9 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   configuration.fence = fence;
   configuration.buffer = &buffer->buffer;
   configuration.bufferSize = &context->buffer_size;
+  /* glslang is initialised by compiler_acquire above, so VkFFT must not
+   * initialise or finalise it itself; it would tear it down under the other
+   * plans still using it. */
   configuration.isCompilerInitialized = 1;
   cache_key_init(
       &key, vulkan, context->buffer_size, length, batches,

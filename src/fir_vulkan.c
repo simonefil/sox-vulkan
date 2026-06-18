@@ -29,23 +29,42 @@
 #include "fir_partition_reference_dd_spv.inc"
 #include "fir_spectrum_multiply_reference_dd_spv.inc"
 
+/* Transform sizes, and the block size that follows from each: overlap-save
+ * needs a transform twice the block, so the block is always half.
+ *
+ * The fast profile uses the larger one because a longer block means fewer
+ * partitions and fewer transforms per sample; the other profiles use the
+ * smaller because their per-element cost is higher, in memory as well as
+ * arithmetic, and a 128k transform of double-doubles is far more than the
+ * accuracy is worth.  Both are powers of two, which is what VkFFT is
+ * fastest on. */
 #define FIR_DEFAULT_FFT_SIZE 32768u
 #define FIR_FAST_FFT_SIZE 131072u
 #define FIR_DEFAULT_BLOCK_FRAMES (FIR_DEFAULT_FFT_SIZE / 2u)
 #define FIR_FAST_BLOCK_FRAMES (FIR_FAST_FFT_SIZE / 2u)
+/* Both read context, so they are only usable where one is in scope; they
+ * exist because these two appear in nearly every size expression here. */
 #define FIR_FFT_SIZE (context->fft_size)
 #define FIR_BLOCK_FRAMES (context->block_frames)
+/* Workgroup size, matching the local_size_x the shaders declare. */
 #define FIR_LOCAL_SIZE 256u
 
 typedef lsx_vulkan_buffer_t buffer_t;
 
+/* Push constants for the partition-accumulate shader.  The layouts are fixed
+ * by the shaders, hence the assertions below: a mismatch would misread every
+ * field rather than fail, and the two declarations are in different
+ * languages, so no compiler checks them against each other. */
 typedef struct {
   uint32_t spectrum_bins;
   uint32_t partitions;
   uint32_t channels;
-  uint32_t current_slot;
+  uint32_t current_slot;       /* Which history slot holds the newest block. */
 } partition_parameters_t;
 
+/* Push constants for the strict FP32 shader, which does more than accumulate:
+ * it runs the transform too, hence operation and stage, and ping-pongs
+ * between two buffers, hence source_is_a. */
 typedef struct {
   uint32_t operation;
   uint32_t stage;
@@ -54,52 +73,77 @@ typedef struct {
   uint32_t current_slot;
   uint32_t inverse;
   uint32_t source_is_a;
-  uint32_t reserved;
+  uint32_t reserved;           /* Pads to the shader's declared size. */
 } strict_fp32_parameters_t;
 
 lsx_static_assert(sizeof(partition_parameters_t) == 16, vulkan_fir_partition_push_layout);
 lsx_static_assert(sizeof(strict_fp32_parameters_t) == 32, vulkan_fir_strict_fp32_push_layout);
 
 struct lsx_fir_vulkan {
-  lsx_vulkan_context_t *vulkan;
-  lsx_vulkan_fft_t *fft;
+  lsx_vulkan_context_t *vulkan;  /* Not owned; shared with the rest of the chain. */
+  lsx_vulkan_fft_t *fft;         /* NULL for strict FP32, which transforms itself. */
   VkDescriptorSetLayout descriptor_layout;
   VkDescriptorPool descriptor_pool;
   VkDescriptorSet descriptor_set;
   VkPipelineLayout pipeline_layout;
   VkPipeline pipeline;
+
+  /* One command buffer for setup and flushes, plus banks of pre-recorded ones
+   * for the steady state.  A block's work depends only on which history slot
+   * is current, so the whole rotation is recorded once at startup and then
+   * replayed; the resident bank is recorded lazily, since a chain that never
+   * goes resident should not pay for it. */
   VkCommandBuffer command_buffer;
   VkCommandBuffer *process_commands;
   VkCommandBuffer *resident_process_commands;
   VkFence fence;
+
+  /* The spectrum of the current block, and the output the inverse transform
+   * lands in.  Also what a resident consumer reads. */
   buffer_t working;
-  buffer_t working_scratch;
+  buffer_t working_scratch;      /* Strict FP32 only: the ping-pong partner. */
+
+  /* Banks of `partitions` spectra each.  history is a ring of past input
+   * blocks, kernels the transformed response.  Their layouts match, so the
+   * accumulation walks both with one index. */
   buffer_t history;
   buffer_t kernels;
-  buffer_t kernels_low;
-  buffer_t twiddles;
-  buffer_t strict_output;
-  buffer_t upload;
+  buffer_t kernels_low;          /* Accurate FP32: the low half of each coefficient. */
+
+  buffer_t twiddles;             /* Strict FP32: split-precision transform factors. */
+  buffer_t strict_output;        /* Strict FP32: output, kept apart from working. */
+
+  buffer_t upload;               /* Staging for the synchronous path. */
+  /* One staging buffer per block in flight, so preparing the next block does
+   * not overwrite one the device has not yet read. */
   buffer_t resident_upload[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   buffer_t download;
-  void *working_host;
-  double *previous;
-  double *output;
-  size_t element_size;
+
+  void *working_host;            /* Host-side scratch the input is assembled in. */
+  double *previous;              /* Last block per channel: the overlap-save history. */
+  double *output;                /* Interleaved result handed back by _process. */
+
+  size_t element_size;           /* Bytes per real value, per the strategy. */
+
+  /* Which numerical strategy is in force.  Set once at creation from the
+   * context's profile; several may be true at once, and strategy_name states
+   * the order in which they override one another. */
   sox_bool double_precision;
   sox_bool accurate_fp32;
   sox_bool strict_fp32;
   sox_bool authoritative_fp64_kernels;
   sox_bool precise_fp64;
   sox_bool reference_dd;
-  int emit_low_residual;
+  int emit_low_residual;         /* Reference profile diagnostic tap. */
+
   uint32_t taps;
   uint32_t fft_size;
   uint32_t block_frames;
-  uint32_t partitions;
+  uint32_t partitions;           /* taps rounded up to whole blocks. */
   uint32_t channels;
-  uint32_t current_slot;
-  uint32_t resident_bank_index;
+  uint32_t current_slot;         /* Newest history slot; advances per block. */
+  uint32_t resident_bank_index;  /* Which staging buffer and command bank is next. */
+
   double startup_seconds;
   double process_seconds;
   uint64_t process_calls;
@@ -137,6 +181,9 @@ static char const *strategy_name(lsx_fir_vulkan_t const *context)
   return context->double_precision ? "FP64 FFT + FP64 accumulation" : "FP32 FFT + FP32 accumulation";
 }
 
+/* Monotonic clock for the -V3 timings; 0 if unavailable.  Duplicated from
+ * vulkan_engine.c rather than shared, so that timing this backend does not
+ * require a context. */
 static double monotonic_seconds(void)
 {
 #ifdef _WIN32
@@ -198,6 +245,10 @@ static int submit_commands(lsx_fir_vulkan_t *context, lsx_vulkan_wait_reason_t r
   return lsx_vulkan_submit_and_wait(context->vulkan, context->command_buffer, context->fence, reason);
 }
 
+/* A global memory barrier between two stages.  Global rather than per buffer:
+ * a step here typically touches several of the buffers at once -- working,
+ * history, kernels -- and enumerating them would add nothing, since they are
+ * all being made visible to the same following stage anyway. */
 static void memory_barrier(
     VkCommandBuffer command_buffer,
     VkAccessFlags source_access,
@@ -292,6 +343,8 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   *result_highs = NULL;
   *result_lows = NULL;
   *result_count = 0;
+  /* Convolving responses of m and n taps gives m + n - 1, so a cascade of
+   * several starts from one and adds each length less one. */
   for (set_index = 0; set_index < set_count; ++set_index) {
     if (!coefficient_sets[set_index] || !tap_counts[set_index] ||
         tap_counts[set_index] - 1u > SIZE_MAX - combined_count)
@@ -330,6 +383,9 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   spectrum_bins = fft_size / 2u + 1u;
   working_size = (VkDeviceSize)(fft_size + 2u) * 2u * sizeof(double);
   output_size = (VkDeviceSize)combined_count * 2u * sizeof(double);
+  /* A stack context, zeroed, so the buffer and command helpers above can be
+   * reused without building a whole FIR: this runs once at setup and has
+   * nothing to do with the steady state. */
   memset(&scratch, 0, sizeof(scratch));
   scratch.vulkan = vulkan;
   if (create_commands(&scratch) != SOX_SUCCESS)
@@ -566,6 +622,15 @@ cleanup: if (status != SOX_SUCCESS) {
   return status;
 }
 
+/* Build the descriptor set, layout and pipeline for the accumulation shader.
+ *
+ * Each strategy needs a different set of buffers, so the binding count varies
+ * and the buffers are assigned to bindings in a different order: the plain
+ * routes bind working, history and kernels; accurate adds the low half of the
+ * coefficients; strict binds six, its extra scratch, twiddles and separate
+ * output reflecting that it runs the transform as well as the accumulation.
+ * The shaders declare matching binding numbers, which is what the buffer_info
+ * ordering below has to agree with -- nothing checks it at compile time. */
 static int create_partition_pipeline(lsx_fir_vulkan_t *context)
 {
   uint32_t binding_count = context->strict_fp32 ? 6u : context->accurate_fp32 ? 4u : 3u;
@@ -709,6 +774,11 @@ static int initialize_fft(lsx_fir_vulkan_t *context)
   return context->fft ? SOX_SUCCESS : SOX_EOF;
 }
 
+/* Split a double into an unevaluated sum of two floats.  The high word is the
+ * value rounded to single precision and the low word the remainder, which is
+ * itself exactly representable: together they carry about 48 bits of
+ * significand where one float carries 24.  This is what lets the strict
+ * profile exceed FP32 on a device with no double precision at all. */
 static void store_double_single(float *target, size_t index, double value)
 {
   float high = (float)value;
@@ -717,6 +787,13 @@ static void store_double_single(float *target, size_t index, double value)
   target[index + 1u] = (float)(value - (double)high);
 }
 
+/* Precompute the transform's twiddle factors as split-precision pairs.
+ *
+ * The strict profile's shader has no double precision to compute them with,
+ * and recomputing a cosine in float would put an error into every butterfly
+ * that no amount of careful accumulation afterwards could remove.  They are
+ * therefore evaluated once here in host double precision and stored as pairs,
+ * four floats per factor: high and low of the cosine, then of the sine. */
 static int initialize_strict_fp32_twiddles(lsx_fir_vulkan_t *context)
 {
   float *upload = context->upload.mapped;
@@ -739,6 +816,10 @@ static int initialize_strict_fp32_twiddles(lsx_fir_vulkan_t *context)
   return submit_commands(context, lsx_vulkan_wait_fir_setup);
 }
 
+/* The response for one channel, collapsing the shared and per-channel cases:
+ * a single set is used for every channel.  Returning the same pointer for
+ * every channel is also what lets the kernel setup below notice that a
+ * spectrum has already been computed and copy it instead. */
 static double const *channel_coefficients(
     double const *const *coefficients,
     uint32_t coefficient_channels, uint32_t channel)
@@ -746,6 +827,23 @@ static double const *channel_coefficients(
   return coefficients[coefficient_channels == 1u ? 0u : channel];
 }
 
+/* Transform each partition of the response and upload it as the kernel bank.
+ *
+ * The spectra are computed on the host, in double precision, with SoX's own
+ * real transform: this happens once at setup, so its cost does not matter,
+ * and doing it in double and splitting afterwards gives coefficients as
+ * accurate as the pair format can hold -- which is not what running the
+ * device's own FP32 transform over them would give.
+ *
+ * The kernels are stored over the full transform length rather than as a half
+ * spectrum, because the strict shader's own transform works on the whole
+ * range: the missing half is filled by conjugate symmetry, mirroring the bin
+ * index and negating the imaginary part.  The sign of the imaginary part is
+ * flipped once for the transform's own convention and again for the mirrored
+ * half, which is why it is negated in two places.
+ *
+ * One partition at a time, through the single staging buffer, since the whole
+ * bank is far larger than staging and setup has no need to overlap. */
 static int initialize_strict_fp32_kernels(
     lsx_fir_vulkan_t *context,
     double const *const *coefficients,
@@ -775,6 +873,8 @@ static int initialize_strict_fp32_kernels(
       double *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
       uint32_t bin;
 
+      /* Channels sharing a response share a spectrum, so the transform is
+       * done once rather than per channel. */
       if (channel && source == channel_coefficients(coefficients, coefficient_channels, channel - 1u))
         memcpy(spectrum, spectrum - FIR_FFT_SIZE, FIR_FFT_SIZE * sizeof(*spectrum));
       else {
@@ -811,6 +911,19 @@ static int initialize_strict_fp32_kernels(
   return SOX_SUCCESS;
 }
 
+/* Kernels for the accurate FP32 profile, stored as a split pair across two
+ * banks: the high halves in kernels, the low remainders in kernels_low.
+ *
+ * The spectra are computed in host double precision as elsewhere.  Splitting
+ * them means the shader multiplies against roughly 48 bits of coefficient
+ * while still doing FP32 arithmetic, which is where most of this profile's
+ * accuracy over the plain FP32 one comes from: the input block is single
+ * precision either way, but the coefficients need not be.
+ *
+ * The two components go through the same code with the component loop
+ * choosing the target bank, since only the value written differs.  The
+ * imaginary part is negated for the transform's sign convention, and the two
+ * end bins are real, the packing storing the Nyquist bin in slot 1. */
 static int initialize_accurate_kernels(
     lsx_fir_vulkan_t *context,
     double const *const *coefficients,
@@ -831,6 +944,9 @@ static int initialize_accurate_kernels(
         double const *source = channel_coefficients(coefficients, coefficient_channels, channel);
         double *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
 
+        /* Channels sharing a response share a spectrum: copying the previous
+         * one avoids repeating the transform, which for a long response over
+         * eight channels is most of the setup cost. */
         if (channel && source == channel_coefficients(coefficients, coefficient_channels, channel - 1u))
           memcpy(spectrum, spectrum - FIR_FFT_SIZE, FIR_FFT_SIZE * sizeof(*spectrum));
         else {
@@ -881,6 +997,11 @@ static int initialize_accurate_kernels(
   return SOX_SUCCESS;
 }
 
+/* Kernels for the FP64 profiles that want the coefficient spectra computed on
+ * the host rather than by a device transform.  The host's transform is the
+ * authority: it is the same one the CPU path uses, so the two agree bin for
+ * bin, and any difference between the CPU and Vulkan outputs is then down to
+ * the convolution rather than to two different spectra of the same response. */
 static int initialize_precise_f64_kernels(
     lsx_fir_vulkan_t *context,
     double const *const *coefficients,
@@ -906,6 +1027,8 @@ static int initialize_precise_f64_kernels(
       double *output = (double *)context->working_host + (size_t)channel * (FIR_FFT_SIZE + 2u);
       uint32_t bin;
 
+      /* Channels sharing a response share a spectrum, so the transform is
+       * done once rather than per channel. */
       if (channel && source == channel_coefficients(coefficients, coefficient_channels, channel - 1u))
         memcpy(spectrum, spectrum - FIR_FFT_SIZE, FIR_FFT_SIZE * sizeof(*spectrum));
       else {
@@ -933,6 +1056,16 @@ static int initialize_precise_f64_kernels(
   return SOX_SUCCESS;
 }
 
+/* Fill the kernel bank, dispatching to the strategy-specific routines above
+ * or, failing those, transforming each partition on the device.
+ *
+ * The device route uploads a partition's coefficients as a time-domain signal
+ * into working, runs the forward transform there, and copies the resulting
+ * spectrum into its slot in the bank -- reusing the same working buffer and
+ * plan the steady state will use, which is why this must run after both
+ * exist.  It is the only route for the plain FP32 and FP64 profiles, and the
+ * only one available at all for the reference profile, whose double-double
+ * transform has no host equivalent. */
 static int initialize_kernels(
     lsx_fir_vulkan_t *context,
     double const *const *coefficients,
@@ -1015,6 +1148,9 @@ static int initialize_kernels(
   return SOX_SUCCESS;
 }
 
+/* Zero the history ring, so the first blocks convolve against silence rather
+ * than against whatever the allocation happened to contain.  This is what
+ * makes the filter's start-up transient the correct one. */
 static int clear_history(lsx_fir_vulkan_t *context)
 {
   if (begin_commands(context) != SOX_SUCCESS)
@@ -1023,6 +1159,11 @@ static int clear_history(lsx_fir_vulkan_t *context)
   return submit_commands(context, lsx_vulkan_wait_fir_setup);
 }
 
+/* Record the accumulation dispatch: one invocation per spectrum bin per
+ * channel, each summing that bin's product across every partition.  The whole
+ * partition loop is inside the shader, so this is a single dispatch however
+ * long the response is; current_slot tells it where the newest input block
+ * sits in the ring, which is the only thing that changes between blocks. */
 static void append_partition_accumulation(
     lsx_fir_vulkan_t *context,
     VkCommandBuffer command_buffer, uint32_t current_slot)
@@ -1047,6 +1188,10 @@ static void append_partition_accumulation(
   vkCmdDispatch(command_buffer, count / FIR_LOCAL_SIZE + (count % FIR_LOCAL_SIZE != 0), 1, 1);
 }
 
+/* One dispatch of the strict FP32 shader, which does several different jobs
+ * selected by its push constants: a transform stage, the spectrum multiply,
+ * or the output pass.  count is the number of invocations the caller wants,
+ * which differs between them. */
 static void append_strict_fp32_dispatch(
     lsx_fir_vulkan_t *context,
     VkCommandBuffer command_buffer,
@@ -1065,6 +1210,24 @@ static void append_strict_fp32_dispatch(
   vkCmdDispatch(command_buffer, count / FIR_LOCAL_SIZE + (count % FIR_LOCAL_SIZE != 0), 1, 1);
 }
 
+/* Record the whole steady-state command bank for the strict FP32 profile.
+ *
+ * There is one command buffer per (history slot, staging buffer) pair, since
+ * a recorded buffer names both, and each contains the entire block: upload,
+ * the fifteen butterfly stages of the forward transform, the spectrum
+ * multiply and accumulation, the fifteen inverse stages, and the output pass.
+ * Recording it once and replaying it means the steady state issues no Vulkan
+ * calls at all beyond a submit.
+ *
+ * Fifteen stages is log2 of the default transform size, the only size this
+ * profile uses.  Each stage reads what the last wrote, hence a barrier
+ * between every pair, and the two buffers alternate as source and
+ * destination, which is what source_is_a tracks: a butterfly cannot be done
+ * in place because its two outputs depend on both its inputs.
+ *
+ * download_output selects the synchronous variant, which ends with a copy to
+ * host-visible memory; the resident variant stops at the output buffer and
+ * reads from the per-bank staging buffer instead of the shared one. */
 static int record_strict_fp32_command_bank(
     lsx_fir_vulkan_t *context, VkCommandBuffer **commands,
     sox_bool download_output, uint32_t bank_depth)
@@ -1142,6 +1305,11 @@ static int record_strict_fp32_command_bank(
         VK_ACCESS_TRANSFER_READ_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
+    /* File the new block's spectrum into the ring, one copy per channel: the
+     * spectra are contiguous per channel in the source but strided by the
+     * partition count in the ring, so they cannot go across in one copy.
+     * This must happen after the transform and before the multiply, since
+     * the multiply reads the ring including this slot. */
     for (channel = 0; channel < context->channels; ++channel) {
       VkBufferCopy history_copy = {
         (VkDeviceSize)channel * channel_spectrum_size,
@@ -1210,6 +1378,17 @@ error:
   return SOX_EOF;
 }
 
+/* Record the steady-state command bank for every profile but strict FP32.
+ *
+ * Each command buffer is one whole block: upload, forward transform, file the
+ * spectrum into the history ring, accumulate the products across all
+ * partitions, inverse transform, and -- for the synchronous variant -- copy
+ * the second half of the result to host-visible memory.  Barriers separate
+ * every pair of steps, since each reads what the last wrote.
+ *
+ * Recording is by (slot, bank) exactly as in the strict variant: the slot
+ * decides which ring position this block occupies, the bank which staging
+ * buffer it arrives through, and a command buffer names both. */
 static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffer **commands, sox_bool download_output, uint32_t bank_depth)
 {
   VkDeviceSize complex_size = 2u * context->element_size;
@@ -1270,6 +1449,9 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
         VK_ACCESS_TRANSFER_READ_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
+    /* File the new spectrum into its ring slot, one copy per channel: the
+     * source has the channels contiguous, the ring strides them by the
+     * partition count, so they cannot go across together. */
     for (channel = 0; channel < context->channels; ++channel) {
       VkBufferCopy history_copy = {
         (VkDeviceSize)channel * spectrum_size,
@@ -1317,6 +1499,11 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
           VK_ACCESS_TRANSFER_READ_BIT,
           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT);
+      /* Copy only the second half of each channel's transform: the first
+       * half is where the circular convolution's wrap-around lands and is
+       * discarded, which is the whole of what overlap-save does.  Hence the
+       * source offset of one block into each channel's stride, and hence a
+       * copy per channel rather than one over the lot. */
       for (channel = 0; channel < context->channels; ++channel) {
         VkBufferCopy output_copy = {
           (VkDeviceSize)channel * real_stride + block_size,
@@ -1348,6 +1535,19 @@ static int record_process_commands(lsx_fir_vulkan_t *context)
   return record_process_command_bank(context, &context->process_commands, sox_true, 1u);
 }
 
+/* Allocate everything the steady state needs.
+ *
+ * The spectrum of a real transform of FIR_FFT_SIZE points has half that many
+ * bins plus one, each complex, which is what working holds per channel; the
+ * two extra reals are why the per-channel stride is FIR_FFT_SIZE + 2.  The
+ * history and kernel banks are that spectrum times the partition count, and
+ * the two are checked against maxStorageBufferRange because a long response
+ * at high channel counts is what actually runs out first -- a device limit
+ * rather than an allocation failure, so it has to be tested explicitly.
+ *
+ * Strict FP32 departs from this: it keeps its own transform's data as four
+ * floats per point over the full transform length, not a half-spectrum, and
+ * its output is a pair per sample. */
 static int create_buffers(lsx_fir_vulkan_t *context)
 {
   VkDeviceSize complex_size = 2u * context->element_size;
@@ -1445,6 +1645,17 @@ static int create_buffers(lsx_fir_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
+/* The one constructor the public forms funnel into.  coefficient_channels is
+ * 1 for a shared response and channels for per-channel ones, which is the
+ * only difference between them; coefficient_lows is non-NULL only for the
+ * reference profile.
+ *
+ * The order below is a dependency chain, not a preference: the buffers need
+ * the sizes the strategy flags imply, the FFT plan binds to the buffers, the
+ * pipeline needs the descriptor set the buffers are written into, the kernels
+ * are transformed through that pipeline, and the command buffers can only be
+ * recorded once every handle they reference exists.  Any failure unwinds
+ * through the destructor, which tolerates a partly built context. */
 static lsx_fir_vulkan_t *create_fir(
     lsx_vulkan_context_t *vulkan,
     double const *const *coefficients,
@@ -1499,6 +1710,10 @@ static lsx_fir_vulkan_t *create_fir(
 
     context->emit_low_residual = context->reference_dd && residual && residual[0] ? atoi(residual) : 0;
   }
+  /* Not for the reference profile: its coefficients are double-double, and a
+   * host transform would have to collapse them to plain doubles first, which
+   * is exactly the loss the profile exists to avoid.  It transforms its
+   * kernels on the device instead. */
   context->authoritative_fp64_kernels =
       context->double_precision &&
       (vulkan->profile == sox_vulkan_profile_accurate ||
@@ -1508,6 +1723,9 @@ static lsx_fir_vulkan_t *create_fir(
       2u * sizeof(double) :
       context->double_precision ? sizeof(double) : sizeof(float);
   context->channels = channels;
+  /* Rounded up: a final short partition is zero-padded rather than treated
+   * specially, so every partition is the same size and one dispatch covers
+   * them all. */
   context->partitions = (uint32_t)((taps + FIR_BLOCK_FRAMES - 1u) / FIR_BLOCK_FRAMES);
   if (create_commands(context) != SOX_SUCCESS)
     goto error;
@@ -1587,6 +1805,9 @@ void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context)
 {
   if (!context)
     return;
+  /* Blocks may still be queued and unwaited on the resident path, so
+   * everything below waits for the device first: freeing a buffer or a
+   * pipeline a command buffer still references is undefined. */
   vkDeviceWaitIdle(context->vulkan->device);
   if (context->process_calls)
     lsx_report(
@@ -1653,6 +1874,9 @@ size_t lsx_fir_vulkan_block_frames_for(lsx_vulkan_context_t const *context)
   return context && context->profile == sox_vulkan_profile_fast ? FIR_FAST_BLOCK_FRAMES : FIR_DEFAULT_BLOCK_FRAMES;
 }
 
+/* The stride is the transform length plus the two extra reals a half-spectrum
+ * needs; strict FP32 has no such padding, its buffers holding the full
+ * transform length. */
 size_t lsx_fir_vulkan_prepared_stride(lsx_fir_vulkan_t const *context)
 {
   if (!context)
@@ -1665,6 +1889,11 @@ lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *cont
   return context ? &context->resident_upload[context->resident_bank_index] : NULL;
 }
 
+/* Reverse the low 15 bits of an index.  A decimation-in-time transform reads
+ * its input in bit-reversed order, and the strict FP32 shader implements the
+ * transform itself rather than calling VkFFT, so the host does the permutation
+ * while it is laying the block out anyway.  Fifteen bits is log2 of the
+ * default transform size, which is the only size the strict profile uses. */
 static uint32_t reverse_fft_index(uint32_t value)
 {
   uint32_t reversed = 0u;
@@ -1677,6 +1906,22 @@ static uint32_t reverse_fft_index(uint32_t value)
   return reversed;
 }
 
+/* Lay one interleaved block out as the transform input and copy it to staging.
+ *
+ * This is where overlap-save happens on the host: each channel's transform
+ * input is the previous block followed by the current one, so the first half
+ * comes from context->previous and the second from input, and input then
+ * becomes previous for the next call.  The transform is twice a block long
+ * precisely so that the two fit.
+ *
+ * The layout is planar -- channels run consecutively, not interleaved -- so
+ * the transform sees one contiguous signal per batch.  Each strategy stores
+ * its own element form: a bit-reversed pair of floats for strict FP32,
+ * because that shader does its own transform, an explicit pair with a zero
+ * low word for the double-double formats, and a plain value otherwise.
+ *
+ * The scratch is zeroed each time because the two extra reals per channel and
+ * any tail past the block must not carry over from the previous call. */
 static void prepare_process_input(lsx_fir_vulkan_t *context, double const *input, buffer_t *upload)
 {
   uint32_t channel;
@@ -1723,6 +1968,13 @@ static void prepare_process_input(lsx_fir_vulkan_t *context, double const *input
   memcpy(upload->mapped, context->working_host, (size_t)context->working.size);
 }
 
+/* The synchronous path: prepare, submit the pre-recorded command buffer for
+ * the current slot, wait, and de-interleave the result.  The download holds
+ * only the second half of the transform -- the part overlap-save keeps -- so
+ * what comes back is already one block of output per channel.
+ *
+ * The slot advances afterwards, so that the recorded command buffer for the
+ * next block reads the history ring one position further on. */
 int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, double const **output)
 {
   double const *download;
@@ -1774,6 +2026,17 @@ int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, doubl
   return SOX_SUCCESS;
 }
 
+/* Describe where this block's output sits, for a consumer to read in place.
+ *
+ * The offset is what makes overlap-save visible in the description: the
+ * inverse transform fills a whole transform's worth, of which only the second
+ * half is the answer, so the region starts one block in.  Strict FP32 writes
+ * to a separate output buffer that already holds just that half, hence its
+ * offset of zero and its different channel stride.
+ *
+ * The layout is planar with the same per-channel stride the transform uses,
+ * so nothing is rearranged for the consumer's benefit; validation is what
+ * ensures the description and the memory agree. */
 static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   memset(resident, 0, sizeof(*resident));
@@ -1799,6 +2062,17 @@ static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, 
   return lsx_vulkan_resident_buffer_validate(resident);
 }
 
+/* The resident path.  Nothing is submitted and nothing is waited for: the
+ * command buffer is queued and will go out with whatever the chain submits
+ * next, which is the whole point -- a resident chain pays one submission for
+ * a batch of blocks instead of one per block per effect.
+ *
+ * The bank is recorded on first use, and the command buffer is chosen by two
+ * independent rotations: the slot, which says where in the history ring this
+ * block lands, and the bank index, which says which staging buffer it was
+ * uploaded through.  A recorded command buffer names both, so the product of
+ * the two needs its own recording, which is why the bank is that many
+ * command buffers and the index is this arithmetic. */
 int lsx_fir_vulkan_process_prepared_resident(lsx_fir_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   double started = monotonic_seconds();
@@ -1812,6 +2086,8 @@ int lsx_fir_vulkan_process_prepared_resident(lsx_fir_vulkan_t *context, sox_rate
   if (describe_resident_output(context, rate, frame_offset, state, resident) != SOX_SUCCESS)
     return SOX_EOF;
   context->current_slot = (context->current_slot + 1u) % context->partitions;
+  /* The bank wraps at the configured depth, which may be below the compiled
+   * maximum; the buffers above it are simply unused for this run. */
   context->resident_bank_index = (context->resident_bank_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
   context->process_seconds += monotonic_seconds() - started;
   ++context->process_calls;

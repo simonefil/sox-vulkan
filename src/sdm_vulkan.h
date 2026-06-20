@@ -17,7 +17,17 @@ typedef struct lsx_sdm_vulkan lsx_sdm_vulkan_t;
 /*
  * The modulator does not resample.  It consumes a stream already at the DSD
  * rate, from the host or from a resident producer, and emits packed DSD.
+ *
+ * A sigma-delta modulator is serial by construction -- each output bit
+ * depends on the error left by the one before it -- so what makes a GPU
+ * implementation possible is that both of its parts are associative in
+ * disguise: the noise-shaping accumulators are prefix sums, and the one-bit
+ * reducer is a finite-state machine whose per-block transitions compose.
+ * Both are exact integer computations, so the result is bit for bit what a
+ * serial modulator would have produced, not an approximation of it.
  */
+
+/* Whether a rate is one of the DSD rates this backend implements. */
 sox_bool lsx_sdm_vulkan_dsd_rate_supported(unsigned rate);
 /*
  * batch_frames is the largest block the producer will hand over.  The
@@ -27,7 +37,10 @@ sox_bool lsx_sdm_vulkan_dsd_rate_supported(unsigned rate);
 lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
     lsx_vulkan_context_t *vulkan, unsigned rate, unsigned channels,
     size_t batch_frames);
+/* Destroy a modulator; safe on NULL and on a partly built one. */
 void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context);
+
+/* Most frames the modulator will accept before it must be run. */
 size_t lsx_sdm_vulkan_input_capacity(lsx_sdm_vulkan_t const *context);
 
 /*
@@ -55,7 +68,12 @@ int lsx_sdm_vulkan_consume_resident(
     sox_bool *input_consumed, sox_bool *output_ready,
     uint8_t const **channel_bytes,
     size_t *bytes_per_channel, size_t *channel_stride);
+/* Whether a further drain is owed: the stream has ended but frames are still
+ * buffered, so the caller must call again with a NULL input. */
 sox_bool lsx_sdm_vulkan_resident_active(lsx_sdm_vulkan_t const *context);
+
+/* Samples the ingest had to clamp, counted on the device.  Meaningful only
+ * once the work that wrote them has completed. */
 uint64_t lsx_sdm_vulkan_resident_clips(lsx_sdm_vulkan_t const *context);
 
 #endif

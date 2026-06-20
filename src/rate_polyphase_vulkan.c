@@ -24,6 +24,10 @@
 #define RATE_POLYPHASE_BINDINGS 3u
 #define RATE_POLYPHASE_LOCAL_SIZE 128u
 
+/* Push constants.  The phase counter advances by phase_step and wraps at
+ * phase_count; its whole quotient is the input frame and its remainder the
+ * sub-filter, which is how one counter carries both.  phase_start is where
+ * this batch begins, so the counter continues across calls. */
 typedef struct {
   uint32_t output_frames;
   uint32_t phase_count;
@@ -58,8 +62,17 @@ struct lsx_rate_polyphase_vulkan {
   uint32_t phase_start;
   uint32_t max_output_frames;
   uint32_t valid_output_frames;
+  /* Resident-input state.  The stage keeps its own device-side input across
+   * calls, since the window margin of the previous block is needed for this
+   * one: an arriving block is appended to what was retained, and the two
+   * buffers alternate so the copy never reads and writes the same one while
+   * the device is still using it. */
   uint32_t resident_input_index;
   uint32_t resident_bank_index;
+  /* Frames already in the current input buffer.  Starts at the caller's
+   * preload, which is the margin the first block has no history for and
+   * which is zero-filled on first use, so the stream begins against silence
+   * rather than against uninitialised memory. */
   uint32_t resident_occupancy_frames;
   sox_bool resident_initialized;
   sox_bool double_precision;
@@ -99,6 +112,11 @@ static lsx_vulkan_resident_format_t sample_format(lsx_rate_polyphase_vulkan_t co
       lsx_vulkan_resident_format_f32;
 }
 
+/* Convert host doubles into the element form this profile's buffers use.  The
+ * paired forms store a high word and a correction: exact zero for the
+ * double-double, whose input already fits one double, and the rounding
+ * remainder for the split-float, where it is what carries the bits a single
+ * float cannot. */
 static void upload_samples(lsx_rate_polyphase_vulkan_t const *context, void *target, double const *source, size_t count)
 {
   size_t index;
@@ -127,6 +145,10 @@ static void upload_samples(lsx_rate_polyphase_vulkan_t const *context, void *tar
     ((float *)target)[index] = (float)source[index];
 }
 
+/* The inverse: a pointer to count output samples as host doubles.  Plain FP64
+ * is returned in place, the mapping already being doubles; the other forms
+ * are converted into the scratch buffer, the paired ones collapsing through
+ * the shared routine so that every collapse in the engine agrees. */
 static double const *host_samples(lsx_rate_polyphase_vulkan_t *context, size_t count)
 {
   size_t index;
@@ -429,11 +451,19 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
   if (!context || !input || !output || !output_frames || !consumed_frames || !processable_frames || processable_frames > RATE_POLYPHASE_BLOCK_FRAMES)
     return SOX_EOF;
   command_buffer = context->command_buffers[0];
+  /* How many output frames the phase counter can produce before it runs past
+   * the processable input.  Everything is in counter units -- an input frame
+   * being phase_count of them -- so the division is a ceiling of the number
+   * of steps that fit, and the remainder afterwards is the phase to resume
+   * from.  Working in the counter's own units is what keeps the ratio exact:
+   * nothing here rounds. */
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
   if (!count || count > context->max_output_frames)
     return SOX_EOF;
   end_position = context->phase_start + count * context->parameters.phase_step;
+  /* The response's window is uploaded as well as the frames to be consumed:
+   * the last output frame reads taps - 1 samples past its own position. */
   input_frames = processable_frames + context->parameters.taps - 1u;
   upload_samples(context, context->input.mapped, input, input_frames * context->parameters.channels);
   context->parameters.output_frames = (uint32_t)count;
@@ -453,6 +483,8 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
   *output = host_samples(
       context, (size_t)count * context->parameters.channels);
   *output_frames = (size_t)count;
+  /* The counter's quotient by phase_count is the input frames used up; its
+   * remainder, stored below, is where the next call starts. */
   *consumed_frames = (size_t)(end_position / context->parameters.phase_count);
   context->valid_output_frames = (uint32_t)count;
   context->phase_start = (uint32_t)(end_position % context->parameters.phase_count);
@@ -477,6 +509,12 @@ int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vul
     return SOX_EOF;
   append_offset = context->resident_occupancy_frames;
   append_frames = available_frames - append_offset;
+  /* How many output frames the phase counter can produce before it runs past
+   * the processable input.  Everything is in counter units -- an input frame
+   * being phase_count of them -- so the division is a ceiling of the number
+   * of steps that fit, and the remainder afterwards is the phase to resume
+   * from.  Working in the counter's own units is what keeps the ratio exact:
+   * nothing here rounds. */
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
   if (!count || count > context->max_output_frames)
@@ -507,6 +545,8 @@ int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vul
   upload.state = state;
   if (lsx_rate_polyphase_vulkan_process_resident_input_normalized(context, &upload, NULL, output_frames, rate, state, normalize, resident) != SOX_SUCCESS)
     return SOX_EOF;
+  /* The counter's quotient by phase_count is the input frames used up; its
+   * remainder, stored below, is where the next call starts. */
   *consumed_frames = (size_t)(end_position / context->parameters.phase_count);
   return SOX_SUCCESS;
 }
@@ -565,6 +605,12 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   current = &context->resident_input[context->resident_input_index];
   next = &context->resident_input[context->resident_input_index ^ 1u];
   processable_frames = min((size_t)RATE_POLYPHASE_BLOCK_FRAMES, available_frames - (context->parameters.taps - 1u));
+  /* How many output frames the phase counter can produce before it runs past
+   * the processable input.  Everything is in counter units -- an input frame
+   * being phase_count of them -- so the division is a ceiling of the number
+   * of steps that fit, and the remainder afterwards is the phase to resume
+   * from.  Working in the counter's own units is what keeps the ratio exact:
+   * nothing here rounds. */
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
   if (!processable_frames || !count || count > context->max_output_frames)
@@ -608,6 +654,10 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences resident rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer resident rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer resident rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate resident polyphase");
+  /* Zero the preload on the first block only: those frames stand in for the
+   * history the first output has none of, so they must be silence.  Done
+   * inside the first recorded block rather than at creation, since it must
+   * be ordered before the append that follows it. */
   if (!context->resident_initialized) {
     if (context->resident_occupancy_frames)
       vkCmdFillBuffer(command_buffer, current->buffer, 0, (VkDeviceSize)context->resident_occupancy_frames * frame_size, 0);
@@ -623,6 +673,10 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
   vkCmdDispatch(command_buffer, (dispatch_items(context, (uint32_t)count) + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
   vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &output_barrier, 0, NULL, 0, NULL);
+  /* Retain the tail -- the window margin the next block will read behind
+   * itself -- by copying it to the other buffer, which is then swapped in.
+   * Moving it down within this buffer would overwrite samples the dispatch
+   * just queued is still reading. */
   if (remaining_frames)
     vkCmdCopyBuffer(command_buffer, current->buffer, next->buffer, 1, &retain);
   lsx_vulkan_label_end(context->vulkan, command_buffer);

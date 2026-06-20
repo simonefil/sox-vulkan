@@ -22,6 +22,10 @@
 #define RATE_CUBIC_BINDINGS 2u
 #define RATE_CUBIC_LOCAL_SIZE 128u
 
+/* Push constants.  The 32.32 step is passed as two words because GLSL has no
+ * 64-bit integer without an extension, and the shader reconstructs the
+ * position from them; phase_fraction is where in the current input frame the
+ * batch begins, which is what carries the phase across calls. */
 typedef struct {
   uint32_t output_frames;
   uint32_t step_integer;
@@ -46,7 +50,10 @@ struct lsx_rate_cubic_vulkan {
   VkCommandBuffer command_buffer;
   VkFence fence;
   parameters_t parameters;
-  uint64_t step;
+  uint64_t step;                 /* 32.32; the whole value, unlike the split above. */
+  /* Position within the input frame the next batch starts on, 0.32 fixed
+   * point.  Carried between calls, which is what keeps the resampling phase
+   * exact over an arbitrarily long stream. */
   uint32_t phase_fraction;
   uint32_t pre_post;
   uint32_t max_output_frames;
@@ -348,12 +355,28 @@ int lsx_rate_cubic_vulkan_process(
 
   if (!context || !input || !output || !output_frames || !consumed_frames || input_frames <= context->pre_post)
     return SOX_EOF;
+  /* The window margin is not resampled from: only the frames before it can
+   * be the centre of an interpolation this call. */
   processable_frames = min((size_t)RATE_CUBIC_BLOCK_FRAMES, input_frames - context->pre_post);
+  /* How many output frames fit before the read position leaves the
+   * processable range.  All of it in 32.32: limit is that range as a
+   * position, and the division is the count of steps that stay below it,
+   * the -1/+1 making the bound exclusive without a floating-point ceiling. */
   limit = (uint64_t)processable_frames << 32;
   count = limit > context->phase_fraction ? (limit - 1u - context->phase_fraction) / context->step + 1u : 0;
   if (!count || count > context->max_output_frames)
     return SOX_EOF;
+  /* Where the position lands after this batch: its whole part is the input
+   * frames consumed, its fraction the phase the next call starts from. */
   end_position = context->phase_fraction + count * context->step;
+  /* The margin is uploaded as well: the interpolation reads past its last
+   * centre frame, so those samples must be on the device even though no
+   * output is produced from them.
+   *
+   * Each profile stores its own element form on the way in -- a pair with a
+   * zero low word for double-double, a split pair for the strict profile,
+   * or a plain value.  The conversion is done here rather than in the shader
+   * so that the buffer's layout is fixed by the profile alone. */
   copied_frames = processable_frames + context->pre_post;
   sample_count = copied_frames * context->parameters.channels;
   if (context->reference_dd)

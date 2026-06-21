@@ -31,6 +31,9 @@ typedef struct {
   unsigned           last;
 } channel_range_t;
 
+/* One "channels=file" argument: the channels it applies to and the response
+ * read from the file.  pre_peak is where the response's peak sits, which is
+ * what the file may state and what fixes the entry's own latency. */
 typedef struct {
   char               * filename;
   channel_range_t    * ranges;
@@ -40,6 +43,15 @@ typedef struct {
   int                pre_peak;
 } channel_map_entry_t;
 
+/* The per-channel responses, assembled from the arguments.
+ *
+ * taps holds one response per channel, each already the convolution of every
+ * entry naming that channel: an argument list may map several files onto one
+ * channel, and applying them as a cascade would round between them, so they
+ * are combined into one response instead.  The originals are kept because
+ * the responses must all end up the same length and aligned on the same
+ * peak, which can only be arranged once every channel has been assembled.
+ */
 typedef struct {
   channel_map_entry_t * entries;
   size_t             entry_count;
@@ -47,8 +59,8 @@ typedef struct {
   int                * original_tap_counts;
   int                * original_pre_peaks;
   unsigned           channels;
-  int                tap_count;
-  int                post_peak;
+  int                tap_count;   /* Common length after padding. */
+  int                post_peak;   /* Common latency after alignment. */
   sox_bool           ready;
 } channel_filter_bank_t;
 
@@ -60,6 +72,18 @@ typedef struct {
   channel_filter_bank_t * channel_bank;
 } priv_t;
 
+/* Convolve two responses into the single one their cascade is equivalent to,
+ * returning a newly allocated array of first_count + second_count - 1 taps
+ * that the caller owns, or NULL if the lengths overflow.
+ *
+ * Done through the transform rather than directly: the responses here run to
+ * hundreds of thousands of taps, where a direct convolution is quadratic.
+ * The transform is padded to a power of two at least as long as the result,
+ * which is what keeps the circular convolution free of wrap-around, and the
+ * scale on the way out is this transform's inverse normalisation.
+ *
+ * The single-tap case is special-cased because the transform has no length
+ * shorter than one to pad to. */
 static double *convolve_fir(
     double const *first, int first_count,
     double const *second, int second_count,
@@ -120,13 +144,29 @@ static double *convolve_fir(
 }
 
 #if HAVE_VULKAN
+/* Fusion combines responses, so a long cascade produces a very long one.  The
+ * fast profile refuses past this point: its transform is already the larger
+ * of the two, and beyond a few million taps the kernel and history banks
+ * outgrow what a device will allocate. */
 #define FIR_FAST_FUSION_MAX_TAPS 4194304u
 
+/* One channel's response, whichever of the two forms is in use. */
 static double const *vulkan_channel_source(dft_filter_priv_t const *base, uint32_t channel)
 {
   return base->vulkan_channels ? base->vulkan_channels[channel].source_taps : base->vulkan_source_taps;
 }
 
+/* Turn a single shared response into per-channel copies, so that a fusion
+ * which differs by channel can proceed.
+ *
+ * Two effects can only be fused when their responses can be combined per
+ * channel, and one of them may have a shared response while the other does
+ * not; rather than special-case that, the shared side is expanded first and
+ * the fusion then has one form to deal with.  The copies include the pending
+ * fusion sources, which have not been combined yet.
+ *
+ * Already being per channel is success if the counts agree and failure if
+ * they do not, since two different channel counts cannot be fused at all. */
 static int promote_vulkan_channels(dft_filter_priv_t *base, uint32_t channels)
 {
   dft_filter_vulkan_channel_t *channel_filters;
@@ -367,6 +407,10 @@ static int parse_channel_number(char const **text, char const *end, unsigned *va
   return SOX_SUCCESS;
 }
 
+/* Parse the channel part of an argument: a comma-separated list of numbers
+ * and first-last ranges, one-based.  A reversed range is accepted and
+ * normalised rather than refused, "4-2" plainly meaning channels 2 to 4.
+ * An empty list is an error, an entry mapping no channel being pointless. */
 static int parse_channel_selector(channel_map_entry_t *entry, char const *selector, size_t length)
 {
   char const *text = selector;
@@ -399,6 +443,12 @@ static int parse_channel_selector(channel_map_entry_t *entry, char const *select
   return entry->range_count ? SOX_SUCCESS : SOX_EOF;
 }
 
+/* Parse the "channels=file" arguments into a bank, without reading any of the
+ * files: the channel count is not known until start, so the responses are
+ * read then and only the mapping is settled here.
+ *
+ * At most one entry may read from standard input, that being a stream which
+ * cannot be rewound and read twice. */
 static int parse_channel_map(sox_effect_t *effp, int argc, char **argv, channel_filter_bank_t **result)
 {
   channel_filter_bank_t *bank = lsx_calloc(1, sizeof(*bank));
@@ -443,6 +493,10 @@ static int parse_channel_map(sox_effect_t *effp, int argc, char **argv, channel_
   return SOX_SUCCESS;
 }
 
+/* Read whitespace-separated coefficients from a file, appending to *taps,
+ * which the caller owns and must free.  Lines beginning with # are comments.
+ * A file with no numbers at all is an error, since a response of no taps
+ * would silence the channel rather than pass it. */
 static int read_coefficients(sox_effect_t *effp, char const *filename, double **taps, int *tap_count)
 {
   FILE *file = lsx_open_input_file(effp, filename, sox_true);
@@ -485,6 +539,21 @@ static int read_coefficients(sox_effect_t *effp, char const *filename, double **
   return SOX_SUCCESS;
 }
 
+/* Turn the parsed arguments into one response per channel, all of the same
+ * length and all with their peaks aligned.
+ *
+ * Three things have to be reconciled.  Several entries may name one channel,
+ * and their cascade is convolved into a single response rather than applied
+ * in sequence, which would round between the stages.  Different channels may
+ * then end up with responses of different lengths and different peak
+ * positions, but the backend convolves them all against one block with one
+ * latency -- so each is padded on both sides to a common length, placing
+ * every peak at the same offset.  Padding rather than resampling or
+ * truncating means no response is altered: the extra taps are zeros, which
+ * contribute nothing.
+ *
+ * A channel no entry names gets a single unit tap, which passes it through
+ * unchanged and keeps its latency in step with the rest. */
 static int prepare_channel_bank(sox_effect_t *effp, channel_filter_bank_t *bank)
 {
   unsigned channels = effp->in_signal.channels;
@@ -566,6 +635,9 @@ static int prepare_channel_bank(sox_effect_t *effp, channel_filter_bank_t *bank)
     lsx_fail("normalized fir is too large");
     goto error;
   }
+  /* The common length is the widest reach on either side of the peak, plus
+   * the peak itself, so every response fits with its peak at common_pre_peak
+   * and none has to be shortened. */
   common_tap_count = common_pre_peak + common_post_peak + 1;
   bank->taps = lsx_calloc(channels, sizeof(*bank->taps));
   bank->original_tap_counts = tap_counts;
@@ -573,6 +645,8 @@ static int prepare_channel_bank(sox_effect_t *effp, channel_filter_bank_t *bank)
   bank->channels = channels;
   bank->tap_count = common_tap_count;
   bank->post_peak = common_post_peak;
+  /* Place each response so its peak lands on the common one; the buffer is
+   * zeroed, so the padding on both sides needs no writing. */
   for (channel = 0; channel < channels; ++channel) {
     int leading = common_pre_peak - pre_peaks[channel];
 
@@ -665,6 +739,10 @@ static int start(sox_effect_t * effp)
     channel_filter_bank_t *bank = p->channel_bank;
     double *flow_taps;
 
+    /* The CPU path runs one flow per channel and they all share this bank,
+     * so only flow 0 builds it; the others find it ready.  A later flow
+     * arriving before it is built cannot happen -- the flows start in order
+     * -- and is treated as a failure rather than rebuilding it. */
     if (!bank->ready && (effp->flow || prepare_channel_bank(effp, bank) != SOX_SUCCESS))
       return SOX_EOF;
     if (effp->global_info->plot != sox_plot_off) {
@@ -679,11 +757,16 @@ static int start(sox_effect_t * effp)
     }
     if (effp->flow >= bank->channels)
       return SOX_EOF;
+    /* Each flow takes its own copy of its channel's response, the filter
+     * taking ownership of what it is given while the bank keeps the
+     * original for the other flows. */
     p->base.filter_ptr = &p->base.filter;
     f = p->base.filter_ptr;
     flow_taps = lsx_memdup(bank->taps[effp->flow], (size_t)bank->tap_count * sizeof(*flow_taps));
     lsx_set_dft_filter(f, flow_taps, bank->tap_count, bank->post_peak);
 #if HAVE_VULKAN
+    /* The Vulkan backend takes every channel at once and runs as a single
+     * flow, so it is handed the whole bank, once, from flow 0. */
     if (!effp->flow &&
         sox_globals.vulkan_profile != sox_vulkan_profile_none &&
         lsx_set_dft_filter_vulkan_channels(

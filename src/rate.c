@@ -632,26 +632,59 @@ typedef struct {
   rate_t          rate;
   rate_shared_t   shared, * shared_ptr;
 #if HAVE_VULKAN
+  /* One executor per plan stage, and one FIFO more than that: the FIFOs sit
+   * between the stages, the first holding this effect's input and the last
+   * its output. */
   struct rate_vulkan_stage_executor *vulkan_stages;
   fifo_t          *vulkan_fifos;
   size_t          vulkan_stage_count;
   sox_bool        vulkan_final_stream_active;
+
+  /* A resident block produced but not yet accepted downstream.  A stage may
+   * be unable to take what the one before it produced -- its stream may be
+   * full -- so the block is held here and retried, rather than the producer
+   * being made to wait for it. */
   lsx_vulkan_resident_buffer_t vulkan_deferred_append;
   sox_bool        vulkan_deferred_append_valid;
+
+  /* Set when the effect is being driven as a link of someone else's resident
+   * chain rather than from host samples. */
   sox_bool        vulkan_external_input_active;
   sox_bool        vulkan_external_output_normalize;
+
+  /* Output produced but not yet handed to the caller, which takes one block
+   * at a time. */
   sox_bool        vulkan_pending_output_valid;
   lsx_vulkan_resident_buffer_t vulkan_pending_output;
+
+  /* Input accepted but not yet consumed, held at the two points where a
+   * stage can only take part of what it was given: the direct entry into the
+   * final stage, and each link of a polyphase chain. */
   sox_bool        vulkan_pending_direct_input_valid;
   lsx_vulkan_resident_buffer_t vulkan_pending_direct_input;
   sox_bool        *vulkan_pending_chain_input_valid;
   lsx_vulkan_resident_buffer_t *vulkan_pending_chain_input;
+
+  /* Blocks queued since the last flush, counted so the device's lag stays
+   * within the batch depth. */
   uint32_t        vulkan_polyphase_chain_pending;
   uint32_t        vulkan_external_input_pending;
 #endif
 } priv_t;
 
 #if HAVE_VULKAN
+/*
+ * The Vulkan side of the rate effect mirrors the CPU plan stage for stage:
+ * rate_plan_create decides what the resampling chain should be, and each of
+ * its stages is then given an executor that runs that stage on the device.
+ * The plan is therefore the same either way, and only the arithmetic moves.
+ *
+ * Exactly one backend pointer is set per executor, chosen from the stage's
+ * kind.  A DFT stage is the exception: it may be run either as a partitioned
+ * transform or, when its response is short enough for the direct form to be
+ * cheaper, as a polyphase stage -- hence dft_polyphase, which says which of
+ * the two a DFT stage actually became.
+ */
 typedef struct rate_vulkan_stage_executor {
   rate_stage_kind_t kind;
   lsx_rate_vulkan_t *dft;
@@ -662,11 +695,23 @@ typedef struct rate_vulkan_stage_executor {
   sox_rate_t output_rate;
 } rate_vulkan_stage_executor_t;
 
+/* Whether this stage runs as a transform rather than in the direct form.  It
+ * matters beyond the choice of backend: only the transform stage exchanges
+ * resident buffers with its neighbours and insists on exact blocks. */
 static sox_bool rate_vulkan_executor_is_fft(rate_vulkan_stage_executor_t const *executor)
 {
   return executor->kind == rate_stage_dft && !executor->dft_polyphase;
 }
 
+/* Feed a resident block through a polyphase stage and write the result to a
+ * host FIFO.
+ *
+ * The block is cut into slices no larger than the stage accepts per call --
+ * a transform stage's block is much the larger of the two -- and the
+ * description is advanced across the block rather than anything being
+ * copied.  A final block cut into several slices has all but its last marked
+ * draining, since only the last is really the end of the stream and marking
+ * them all final would start the stage's drain early. */
 static int process_vulkan_resident_polyphase_to_host(
     rate_vulkan_stage_executor_t *polyphase,
     lsx_vulkan_resident_buffer_t const *resident,
@@ -712,6 +757,13 @@ static int process_vulkan_resident_polyphase_to_host(
   return SOX_SUCCESS;
 }
 
+/* Advance the held input by one slice through the final stage, producing one
+ * resident output block.
+ *
+ * The effect can only hand out one block at a time, so this does nothing
+ * while an output is still waiting to be taken; the caller alternates between
+ * taking the output and calling here again.  As above, a final block cut into
+ * slices marks all but its last as draining. */
 static int process_vulkan_pending_direct_input(sox_effect_t *effp, rate_vulkan_stage_executor_t *final)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -757,6 +809,9 @@ static int process_vulkan_pending_direct_input(sox_effect_t *effp, rate_vulkan_s
   return SOX_SUCCESS;
 }
 
+/* Move a resident description past frames already consumed.  Nothing is
+ * copied: the samples stay on the device and only the window into them
+ * moves. */
 static void advance_vulkan_resident_input(lsx_vulkan_resident_buffer_t *input, size_t frames)
 {
   VkDeviceSize consumed_bytes =
@@ -803,6 +858,18 @@ static int append_vulkan_final_stream(
   return SOX_SUCCESS;
 }
 
+/* Advance the resident chain by one step, doing whatever is furthest along
+ * that can be done.
+ *
+ * The order below is deliberate and is what keeps the chain from deadlocking:
+ * a deferred append is retried first, since everything behind it is blocked
+ * on the final stream having room; then the final stage's own held input; and
+ * only then the intermediate stages, scanned from the last backwards.
+ * Working from the end forwards means a block is always moved out of the way
+ * before another is produced to sit behind it.
+ *
+ * One step per call, not a loop to exhaustion: the caller has to be given the
+ * chance to take the output between steps. */
 static int process_vulkan_pending_polyphase_chain(sox_effect_t *effp, size_t final_index)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -941,11 +1008,23 @@ static sox_bool rate_vulkan_dft_fft_supported(stage_t const *stage)
   return stage->L >= 1 && stage->M >= 1 && lsx_fir_vulkan_block_frames() % stage->L == 0;
 }
 
+/* A pure interpolation by a factor that is not a power of two can be run as a
+ * polyphase stage instead of a transform.  Powers of two are excluded because
+ * the plan already builds those from half-band stages, which are cheaper
+ * still; and M must be 1, a polyphase stage here doing no decimation. */
 static sox_bool rate_vulkan_dft_direct_supported(stage_t const *stage)
 {
   return stage->L > 1 && stage->M == 1 && !lsx_is_power_of_2(stage->L);
 }
 
+/* Whether every stage of a plan has a Vulkan executor.  All or nothing: a
+ * plan with one unsupported stage falls back to the CPU entirely, rather than
+ * splitting the chain and paying a round trip in the middle.
+ *
+ * The polyphase conditions are what the device kernel implements and the CPU
+ * stage does not require: no coefficient interpolation, no high-precision
+ * clock, one phase per interpolation step, and a starting phase inside the
+ * first cycle. */
 static sox_bool rate_vulkan_plan_supported(rate_plan_t const *plan)
 {
   int index;
@@ -971,6 +1050,14 @@ static sox_bool rate_vulkan_plan_supported(rate_plan_t const *plan)
   return sox_true;
 }
 
+/* Expand a half-band stage's coefficients into a full response the FIR
+ * backend can take.
+ *
+ * A half-band filter stores only its odd-indexed taps, every even one but the
+ * centre being zero and the response being symmetric.  The backend has no
+ * such special case, so the full response is reconstructed: the centre is
+ * one half, and each stored coefficient is placed at an odd offset either
+ * side of it. */
 static double *rate_vulkan_half_taps(stage_t const *stage)
 {
   size_t taps = (size_t)stage->pre_post + 1u;
@@ -988,6 +1075,14 @@ static double *rate_vulkan_half_taps(stage_t const *stage)
   return result;
 }
 
+/* Split a response into the phase_count sub-filters a polyphase stage needs.
+ *
+ * Phase p takes every phase_count'th tap starting at p, which is what
+ * interleaving the sub-filters back together would undo.  Each sub-filter is
+ * also reversed, the direct form correlating rather than convolving, and
+ * scaled by phase_count, which is the interpolation gain the zero stuffing
+ * would otherwise cost.  A response that does not divide evenly is
+ * zero-padded, the buffer being allocated cleared. */
 static double *rate_vulkan_dft_polyphase_taps(
     dft_filter_t const *filter, uint32_t phase_count,
     uint32_t *taps_per_phase)
@@ -1010,6 +1105,19 @@ static double *rate_vulkan_dft_polyphase_taps(
   return result;
 }
 
+/* Build a Vulkan executor for each stage of the plan the CPU path already
+ * produced, and the FIFOs between them.
+ *
+ * The plan is not re-derived: taking exactly the stages rate_plan_create
+ * chose is what makes the two paths comparable, so any difference between
+ * their outputs is down to the arithmetic rather than to a different chain of
+ * filters.  Each stage's output rate is accumulated as the loop goes, since
+ * a resident block has to state the rate it carries.
+ *
+ * A DFT stage's response is split into polyphase sub-filters when the direct
+ * form is the better fit for its ratio; otherwise it goes to the partitioned
+ * transform.  The environment knob forces the polyphase form for comparison,
+ * and is not a supported configuration. */
 static int rate_vulkan_start(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1321,6 +1429,23 @@ static int start(sox_effect_t * effp)
 }
 
 #if HAVE_VULKAN
+/* Push whatever the FIFOs hold through the plan's stages, in order.
+ *
+ * Held work comes first, for the same reason as in the chain walker: a block
+ * that is already part-way through must be moved on before more is produced
+ * behind it.  Only then are the stages run, each consuming from the FIFO
+ * before it and writing to the one after.
+ *
+ * resident_chain says whether this effect is publishing resident output.  It
+ * changes what happens at the boundary between a transform stage and what
+ * follows: with it, a stage's output stays on the device and is handed
+ * onwards as a resident block; without it, everything lands in the host FIFOs
+ * and the stages are simply run one after another.
+ *
+ * A transform stage takes exact blocks, so it runs only while its FIFO holds
+ * a whole one; the other kinds take what they are given up to their own
+ * maximum.  That difference is why the loop body is not uniform across the
+ * stage kinds. */
 static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_bool resident_chain)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1532,6 +1657,12 @@ static int flow_vulkan(sox_effect_t *effp, sox_sample_t const *ibuf, sox_sample_
   return SOX_SUCCESS;
 }
 
+/* Produce one resident output block from the last stage, if it can.
+ *
+ * A block already held from an earlier call is handed out first.  Otherwise
+ * the last stage is asked to make one, in whichever of its two forms it took;
+ * *produced false with success means it has not enough input yet, which is
+ * the normal answer rather than a failure. */
 static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1593,6 +1724,8 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
   return SOX_SUCCESS;
 }
 
+/* Resident output requires the plan to end in a DFT stage: that is the only
+ * kind whose output stays on the device in a form a consumer can be given. */
 sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
@@ -1617,6 +1750,14 @@ lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t co
   return lsx_vulkan_resident_topology_dft_only;
 }
 
+/* Resident input requires a plan the chain machinery can actually drive.
+ *
+ * The first stage must be a transform, since that is what accepts a resident
+ * block; and any stage after the first must not be, because two transform
+ * stages in the middle of a chain would each want exact blocks of a different
+ * size, which nothing here reconciles.  A single transform stage is therefore
+ * fine, as is a transform followed by polyphase stages ending in either kind
+ * -- and nothing else. */
 sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
@@ -1642,6 +1783,8 @@ sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp)
   return sox_true;
 }
 
+/* Acting as a middle link needs both ends: resident input, and a final
+ * transform stage so the output is resident too. */
 sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
@@ -1682,6 +1825,13 @@ uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp)
   return lsx_rate_vulkan_resident_stream_clips(p->vulkan_stages[0].dft);
 }
 
+/* Move a resident-input plan forward by one step: take a block out of the
+ * first stage's stream, run it through the intermediate stages, and hand it
+ * to the last.
+ *
+ * *advanced says whether anything happened, so a caller can tell "nothing to
+ * do yet" from "made progress"; held work is dealt with first, as everywhere
+ * in this file, before a new block is produced behind it. */
 static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident_state_t state, sox_bool *advanced)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1742,6 +1892,17 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
   return SOX_SUCCESS;
 }
 
+/* Drive the effect as a link of someone else's resident chain: take a
+ * resident block and publish one.
+ *
+ * The sequence is fixed and the same throughout this file -- hand out what is
+ * ready, advance the chain, hand out again, and only then look at the new
+ * input.  It means an input is never accepted while output is waiting, which
+ * is what keeps the plan's held blocks from accumulating.
+ *
+ * Whether the output is normalized is settled by the first call and may not
+ * change afterwards: the stages were built for one or the other, and
+ * switching would put two scalings into one stream. */
 static int flow_vulkan_resident_input_mode(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool normalize_output, sox_bool *input_consumed, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   priv_t *p;
@@ -1826,6 +1987,10 @@ output_ready:
   return SOX_SUCCESS;
 }
 
+/* Act as the head of a resident chain: take host samples, publish resident
+ * blocks.  Output is offered before input is taken, and *isamp is set to zero
+ * when a block is produced -- the caller keeps its samples and offers them
+ * again next time, so nothing is buffered that has not been paid for. */
 int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   priv_t *p;
@@ -1875,6 +2040,11 @@ int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, 
   return SOX_SUCCESS;
 }
 
+/* How many output samples the effect still owes.
+ *
+ * Computed from the input count and the plan's ratio rather than accumulated,
+ * so that rounding cannot drift over a long stream: the target is recomputed
+ * from scratch each time and rounded once. */
 static size_t vulkan_remaining_samples(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1926,6 +2096,12 @@ static int drain_vulkan_resident_external_input(sox_effect_t *effp, lsx_vulkan_r
   return SOX_SUCCESS;
 }
 
+/* Flush the resident path once the input has ended.
+ *
+ * How much is still owed is computed from the ratio rather than from what the
+ * stages hold, so the effect emits exactly the number of output samples the
+ * resampling implies.  Zero blocks are pushed in until that many have come
+ * out; done says nothing further is owed. */
 int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done)
 {
   priv_t *p;
@@ -2009,6 +2185,9 @@ static int drain_transform_vulkan_resident_endpoint(sox_effect_t *effp, uint64_t
   return status;
 }
 
+/* Flush the non-resident Vulkan path: push silence through until the output
+ * FIFO holds everything the ratio says is owed, then trim the surplus the
+ * filters add beyond the end of the signal. */
 static int flush_vulkan(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;

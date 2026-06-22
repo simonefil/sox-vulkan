@@ -1310,6 +1310,14 @@ static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t 
   }
 }
 
+/* Whether the modulator's integrators are still in a usable range.
+ *
+ * A high-order sigma-delta loop is only conditionally stable: driven too
+ * hard, its integrators run away and the output becomes a stream of alternate
+ * bits carrying nothing.  Once that has happened the state cannot be
+ * recovered, so it is detected and reported rather than left to produce
+ * noise.  Both tests matter -- a state may become infinite outright, or merely
+ * grow past the point from which the loop cannot return. */
 static sox_bool sdm_simple_state_valid(const sdm_t *p)
 {
   int i;
@@ -1322,6 +1330,24 @@ static sox_bool sdm_simple_state_valid(const sdm_t *p)
   return sox_true;
 }
 
+/* Modulate len samples and emit them as packed DSD bytes, returning how many
+ * whole bytes were produced.
+ *
+ * Everything the caller needs to resume is passed in and updated: the
+ * integrator state, the last output, and the partly filled byte with its bit
+ * count.  Nothing is read from an sdm_t, so several channels can run through
+ * this at once from different threads, each with its own state; the strides
+ * are what let each read and write its own channel of an interleaved buffer.
+ *
+ * The three loops are one packing problem: finish the byte a previous call
+ * left partial, then run whole bytes at a time, then start a new partial byte
+ * with whatever is left.  Only the middle loop is on the fast path.
+ *
+ * The order-8 case is written out with the state in locals and the loop body
+ * in a macro.  It is the common case, and keeping the eight integrators in
+ * registers across the byte -- rather than reading and writing an array each
+ * sample -- is most of the difference in speed.  Every other order goes
+ * through the general routine, whose shape is otherwise identical. */
 static size_t sdm_process_simple_packed(const sdm_filter_t *f,
                                         double *state, double *prev_y,
                                         uint8_t *packet,
@@ -1587,6 +1613,7 @@ sdm_t *sdm_init(const char *filter_name,
     return NULL;
   }
 
+  /* Zero means "as many as the machine offers". */
   if (!threads) {
 #if defined HAVE_OPENMP
     threads = (unsigned)omp_get_max_threads();
@@ -1595,6 +1622,9 @@ sdm_t *sdm_init(const char *filter_name,
 #endif
   }
 
+  /* The trellis search has its own parallelism over candidate paths, and
+   * running the channels in parallel on top of it would oversubscribe rather
+   * than help; the channels are threaded only on the simple path. */
   if (trellis_order)
     threads = 1;
 
@@ -1696,6 +1726,12 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
  * pairs up, the default host batch otherwise.  The backend owns the small
  * carry area needed for a partial FSM block between producer slices.
  */
+/* Build the modulator on first use, sized to the producer's block.
+ *
+ * It cannot be built at start: the batch size should match what the upstream
+ * effect actually hands over, and that is only known when the first resident
+ * block arrives.  Sizing it to anything else would either waste device memory
+ * or force every block to be split. */
 static int ensure_vulkan_context(sdm_effect_t *p, size_t batch_frames)
 {
   if (p->vulkan)
@@ -1717,6 +1753,13 @@ static int ensure_vulkan_host_input(sdm_effect_t *p)
   return SOX_SUCCESS;
 }
 
+/* Hand out as much of the modulator's packed output as the caller has room
+ * for, keeping the rest for the next call.
+ *
+ * A caller wanting fewer than four bytes' worth gets nothing rather than a
+ * partial word: the packed word mode carries whole 32-bit words, and a
+ * half-emitted one would put the channels out of step for the rest of the
+ * file. */
 static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
 {
   size_t capacity = *osamp / p->channels;
@@ -1759,6 +1802,16 @@ static int process_vulkan_input(sdm_effect_t *p, size_t frames)
   return SOX_SUCCESS;
 }
 
+/* Act as the tail of a resident chain: take resident PCM and emit packed DSD.
+ *
+ * The modulator is always the end of a chain -- nothing downstream of it can
+ * take DSD as a resident buffer -- so this effect registers only the consumer
+ * endpoint and no producer or transform.
+ *
+ * Output already held is emitted before any new input is taken, so the two
+ * can never both be outstanding.  *active tells the caller that something is
+ * still pending here, which is what keeps it calling after its own input has
+ * ended. */
 static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active)
 {
   sdm_effect_t *p = effp->priv;
@@ -2030,6 +2083,9 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
     }
     *osamp = (wide - pre) * channels;
   } else {
+    /* Packed output: each output sample carries eight modulated frames, so
+     * the capacity in frames is eight times what the caller offered, less the
+     * bits already held over from the previous call. */
     size_t groups = *osamp / channels;
     size_t max_frames = groups * 8;
     size_t emitted;
@@ -2059,6 +2115,14 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
       if (!sdm_simple_state_valid(sdm))
         sdm->failed = 1;
     }
+    /* Checked after the parallel region, not inside it: a failure found in
+     * one thread cannot break out of an OpenMP loop, so each channel records
+     * its own outcome and they are all examined here.
+     *
+     * The channels are given identical counts and identical starting bit
+     * offsets, so they must produce identical byte counts; a disagreement
+     * would mean the channels had gone out of step, which every later frame
+     * would inherit, so it is refused rather than carried forward. */
     for (job = 0; job < (ptrdiff_t)channels; ++job) {
       if (p->sdm[job]->failed) {
         *osamp = 0;

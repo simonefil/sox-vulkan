@@ -1,3 +1,24 @@
+/* Partitioned overlap-save convolution, reference profile: double-double.
+ *
+ * Every value is a DoubleDoubleComplex, four doubles, so this bank is twice
+ * the footprint of the FP64 one and each product costs a dozen error-free
+ * transformations.  It exists to be the numerical reference the other
+ * profiles are measured against, not to be fast.  The device must report
+ * shaderFloat64; double_double.glsl states the rules that keep the compiler
+ * from folding the compensation terms away.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them:
+ *   0 working  -- out: this block's accumulated spectrum.
+ *   1 history  -- in: ring of the last `partitions` input spectra per channel.
+ *   2 kernels  -- in: the transformed response, partition-major.
+ *
+ * Push constants (partition_parameters_t, 16 bytes): spectrum_bins,
+ * partitions, channels, current_slot.
+ *
+ * Dispatch covers channels * spectrum_bins invocations rounded up to whole
+ * workgroups of 256, hence the bounds test.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 
@@ -36,6 +57,8 @@ void main()
     sum.real_part = dvec2(0.0);
     sum.imaginary_part = dvec2(0.0);
     for (uint part = 0; part < parameters.partitions; ++part) {
+      /* Partition p pairs with the input block from p blocks ago; the added
+       * `partitions` keeps the unsigned subtraction from wrapping. */
       const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
       const DoubleDoubleComplex product = multiply_complex_dd(
           history.values[
@@ -45,6 +68,8 @@ void main()
           (part * parameters.channels + channel) *
           parameters.spectrum_bins + bin]);
 
+      /* No Kahan term: add_dd already carries the residual in the pair's low
+       * word, so a correction would only round what it has captured. */
       sum.real_part = add_dd(sum.real_part, product.real_part);
       sum.imaginary_part = add_dd(sum.imaginary_part, product.imaginary_part);
     }

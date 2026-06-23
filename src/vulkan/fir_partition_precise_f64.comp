@@ -1,3 +1,24 @@
+/* Partitioned overlap-save convolution, FP64 with compensated summation.
+ *
+ * The strict and reference profiles reach this through precise_fp64.  It
+ * differs from fir_partition_f64.comp only in the accumulator: the partition
+ * sum is carried with a Kahan correction term, which matters because the sum
+ * runs over every partition of the response and the bins with the largest
+ * magnitudes dominate the earlier terms.  The products themselves are still
+ * plain FP64; only their accumulation is compensated.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them:
+ *   0 working  -- out: this block's accumulated spectrum.
+ *   1 history  -- in: ring of the last `partitions` input spectra per channel.
+ *   2 kernels  -- in: the transformed response, partition-major.
+ *
+ * Push constants (partition_parameters_t, 16 bytes): spectrum_bins,
+ * partitions, channels, current_slot.
+ *
+ * Dispatch covers channels * spectrum_bins invocations rounded up to whole
+ * workgroups of 256, hence the bounds test.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 
@@ -39,6 +60,8 @@ void main()
       const dvec2 product = dvec2(
           value.x * coefficient.x - value.y * coefficient.y,
           value.x * coefficient.y + value.y * coefficient.x);
+      /* Kahan: fold in the residual the previous addition lost, then recover
+       * what this one loses.  Both components are carried independently. */
       const dvec2 adjusted = product - correction;
       const dvec2 next = sum + adjusted;
 

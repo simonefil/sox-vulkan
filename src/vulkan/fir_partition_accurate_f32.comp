@@ -1,3 +1,27 @@
+/* Partitioned overlap-save convolution, accurate FP32.
+ *
+ * The accurate profile targets devices with no shaderFloat64, so it buys back
+ * precision within FP32: the response is split host-side into a high and a
+ * low half whose sum is the FP64 coefficient, each product is evaluated as an
+ * error-free two-product, and the partition sum is carried with a Kahan
+ * correction.  That makes four floating-point terms per partition where the
+ * fast profile has one.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them; this
+ * profile binds four where the plain ones bind three:
+ *   0 working       -- out: this block's accumulated spectrum.
+ *   1 history       -- in: ring of the last `partitions` input spectra.
+ *   2 kernels_high  -- in: high half of the transformed response.
+ *   3 kernels_low   -- in: low half; kernels_high + kernels_low is the FP64
+ *                     coefficient, and the two banks share one index.
+ *
+ * Push constants (partition_parameters_t, 16 bytes): spectrum_bins,
+ * partitions, channels, current_slot.
+ *
+ * Dispatch covers channels * spectrum_bins invocations rounded up to whole
+ * workgroups of 256, hence the bounds test.
+ */
+
 #version 450
 
 layout(local_size_x = 256) in;
@@ -25,6 +49,13 @@ layout(push_constant) uniform Parameters {
   uint current_slot;
 } parameters;
 
+/* Complex product with the rounding error of each real product recovered.
+ *
+ * fma(a, b, -(a * b)) is exactly the term a * b lost to rounding, so each of
+ * the four real products contributes a high word and its residual; the
+ * remaining ((ac - real_high) - bd) is what the final subtraction lost.  The
+ * two halves are summed before returning, which rounds once instead of the
+ * four times the naive form would. */
 vec2 complex_product(vec2 value, vec2 coefficient)
 {
   float ac = value.x * coefficient.x;
@@ -54,9 +85,13 @@ void main()
       const uint history_index = (channel * parameters.partitions + slot) * parameters.spectrum_bins + bin;
       const uint kernel_index = (part * parameters.channels + channel) * parameters.spectrum_bins + bin;
       const vec2 value = history.values[history_index];
+      /* Distributing over the split coefficient: value * (high + low).  Both
+       * halves go through the compensated product, since the low half still
+       * carries enough magnitude for its own rounding to matter. */
       vec2 product =
           complex_product(value, kernels_high.values[kernel_index]) +
           complex_product(value, kernels_low.values[kernel_index]);
+      /* Kahan across partitions, on top of the per-product compensation. */
       vec2 adjusted = product - correction;
       vec2 next = sum + adjusted;
 

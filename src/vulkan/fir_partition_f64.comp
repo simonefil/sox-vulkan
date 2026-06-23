@@ -1,3 +1,24 @@
+/* Partitioned overlap-save convolution, FP64.
+ *
+ * Structurally identical to fir_partition_f32.comp -- same bindings, same
+ * push constants, same indexing, one invocation per (channel, bin) -- with
+ * every buffer widened to dvec2 and the accumulation left uncompensated.
+ * This is the double_precision profile without precise_fp64; the device must
+ * report shaderFloat64, which fir_vulkan.c checks before selecting it.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them:
+ *   0 working  -- out: this block's accumulated spectrum.
+ *   1 history  -- in: ring of the last `partitions` input spectra per channel.
+ *   2 kernels  -- in: the transformed response, partition-major.
+ *
+ * Push constants (partition_parameters_t, 16 bytes): spectrum_bins,
+ * partitions, channels, current_slot -- the last being the ring position of
+ * the newest input block.
+ *
+ * Dispatch covers channels * spectrum_bins invocations rounded up to whole
+ * workgroups of 256, hence the bounds test.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 
@@ -32,6 +53,8 @@ void main()
     dvec2 sum = dvec2(0.0);
 
     for (uint part = 0; part < parameters.partitions; ++part) {
+      /* Partition p pairs with the input block from p blocks ago; the added
+       * `partitions` keeps the unsigned subtraction from wrapping. */
       const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
       const dvec2 value = history.values[(channel * parameters.partitions + slot) * parameters.spectrum_bins + bin];
       const dvec2 coefficient = kernels.values[(part * parameters.channels + channel) * parameters.spectrum_bins + bin];

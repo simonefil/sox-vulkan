@@ -276,6 +276,25 @@ static lsx_vulkan_effect_endpoint_t const *vulkan_endpoint(sox_effect_t const *e
       effp->internal_chain_endpoint : NULL;
 }
 
+/*
+ * The resident segment: a run of consecutive effects that pass audio to one
+ * another on the GPU instead of through the chain's host buffers.
+ *
+ * An effect opts in by installing an endpoint of function pointers.  Which
+ * roles it can play follows from which of them it supplies: a producer takes
+ * host samples and publishes resident blocks, a consumer takes resident
+ * blocks and emits host samples, and a transform does both.  The scheduler
+ * finds the longest run of adjacent effects that fit those roles, drives it
+ * as one unit, and leaves everything else to the ordinary host path.
+ *
+ * Every effect in a segment must be running a single flow: the resident
+ * backends handle all channels at once, and one flow per channel would give
+ * each its own device state.
+ */
+
+/* Whether effect producer can hand resident blocks straight to the one after
+ * it: the shortest possible segment, and the test the search below starts
+ * from. */
 static sox_bool vulkan_resident_pair(sox_effects_chain_t const *chain, size_t producer)
 {
   lsx_vulkan_effect_endpoint_t const *producer_endpoint;
@@ -288,6 +307,15 @@ static sox_bool vulkan_resident_pair(sox_effects_chain_t const *chain, size_t pr
   return producer_endpoint && producer_endpoint->flow_producer && producer_endpoint->drain_producer && consumer_endpoint && consumer_endpoint->consume && chain->effects[producer]->flows == 1u && chain->effects[producer + 1u]->flows == 1u;
 }
 
+/* Find where the segment beginning at producer ends: the last effect that can
+ * consume, or SOX_SIZE_MAX if there is no segment here at all.
+ *
+ * The walk continues through effects that can transform and stops at the
+ * first that cannot, so a segment is a producer, any number of transforms,
+ * and a consumer.  The end is the last consumer seen rather than the last
+ * effect walked, because a segment has to end by returning to host samples --
+ * a trailing transform with nothing to consume its output would leave the
+ * blocks nowhere to go. */
 static size_t vulkan_resident_segment_end(sox_effects_chain_t const *chain, size_t producer)
 {
   lsx_vulkan_effect_endpoint_t const *producer_endpoint;
@@ -312,17 +340,28 @@ static size_t vulkan_resident_segment_end(sox_effects_chain_t const *chain, size
   return end;
 }
 
+/* The scheduler's view of a segment while it runs.
+ *
+ * The arrays are indexed by effect, over the whole chain rather than the
+ * segment, so an effect's index is the same here as everywhere else.  Each
+ * describes one edge -- the link from that effect to the next -- which is
+ * where a block waits between being produced and being taken.
+ */
 typedef struct {
-  lsx_vulkan_resident_buffer_t *outputs;
-  sox_bool *pending;
-  sox_bool *active;
-  sox_bool *draining;
-  sox_bool *done;
-  size_t length;
+  lsx_vulkan_resident_buffer_t *outputs; /* The block waiting on each edge. */
+  sox_bool *pending;             /* Whether that block exists. */
+  sox_bool *active;              /* The effect has more to give without new input. */
+  sox_bool *draining;            /* Its producer has finished; it is flushing. */
+  sox_bool *done;                /* It has finished flushing. */
+  size_t length;                 /* Chain length, the arrays' size. */
   size_t first;
   size_t last;
   sox_bool enabled;
   sox_bool consumer_final_received;
+
+  /* Telemetry for -V3.  The point of the last is that it stays zero: a
+   * segment that round-tripped through the host would not be doing what it
+   * exists to do. */
   uint64_t boundary_input_slices;
   uint64_t transform_calls;
   uint64_t transform_output_slices;
@@ -496,6 +535,25 @@ static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, l
   return status;
 }
 
+/* Drive one transform effect for one step, taking the block waiting on its
+ * input edge and leaving one on its output edge.
+ *
+ * The three shapes a call can take are chosen here.  An effect whose producer
+ * has finished is drained instead of being given input; an effect handed an
+ * empty final block has nothing to do but note the end of its input; and
+ * otherwise the ordinary transform runs, with a NULL input meaning "produce
+ * what you can from what you already hold".
+ *
+ * The checks around the output are what keep the segment's state machine
+ * honest, and each catches a distinct way for an endpoint to be wrong: a
+ * final block before the drain began, a block marked final while the drain
+ * says it is not finished, a drain that claims to be finished without a final
+ * block, and a drain that finishes without producing anything.  All are
+ * reported rather than tolerated: a segment whose end-of-stream markers are
+ * wrong truncates or hangs, and neither is diagnosable further downstream.
+ *
+ * *progress says whether anything at all happened, which is how the caller
+ * tells a segment that is working from one that is stuck. */
 static int flow_vulkan_resident_transform(sox_effects_chain_t *chain, size_t n, vulkan_resident_segment_state_t *state, sox_bool *progress)
 {
   sox_effect_t *effp = chain->effects[n];
@@ -795,6 +853,12 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
     sox_bool resident_progress = sox_false;
     sox_bool resident_segment_handled = sox_false;
 
+    /* A segment is entered only when the scheduler has arrived at its first
+     * effect with work for it, and when no earlier resident activity is
+     * still outstanding: a segment runs as one unit, so it cannot begin
+     * while the previous one is still unwinding.  Segments of two are left
+     * to the simpler producer-consumer path below, which needs none of the
+     * edge bookkeeping. */
     if (!resident_segment.enabled && !resident_pending && !resident_consumer_active && e > 0 && e < chain->length) {
       size_t segment_end = vulkan_resident_segment_end(chain, e);
       size_t available = chain->effects[e - 1u]->oend - chain->effects[e - 1u]->obeg;
@@ -838,6 +902,10 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         }
         lsx_debug_more("resident segment consumer %" PRIuPTR ": input=%d consumed=%d active=%d final=%d output=%" PRIuPTR, e, input != NULL, input_consumed, resident_segment.active[e], resident_segment.consumer_final_received, chain->effects[e]->oend - chain->effects[e]->obeg - osize);
       }
+      /* Having emitted host samples, move on so the rest of the chain takes
+       * them; with work still outstanding here, stay; and once the final
+       * block has been consumed the segment is over, so it is reported and
+       * switched off, and the effect resumes as an ordinary host one. */
       if (chain->effects[e]->oend - chain->effects[e]->obeg > osize)
         ++e;
       else if (resident_segment.pending[input_index] || resident_segment.active[resident_segment.last])
@@ -850,6 +918,12 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       else
         --e;
     }
+    /* A transform in the middle of the segment.  The scheduler moves the way
+     * it does through the host chain: forward when this effect has produced
+     * something, so the next takes it; backward when it has nothing and
+     * wants input.  The block on an edge is what "forward" carries, and an
+     * effect with a block already waiting is skipped rather than run again,
+     * since each edge holds only one. */
     else if (resident_segment.enabled && e > resident_segment.first && e < resident_segment.last) {
       resident_segment_handled = sox_true;
       if (resident_segment.pending[e])

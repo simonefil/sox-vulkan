@@ -581,12 +581,17 @@ void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, 
   #endif
 #endif
 
+/* The quality probe's tap; see vulkan_quality_probe.h.  Both variants of
+ * lsx_save_samples below call it, so a probe sees the same samples whichever
+ * rounding path the build took. */
 static lsx_save_samples_observer_t save_samples_observer;
 static void *save_samples_observer_data;
 
 void lsx_set_save_samples_observer(lsx_save_samples_observer_t observer, void *client_data)
 {
   save_samples_observer = observer;
+  /* Cleared alongside the observer, so a stale pointer cannot be handed to a
+   * later one that was registered without any. */
   save_samples_observer_data = observer ? client_data : NULL;
 }
 

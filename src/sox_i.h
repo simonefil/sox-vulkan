@@ -122,7 +122,13 @@ void lsx_save_samples(sox_sample_t * const dest, double const * const src,
     size_t const n, sox_uint64_t * const clips);
 void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     size_t const n);
+/* Scale samples from libSoX's internal range into +/-1, for a consumer that
+ * wants normalized values.  dest and src may be the same buffer. */
 void lsx_normalize_samples(double * const dest, double const * const src, size_t const n);
+
+/* Whether the internal representation is already normalized.  A build
+ * question rather than a run-time one, so callers ask it to decide whether
+ * a scaling step is needed at all rather than applying one unconditionally. */
 sox_bool lsx_sample_values_are_normalized(void);
 
 #ifdef HAVE_BYTESWAP_H

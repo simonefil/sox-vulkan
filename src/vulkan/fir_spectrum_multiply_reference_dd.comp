@@ -1,3 +1,30 @@
+/* Cascade fusion for the reference profile: multiply two spectra bin by bin.
+ *
+ * Setup only, not part of the steady state.  Convolving a chain of FIR
+ * responses into one composite is a product in the frequency domain, so the
+ * host transforms each response in turn and runs this once per response
+ * after the first, accumulating in place.  Working in double-double is the
+ * point: the composite is what every later block is convolved with, so its
+ * error is paid on every sample.
+ *
+ * Bindings, in the order the fusion path in fir_vulkan.c writes them.  Set 0
+ * is implicit here, as it is the only set:
+ *   0 input_spectrum        -- in: the response just transformed.
+ *   1 accumulated_spectrum  -- in/out: the composite so far, seeded with the
+ *                              first response and multiplied in place.
+ *
+ * Push constant: spectrum_bins, the bin count of both buffers, fft_size / 2
+ * + 1 for the transform size the host chose to hold the composite without
+ * circular aliasing.  There is no channel axis: fusion works on one response
+ * at a time.
+ *
+ * One invocation per bin, dispatched as spectrum_bins rounded up to whole
+ * workgroups of 256, hence the bounds test.  Each invocation touches a single
+ * distinct element of the accumulator, so reading and writing it needs no
+ * synchronisation within the dispatch; the host places a barrier between
+ * successive responses.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 

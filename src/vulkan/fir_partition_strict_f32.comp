@@ -1,3 +1,56 @@
+/* Partitioned overlap-save convolution, strict FP32: the whole block.
+ *
+ * This is the one profile that does not call VkFFT.  Strict asks for more
+ * than FP32 while running on devices that report no shaderFloat64 -- Apple
+ * Silicon through Metal, above all -- and VkFFT's precision ladder has no
+ * FP32-pair mode, so the transform is implemented here on double-single
+ * arithmetic: every value is a vec4 holding a complex pair as (real_high,
+ * real_low, imaginary_high, imaginary_low).
+ *
+ * One pipeline serves three jobs, selected by parameters.operation, because
+ * they share the same bindings and a single pipeline keeps the recorded
+ * command bank to one bind:
+ *
+ *   0  butterfly()             one Cooley-Tukey stage, forward or inverse.
+ *   1  accumulate_partitions() the spectrum multiply and partition sum.
+ *   2  pack_output()           the overlap-save tail, narrowed to vec2.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them; strict
+ * binds six where the other profiles bind three or four:
+ *   0 working_a       -- in/out: ping-pong half A, and where the uploaded
+ *                        block lands.
+ *   1 working_b       -- in/out: ping-pong half B; holds the inverse
+ *                        transform's result, which pack_output reads.
+ *   2 history         -- in: ring of the last `partitions` spectra per
+ *                        channel, filed by the host between the forward
+ *                        transform and the accumulate.
+ *   3 kernels         -- in: the transformed response, partition-major.
+ *   4 twiddles        -- in: fft_size double-single roots of unity, indexed
+ *                        by the forward convention; butterfly() conjugates
+ *                        for the forward direction.
+ *   5 output_samples  -- out: block_frames per channel, high words only.
+ *
+ * Push constants (strict_fp32_parameters_t, 32 bytes):
+ *   operation     which of the three jobs above.
+ *   stage         butterfly only: 0..14, the span doubling per stage.
+ *   partitions    blocks the response was split into.
+ *   channels      channels in the bank.
+ *   current_slot  ring position of the newest input block.
+ *   inverse       butterfly only: direction, and whether to halve.
+ *   source_is_a   butterfly only: which half is the source this stage.
+ *   reserved      padding to the host struct's size; unused.
+ *
+ * The sizes are compile-time constants rather than push constants: strict
+ * uses only FIR_DEFAULT_FFT_SIZE, and fft_bits is its log2, which the bit
+ * reversal below depends on.
+ *
+ * Dispatch differs per operation, always rounded up to whole workgroups of
+ * 256, hence each job's own bounds test: channels * fft_size / 2 butterflies
+ * per stage, channels * fft_size bins for the accumulate, channels *
+ * block_frames frames for the output pass.  The host separates every
+ * dispatch with a barrier, so nothing here synchronises internally.
+ */
+
 #version 450
 
 layout(local_size_x = 256) in;
@@ -41,6 +94,15 @@ const uint fft_size = 32768u;
 const uint block_frames = fft_size / 2u;
 const uint fft_bits = 15u;
 
+/* Double-single primitives.  These are the FP32 counterpart of
+ * double_double.glsl and follow its rules for the same reason: every step is
+ * an error-free transformation whose compensation term is algebraically zero,
+ * so each result lands in a `precise` local before it is used, and no
+ * primitive takes an out parameter.  Without that a compiler free to
+ * reassociate folds the low words away and silently reduces the profile to
+ * plain FP32. */
+
+/* Knuth: the error term is exactly representable, for any two operands. */
 vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
@@ -50,6 +112,8 @@ vec2 two_sum(float left, float right)
   return vec2(high, low);
 }
 
+/* Same, but only valid when |left| >= |right|, which the callers guarantee by
+ * passing a high word first. */
 vec2 quick_two_sum(float left, float right)
 {
   precise float high = left + right;
@@ -71,6 +135,9 @@ vec2 ds_subtract(vec2 left, vec2 right)
   return ds_add(left, -right);
 }
 
+/* fma(x, y, -(x * y)) is exactly what the product lost to rounding; the two
+ * cross terms are the rest of (left.x + left.y)(right.x + right.y) down to the
+ * left.y * right.y term, which is below the pair's precision. */
 vec2 ds_multiply(vec2 left, vec2 right)
 {
   precise float product = left.x * right.x;
@@ -89,6 +156,10 @@ vec4 complex_subtract(vec4 left, vec4 right)
   return vec4(ds_subtract(left.xy, right.xy), ds_subtract(left.zw, right.zw));
 }
 
+/* The textbook four-product form rather than the three-product Karatsuba
+ * variant: the latter trades a multiply for extra additions, and every
+ * addition here is a compensated sequence costing more than the multiply it
+ * saves. */
 vec4 complex_multiply(vec4 left, vec4 right)
 {
   precise vec2 ac = ds_multiply(left.xy, right.xy);
@@ -99,12 +170,19 @@ vec4 complex_multiply(vec4 left, vec4 right)
   return vec4(ds_subtract(ac, bd), ds_add(ad, bc));
 }
 
+/* A decimation-in-time transform reads its input in bit-reversed order and
+ * writes natural order.  The host permutes the block on the way in, mirroring
+ * this with reverse_fft_index() in fir_vulkan.c; accumulate_partitions has to
+ * permute again because it feeds the inverse pass. */
 uint reverse_bits_15(uint value)
 {
   value = bitfieldReverse(value);
   return value >> (32u - fft_bits);
 }
 
+/* A butterfly's two outputs depend on both its inputs, so a stage cannot run
+ * in place: it reads one half and writes the other, and source_is_a says
+ * which way round this stage runs.  The host alternates it per stage. */
 vec4 load_working(uint index)
 {
   return parameters.source_is_a != 0u ? working_a.values[index] : working_b.values[index];
@@ -118,6 +196,13 @@ void store_working(uint index, vec4 value)
     working_a.values[index] = value;
 }
 
+/* One Cooley-Tukey stage, one invocation per butterfly per channel.
+ *
+ * Channels are laid out one whole transform apart and never interact, so the
+ * channel index only picks a base offset.  Within a channel the butterflies
+ * of a stage partition the transform into groups of `span`, each pairing an
+ * element with the one half_span later; span doubles per stage, so fifteen
+ * stages cover the whole 32768-point transform. */
 void butterfly()
 {
   const uint index = gl_GlobalInvocationID.x;
@@ -135,6 +220,8 @@ void butterfly()
     const uint twiddle_index = within * fft_size / span;
     vec4 twiddle = twiddles.values[twiddle_index];
 
+    /* The table holds the inverse convention, so the forward direction takes
+     * the conjugate.  One table serves both, which is the point. */
     if (parameters.inverse == 0u)
       twiddle.zw = -twiddle.zw;
     precise vec4 even = load_working(first);
@@ -142,6 +229,9 @@ void butterfly()
     precise vec4 first_value = complex_add(even, odd);
     precise vec4 second_value = complex_subtract(even, odd);
 
+    /* The 1/N of the inverse transform, spread as a halving per stage rather
+     * than applied once at the end: fifteen halvings are exact in binary
+     * floating point and keep the intermediate magnitudes in range. */
     if (parameters.inverse != 0u) {
       first_value *= 0.5;
       second_value *= 0.5;
@@ -151,6 +241,14 @@ void butterfly()
   }
 }
 
+/* The spectrum multiply and partition sum, one invocation per bin per
+ * channel.  Unlike the other profiles this walks the full fft_size bins
+ * rather than the half-spectrum, since the transform above is a plain
+ * complex one with no real-input packing.
+ *
+ * The result is written bit-reversed into working_a, which is the input the
+ * inverse pass wants; the host's next dispatch is stage 0 of that pass with
+ * source_is_a set. */
 void accumulate_partitions()
 {
   const uint index = gl_GlobalInvocationID.x;
@@ -161,6 +259,8 @@ void accumulate_partitions()
     precise vec4 sum = vec4(0.0);
 
     for (uint part = 0u; part < parameters.partitions; ++part) {
+      /* Partition p pairs with the input block from p blocks ago; the added
+       * `partitions` keeps the unsigned subtraction from wrapping. */
       const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
       const vec4 value = history.values[(channel * parameters.partitions + slot) * fft_size + bin];
       const vec4 coefficient = kernels.values[(part * parameters.channels + channel) * fft_size + bin];
@@ -171,6 +271,15 @@ void accumulate_partitions()
   }
 }
 
+/* The overlap-save tail: the second half of each channel's inverse transform
+ * is the aliasing-free part, so the first block_frames are discarded.
+ *
+ * The vec4 narrows to the .xy half, which is the real part's double-single
+ * pair: the imaginary half is rounding noise, as it is in any real
+ * convolution, while both words of the real part are kept.  That is why this
+ * profile's resident format is f32x2 and not f32 -- consumers downstream are
+ * still working in double-single, and resident_format() in fir_vulkan.c
+ * reports it as such. */
 void pack_output()
 {
   const uint index = gl_GlobalInvocationID.x;

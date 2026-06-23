@@ -1,3 +1,36 @@
+/* Partitioned overlap-save convolution, fast profile: plain FP32.
+ *
+ * One invocation owns one (channel, bin) pair and sums that bin's product
+ * across every partition of the response, so the whole partition loop lives
+ * here and a block costs one dispatch however long the response is.
+ *
+ * Bindings match the order create_partition_pipeline() writes in
+ * fir_vulkan.c; nothing checks the two against each other.
+ *
+ *   0 working  -- out: this block's accumulated spectrum, one bin per
+ *                 invocation, later inverse-transformed in place.
+ *   1 history  -- in: ring of the last `partitions` input spectra per
+ *                 channel, written by the host before the dispatch.
+ *   2 kernels  -- in: the transformed response, `partitions` spectra per
+ *                 channel, uploaded once at startup.
+ *
+ * Push constants (partition_parameters_t, 16 bytes):
+ *   spectrum_bins  bins per spectrum, fft_size / 2 + 1.
+ *   partitions     blocks the response was split into.
+ *   channels       channels in the bank.
+ *   current_slot   history slot holding the newest block; the only field
+ *                  that changes from block to block.
+ *
+ * Dispatch covers channels * spectrum_bins invocations rounded up to whole
+ * workgroups, hence the bounds test; local_size_x must stay in step with
+ * FIR_LOCAL_SIZE.
+ *
+ * history is indexed (channel, slot, bin) and kernels (partition, channel,
+ * bin): the two banks have the same extent but transpose their outer axes,
+ * because history rotates per channel while kernels are uploaded partition
+ * by partition.
+ */
+
 #version 450
 
 layout(local_size_x = 256) in;
@@ -31,10 +64,16 @@ void main()
     vec2 sum = vec2(0.0);
 
     for (uint part = 0; part < parameters.partitions; ++part) {
+      /* Partition p pairs with the input block from p blocks ago, so the ring
+       * is walked backwards from current_slot; the added `partitions` keeps
+       * the unsigned subtraction from wrapping below zero. */
       const uint slot = (parameters.current_slot + parameters.partitions - part) % parameters.partitions;
       const vec2 value = history.values[(channel * parameters.partitions + slot) * parameters.spectrum_bins + bin];
       const vec2 coefficient = kernels.values[(part * parameters.channels + channel) * parameters.spectrum_bins + bin];
 
+      /* Complex multiply-accumulate, straight FP32: this profile buys speed
+       * with rounding, and the accurate and precise variants differ from it
+       * only in how they compensate here. */
       sum += vec2(value.x * coefficient.x - value.y * coefficient.y, value.x * coefficient.y + value.y * coefficient.x);
     }
     working.values[index] = sum;

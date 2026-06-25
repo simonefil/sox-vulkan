@@ -1,5 +1,48 @@
 /* FP64 cubic interpolation for the SoX quick rate stage. */
 
+/* The device-side cubic_stage_fn(): an arbitrary-ratio resampler that fits a
+ * cubic through four neighbouring input samples and evaluates it at the
+ * fractional position each output frame lands on.  The polynomial is the same
+ * one rate.c computes on the CPU, coefficient for coefficient.
+ *
+ * Bindings, in the order rate_cubic_vulkan.c writes them:
+ *   0 input_samples   -- in: interleaved input frames.
+ *   1 output_samples  -- out: interleaved output frames.
+ *
+ * Push constants (parameters_t, 32 bytes):
+ *   output_frames             frames to produce, worked out by the host from
+ *                             the input it has.
+ *   step_integer              whole part of the resampling step.
+ *   step_fraction             fractional part, 0.32 fixed point.  The step is
+ *                             32.32 and arrives split because GLSL has no
+ *                             64-bit integer without an extension.
+ *   phase_fraction            where in the current input frame this batch
+ *                             starts, 0.32.  Carried between calls by the
+ *                             host, which is what keeps the phase exact over
+ *                             an arbitrarily long stream.
+ *   channels                  channels, and the interleaved frame stride.
+ *   padding0..2               to the host struct's size; unused.
+ *
+ * Position is accumulated in fixed point, not in floating point: an output
+ * frame's position is phase_fraction + output_frame * step, and computing it
+ * that way makes each frame independent of the ones before it while staying
+ * bit-exact however long the stream runs.  umulExtended gives the 64-bit
+ * product of the fractional part, and the carry out of the fractional sum
+ * adds into the integer part.
+ *
+ * The +1 on input_frame is the one frame of history the cubic needs before
+ * its window; the host reserves that and the two after it as pre_post, so the
+ * reads at input_frame - 1 and input_frame + 2 are always in bounds.
+ *
+ * Dispatch is two-dimensional: x covers output_frames rounded up to whole
+ * workgroups of 128, y is one invocation per channel, hence both bounds
+ * tests.  Each invocation writes one distinct output frame.
+ *
+ * Plain FP64, but with `precise` on every intermediate: the coefficients are
+ * differences of neighbouring samples, so they cancel heavily, and letting a
+ * compiler reassociate the Horner evaluation would change the result.
+ */
+
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 
@@ -55,6 +98,8 @@ void main()
   sample_0 = input_samples[input_frame * parameters.channels + channel];
   sample_1 = input_samples[(input_frame + 1u) * parameters.channels + channel];
   sample_2 = input_samples[(input_frame + 2u) * parameters.channels + channel];
+  /* b, a, c in that order, matching rate.c: b is the second difference, a the
+   * third once b is removed, and c what is left of the first difference. */
   b = 0.5 * (sample_1 + sample_m1) - sample_0;
   a = (1.0 / 6.0) * (sample_2 - sample_1 + sample_m1 - sample_0 - 4.0 * b);
   c = sample_1 - sample_0 - a - b;

@@ -1,3 +1,26 @@
+/* Double-single cubic interpolation for the strict profile.
+ *
+ * The strict profile's member of the cubic family; rate_cubic_f64.comp
+ * carries the family's rationale.  The arithmetic is the same compensated
+ * float-float evaluation the accurate profile uses, but the pairs are the
+ * interface rather than an internal detail: samples arrive as pairs from the
+ * stage before and leave as pairs for the stage after, so nothing is narrowed
+ * at either end and the low word survives the whole chain.
+ *
+ * Bindings, in the order rate_cubic_vulkan.c writes them:
+ *   0 input_samples   -- in: interleaved input frames, double-single pairs.
+ *   1 output_samples  -- out: interleaved output frames, pairs.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, step_integer,
+ * step_fraction, phase_fraction, channels, padding0..2.  The step and phase
+ * are 32.32 and 0.32 fixed point.  The frame strides count vec2 elements.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.  The +1 on
+ * input_frame is the history the cubic window needs, reserved by the host as
+ * pre_post along with the two frames after it.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;
@@ -21,6 +44,13 @@ layout(push_constant) uniform Parameters {
   uint padding2;
 } parameters;
 
+/* Double-single primitives, the FP32 counterpart of double_double.glsl and
+ * subject to its rules for the same reason: every compensation term is
+ * algebraically zero, so each result lands in a `precise` local and no
+ * primitive takes an out parameter.  Otherwise a reassociating compiler folds
+ * the low words away and the profile silently becomes the fast one. */
+
+/* Knuth: the error term is exactly representable, for any two operands. */
 vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
@@ -51,6 +81,12 @@ vec2 multiply_ds(vec2 left, vec2 right)
   return two_sum(product, residual);
 }
 
+/* Convert the 0.32 fixed-point position to a pair without losing a bit.
+ *
+ * A single float holds 24 significand bits, so converting all 32 at once
+ * would round away the low eight -- and those are what keeps the phase exact
+ * over a long stream.  Splitting at 16 bits puts each half well inside what a
+ * float represents exactly, and the two scales place them correctly. */
 vec2 fraction_ds(uint fraction)
 {
   const uint high = fraction >> 16u;
@@ -86,6 +122,9 @@ void main()
   a = add_ds(a, sample_m1);
   a = subtract_ds(a, sample_0);
   a = subtract_ds(a, multiply_ds(b, vec2(4.0, 0.0)));
+  /* 1/6 as a double-single pair: the high word is the nearest float and the
+   * low word the remainder.  Written out rather than computed, since dividing
+   * by 6 here would round to the high word and undo the point. */
   a = multiply_ds(a, vec2(0.1666666716337204, -4.967053879312289e-9));
   const vec2 c = subtract_ds(subtract_ds(subtract_ds(sample_1, sample_0), a), b);
   const vec2 output_value = add_ds(multiply_ds(add_ds(multiply_ds(add_ds(multiply_ds(a, x), b), x), c), x), sample_0);

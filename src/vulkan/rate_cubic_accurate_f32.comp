@@ -1,5 +1,30 @@
 /* Compensated FP32 cubic interpolation for the accurate profile. */
 
+/* The accurate profile's member of the cubic family; rate_cubic_f64.comp
+ * carries the family's rationale.  The device has no shaderFloat64, so the
+ * polynomial is evaluated in float-float pairs instead: the coefficients are
+ * differences of neighbouring samples and cancel heavily, which is exactly
+ * where plain FP32 loses the most.
+ *
+ * Samples cross the interface as plain floats and are widened to pairs with a
+ * zero low word; the result is narrowed back with one final add.  Only the
+ * arithmetic in between is compensated, which is what distinguishes this from
+ * the strict profile, where the pairs are the interface.
+ *
+ * Bindings, in the order rate_cubic_vulkan.c writes them:
+ *   0 input_samples   -- in: interleaved input frames, plain floats.
+ *   1 output_samples  -- out: interleaved output frames, plain floats.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, step_integer,
+ * step_fraction, phase_fraction, channels, padding0..2.  The step and phase
+ * are 32.32 and 0.32 fixed point.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.  The +1 on
+ * input_frame is the history the cubic window needs, reserved by the host as
+ * pre_post along with the two frames after it.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;
@@ -23,6 +48,13 @@ layout(push_constant) uniform Parameters {
   uint padding2;
 } parameters;
 
+/* Float-float primitives, the FP32 counterpart of double_double.glsl and
+ * subject to its rules for the same reason: every compensation term is
+ * algebraically zero, so each result lands in a `precise` local and no
+ * primitive takes an out parameter.  Otherwise a reassociating compiler folds
+ * the low words away and the profile silently becomes the fast one. */
+
+/* Knuth: the error term is exactly representable, for any two operands. */
 vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
@@ -53,6 +85,12 @@ vec2 multiply_float_float(vec2 left, vec2 right)
   return two_sum(product, residual);
 }
 
+/* Convert the 0.32 fixed-point position to a pair without losing a bit.
+ *
+ * A single float holds 24 significand bits, so converting all 32 at once
+ * would round away the low eight -- and those are what keeps the phase exact
+ * over a long stream.  Splitting at 16 bits puts each half well inside what a
+ * float represents exactly, and the two scales place them correctly. */
 vec2 fraction_float_float(uint fraction)
 {
   const uint high = fraction >> 16u;
@@ -93,6 +131,10 @@ void main()
   a = add_float_float(a, sample_m1);
   a = subtract_float_float(a, sample_0);
   a = subtract_float_float(a, multiply_float_float(b, vec2(4.0, 0.0)));
+  /* 1/6 as a float-float pair: the high word is the nearest float and the low
+   * word the remainder, so the whole constant carries roughly FP64 accuracy.
+   * Written out rather than computed, since dividing by 6 here would round to
+   * the high word and undo the point. */
   a = multiply_float_float(a, vec2(0.1666666716337204, -4.967053879312289e-9));
   const vec2 c = subtract_float_float(subtract_float_float(subtract_float_float(sample_1, sample_0), a), b);
   const vec2 value = add_float_float(
@@ -106,5 +148,7 @@ void main()
           x),
       sample_0);
 
+  /* Narrow back to one float: the pair existed to keep the cancellation in
+   * the coefficients from reaching the result, and the consumer reads FP32. */
   output_samples[output_frame * parameters.channels + channel] = value.x + value.y;
 }

@@ -1,3 +1,32 @@
+/* Gather resident double-single PCM into the interleaved Vulkan rate stream.
+ *
+ * The strict profile's member of the stream-append family;
+ * rate_stream_append_f64.comp carries the family's rationale.  Samples stay
+ * double-single pairs through the gather.
+ *
+ * Quantisation collapses the pair, deliberately: the two words are summed
+ * before rounding so the rounding decision uses the precision the pair was
+ * carrying, and the result is stored with a zero low word.  The sum itself
+ * rounds to FP32 first, which is as close to SoX's integer grid as this
+ * profile's element type reaches: above 2^24 the grid is coarser than the
+ * format, and no arrangement of the pair changes that.
+ *
+ * Bindings, in the order append_resident_stream() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples    -- in: the producer's buffer, bound whole; the block's
+ *                         position arrives as input_base_element.
+ *   1 stream_samples   -- out: the stream buffer, interleaved.
+ *   2 clipped_samples  -- in/out: per-stage clip counters, written atomically.
+ *
+ * Push constants (stream_append_parameters_t, 32 bytes): input_base_element,
+ * output_first_frame, frames, input_frame_stride, input_channel_stride,
+ * channels, quantize_sox_sample, clip_index.  The strides count vec2
+ * elements, not floats.
+ *
+ * Dispatch is two-dimensional, x over frames in workgroups of 128 and y one
+ * invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;

@@ -1,5 +1,26 @@
 /* Select a decimated FP64x2 rate-stage output without discarding its low part. */
 
+/* The reference profile's member of the select family; rate_select_f64.comp
+ * carries the family's rationale.  Every sample is a double-double pair, and
+ * the normalisation goes through multiply_dd_scalar: 1/2147483647 is not
+ * representable, so its product carries a residual the pair has to keep, and
+ * dropping it would put a plain FP64 rounding back into the one profile whose
+ * job is not to have any.
+ *
+ * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples   -- in: the filtered block, planar.
+ *   1 output_samples  -- out: the decimated block, interleaved.
+ *
+ * Push constants (select_parameters_t, 32 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride, channels, normalize,
+ * padding1, padding2.  first_input_frame and input_step together carry the
+ * decimation phase across block boundaries.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 

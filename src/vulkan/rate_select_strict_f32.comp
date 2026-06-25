@@ -1,3 +1,25 @@
+/* Select a decimated double-single rate-stage output.
+ *
+ * The strict profile's member of the select family; rate_select_f64.comp
+ * carries the family's rationale.  Samples are double-single pairs, so the
+ * normalisation goes through multiply_double_single rather than a plain
+ * multiply: 1/2147483647 is not representable in FP32 either, and the pair
+ * exists precisely to hold what that rounding would otherwise lose.
+ *
+ * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples   -- in: the filtered block, planar, double-single pairs
+ *                        as fir_partition_strict_f32.comp emitted them.
+ *   1 output_samples  -- out: the decimated block, interleaved, still pairs.
+ *
+ * Push constants (select_parameters_t, 32 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride, channels, normalize,
+ * padding1, padding2.  The strides count vec2 elements, not floats.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;
@@ -23,6 +45,13 @@ layout(push_constant) uniform Parameters {
 
 const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
+/* Scale a double-single pair by a plain float, carrying the low word.
+ *
+ * fma(value.x, scale, -product) is exactly what the high product lost to
+ * rounding; adding value.y * scale gives the residual, and the last two steps
+ * renormalise.  The `precise` locals are what keep a reassociating compiler
+ * from deleting terms that are algebraically zero -- see double_double.glsl,
+ * which states the same rules for the FP64 pairs. */
 vec2 multiply_double_single(vec2 value, float scale)
 {
   precise float product = value.x * scale;

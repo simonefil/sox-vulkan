@@ -1,5 +1,33 @@
 /* Gather resident FP64x2 PCM without collapsing the compensated low part. */
 
+/* The reference profile's member of the stream-append family;
+ * rate_stream_append_f64.comp carries the family's rationale.  Samples stay
+ * double-double pairs through the gather, which is the whole point: the pair
+ * survives unless quantisation is asked for.
+ *
+ * Quantisation is the one place the pair must collapse, and it collapses
+ * deliberately.  An integer sample is exactly representable in a double, so
+ * the low word becomes zero rather than being dropped, and adding the two
+ * words before rounding is what makes the rounding decision use the full
+ * precision the pair was carrying.  double_double.glsl is not included here
+ * because that sum is meant to round.
+ *
+ * Bindings, in the order append_resident_stream() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples    -- in: the producer's buffer, bound whole; the block's
+ *                         position arrives as input_base_element.
+ *   1 stream_samples   -- out: the stream buffer, interleaved.
+ *   2 clipped_samples  -- in/out: per-stage clip counters, written atomically.
+ *
+ * Push constants (stream_append_parameters_t, 32 bytes): input_base_element,
+ * output_first_frame, frames, input_frame_stride, input_channel_stride,
+ * channels, quantize_sox_sample, clip_index.  The strides count dvec2
+ * elements, not doubles.
+ *
+ * Dispatch is two-dimensional, x over frames in workgroups of 128 and y one
+ * invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 

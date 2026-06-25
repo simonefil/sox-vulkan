@@ -8,6 +8,44 @@
  * your option) any later version.
  */
 
+/* The decimation half of a rate stage: the FIR has filtered the whole block,
+ * and this keeps every input_step'th frame of it.
+ *
+ * It also transposes.  The FIR's output is planar, one channel after another,
+ * while a resident consumer or a download wants interleaved frames, so the
+ * read is strided by channel and the write is not.
+ *
+ * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples   -- in: the filtered block, planar, bound at the
+ *                        producer's own offset.
+ *   1 output_samples  -- out: the decimated block, interleaved.
+ *
+ * Push constants (select_parameters_t, 32 bytes):
+ *   output_frames         frames to produce; the host has already worked out
+ *                         how many survive the decimation.
+ *   first_input_frame     offset of the first kept frame.  Together with
+ *                         input_step this carries the decimation phase across
+ *                         block boundaries, which is why neither is derived
+ *                         here.
+ *   input_step            decimation factor.
+ *   input_channel_stride  elements between channels of the planar input.
+ *   channels              channels in the block, and the interleaved output's
+ *                         frame stride.
+ *   normalize             scale SoX's integer sample domain to unity.  The
+ *                         host sets it only when the consumer wants
+ *                         normalized samples and the build's sample type is
+ *                         not already normalized.
+ *   padding1, padding2    to the host struct's size; unused.
+ *
+ * Dispatch is two-dimensional: x covers output_frames rounded up to whole
+ * workgroups of 128, y is one invocation per channel, hence both bounds
+ * tests.  Each invocation writes one distinct output element.
+ *
+ * Plain FP64, no compensation: the only arithmetic is one multiply by a
+ * constant.
+ */
+
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 

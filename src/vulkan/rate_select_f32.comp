@@ -3,6 +3,24 @@
  * buffer and write an interleaved resident stream for the next GPU node.
  */
 
+/* The fast profile's member of the select family; rate_select_f64.comp
+ * carries the family's rationale.  One float per sample and a plain multiply
+ * for the normalisation.
+ *
+ * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples   -- in: the filtered block, planar.
+ *   1 output_samples  -- out: the decimated block, interleaved.
+ *
+ * Push constants (select_parameters_t, 32 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride, channels, normalize,
+ * padding1, padding2.  first_input_frame and input_step together carry the
+ * decimation phase across block boundaries.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;

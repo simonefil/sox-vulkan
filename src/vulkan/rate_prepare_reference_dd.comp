@@ -1,5 +1,30 @@
 /* Prepare overlap-save input while preserving resident FP64x2 samples. */
 
+/* The reference profile's member of the prepare family; rate_prepare_f64.comp
+ * carries the family's rationale.  Every sample is a double-double pair, so
+ * the up_factor gain goes through multiply_dd_scalar rather than a plain
+ * multiply: the factor is a small integer and therefore exact, but the
+ * product's low word still has to be carried or the pair silently collapses
+ * to its high word.  double_double.glsl states the rules that keep the
+ * compiler from folding it away.
+ *
+ * Bindings, in the order record_resident_prepare() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples     -- in: the producer's resident block, bound at its
+ *                          own offset and read through its own strides.
+ *   1 prepared_samples  -- out: the FIR's prepared input, planar, two blocks
+ *                          per channel.
+ *   2 previous_samples  -- in/out: the overlap carried between blocks.
+ *
+ * Push constants (prepare_parameters_t, 32 bytes): block_frames,
+ * input_frames, input_frame_stride, input_channel_stride,
+ * prepared_channel_stride, up_factor, channels, padding.
+ *
+ * Dispatch is two-dimensional, x over block_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests; an invocation owns
+ * one (channel, frame), so nothing here synchronises.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 

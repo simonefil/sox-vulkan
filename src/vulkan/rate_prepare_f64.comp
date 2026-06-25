@@ -7,6 +7,46 @@
  * your option) any later version.
  */
 
+/* The device-side counterpart of prepare_stage_input() in rate.c: the
+ * upsampler's zero-stuffing and the overlap-save history in one pass, so a
+ * resident chain never brings the block back to the host.
+ *
+ * Bindings, in the order record_resident_prepare() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples     -- in: the producer's resident block, read through
+ *                          its own strides.  The descriptor is bound at the
+ *                          buffer's offset, so indices here are relative to
+ *                          the block, not the allocation.
+ *   1 prepared_samples  -- out: the FIR's prepared input, planar, two blocks
+ *                          per channel.
+ *   2 previous_samples  -- in/out: the last block's samples per channel; read
+ *                          as this block's first half, then overwritten for
+ *                          the next.
+ *
+ * Push constants (prepare_parameters_t, 32 bytes):
+ *   block_frames             frames per block, and the per-channel stride of
+ *                            previous_samples.
+ *   input_frames             valid frames in the input; past it, zero.
+ *   input_frame_stride       elements between consecutive input frames.
+ *   input_channel_stride     elements between input channels.
+ *   prepared_channel_stride  elements between prepared channels.
+ *   up_factor                interpolation factor; frames off a multiple of
+ *                            it are the inserted zeros.
+ *   channels                 channels in the block.
+ *   padding                  to the host struct's size; unused.
+ *
+ * Dispatch is two-dimensional: x covers block_frames rounded up to whole
+ * workgroups of 128, y is one invocation per channel, hence both bounds
+ * tests.  An invocation owns one (channel, frame) outright, so the
+ * read-then-write of previous_samples needs no synchronisation.
+ *
+ * The up_factor gain restores the energy zero-stuffing removes, exactly as
+ * the CPU path does.
+ *
+ * Plain FP64 throughout, for the accurate and strict profiles on a device
+ * that reports shaderFloat64.
+ */
+
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 

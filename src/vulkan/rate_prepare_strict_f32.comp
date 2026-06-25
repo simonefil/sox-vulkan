@@ -1,3 +1,43 @@
+/* Prepare an overlap-save FIR block from resident double-single samples.
+ *
+ * The strict profile's member of the prepare family; rate_prepare_f64.comp
+ * carries the family's rationale.  Two things set this one apart, both
+ * because strict runs its own transform in fir_partition_strict_f32.comp
+ * instead of calling VkFFT:
+ *
+ *   - the prepared block is complex, vec4 per element as (real_high,
+ *     real_low, imaginary_high, imaginary_low), so the imaginary half is
+ *     written zero here;
+ *   - it is written in bit-reversed order, which is what a decimation-in-time
+ *     transform reads.  This is the same permutation the host applies with
+ *     reverse_fft_index() on the non-resident path, done here so the block
+ *     never leaves the device.
+ *
+ * The 15 of reverse_bits_15 is log2 of the only transform size strict uses,
+ * so block_frames is 16384 and the two halves of the block land at
+ * reverse(frame) and reverse(frame + block_frames).
+ *
+ * Bindings, in the order record_resident_prepare() in rate_vulkan.c writes
+ * them:
+ *   0 input_samples     -- in: resident double-single pairs, bound at the
+ *                          block's own offset and read through its strides.
+ *   1 prepared_samples  -- out: the FIR's prepared input, complex and
+ *                          bit-reversed, planar per channel.
+ *   2 previous_samples  -- in/out: the overlap carried between blocks, still
+ *                          real pairs and in natural order.
+ *
+ * Push constants (prepare_parameters_t, 32 bytes): block_frames,
+ * input_frames, input_frame_stride, input_channel_stride,
+ * prepared_channel_stride, up_factor, channels, padding.  The strides count
+ * elements of their own buffer's type, so prepared_channel_stride is in vec4
+ * where input_channel_stride is in vec2.
+ *
+ * Dispatch is two-dimensional, x over block_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.  The bit reversal is
+ * a permutation, so invocations still write disjoint elements and nothing
+ * here synchronises.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;
@@ -25,11 +65,19 @@ layout(push_constant) uniform Parameters {
   uint padding;
 } parameters;
 
+/* 17 is 32 - 15, so this keeps the low fifteen bits reversed. */
 uint reverse_bits_15(uint value)
 {
   return bitfieldReverse(value) >> 17u;
 }
 
+/* Scale a double-single pair by a plain float, carrying the low word.
+ *
+ * fma(value.x, scale, -product) is exactly what the high product lost to
+ * rounding; adding value.y * scale to it gives the residual, and the final
+ * pair of steps renormalises.  Each result lands in a `precise` local for the
+ * reason double_double.glsl gives: the compensation terms are algebraically
+ * zero, so a compiler free to reassociate would delete them. */
 vec2 multiply_double_single(vec2 value, float scale)
 {
   precise float product = value.x * scale;

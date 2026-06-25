@@ -1,5 +1,25 @@
 /* Double-double cubic interpolation for the reference profile. */
 
+/* The reference profile's member of the cubic family; rate_cubic_f64.comp
+ * carries the family's rationale.  Samples arrive and leave as double-double
+ * pairs and every step of the polynomial is a compensated operation from
+ * double_double.glsl, which states the rules that keep the compiler from
+ * folding the low words away.
+ *
+ * Bindings, in the order rate_cubic_vulkan.c writes them:
+ *   0 input_samples   -- in: interleaved input frames, double-double pairs.
+ *   1 output_samples  -- out: interleaved output frames, pairs.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, step_integer,
+ * step_fraction, phase_fraction, channels, padding0..2.  The step and phase
+ * are 32.32 and 0.32 fixed point.  The frame strides count dvec2 elements.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.  The +1 on
+ * input_frame is the history the cubic window needs, reserved by the host as
+ * pre_post along with the two frames after it.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 
@@ -43,6 +63,10 @@ void main()
   fraction = parameters.phase_fraction + product_low;
   carry = fraction < product_low ? 1u : 0u;
   input_frame = 1u + output_frame * parameters.step_integer + product_high + carry;
+  /* The whole 0.32 fraction fits in a double's 53 significand bits and the
+   * scale is a power of two, so this conversion is exact and the low word is
+   * genuinely zero.  The FP32 profiles have to split the fraction in halves
+   * to say the same thing. */
   precise double x_high = double(fraction) * (1.0 / 4294967296.0);
   const dvec2 x = dvec2(x_high, 0.0);
   const dvec2 sample_m1 = input_samples.values[(input_frame - 1u) * parameters.channels + channel];
@@ -55,6 +79,9 @@ void main()
   a = add_dd(a, sample_m1);
   a = subtract_dd(a, sample_0);
   a = subtract_dd(a, multiply_dd(b, dvec2(4.0, 0.0)));
+  /* 1/6 as a double-double pair: the high word is the nearest double and the
+   * low word the remainder.  Written out rather than computed, since dividing
+   * by 6 here would round to the high word and undo the point. */
   a = multiply_dd(a, dvec2(0.16666666666666666, 9.2518585385429707e-18));
   const dvec2 c = subtract_dd(subtract_dd(subtract_dd(sample_1, sample_0), a), b);
   const dvec2 value = add_dd(multiply_dd(add_dd(multiply_dd(add_dd(multiply_dd(a, x), b), x), c), x), sample_0);

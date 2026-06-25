@@ -1,5 +1,25 @@
 /* FP32 cubic interpolation for the SoX quick rate stage. */
 
+/* The fast profile's member of the cubic family; rate_cubic_f64.comp carries
+ * the family's rationale.  Plain FP32 with no `precise` and an fma-folded
+ * Horner evaluation: this profile is the one that wants the compiler to
+ * contract, and the cancellation in the coefficients is accepted.
+ *
+ * Bindings, in the order rate_cubic_vulkan.c writes them:
+ *   0 input_samples   -- in: interleaved input frames.
+ *   1 output_samples  -- out: interleaved output frames.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, step_integer,
+ * step_fraction, phase_fraction, channels, padding0..2.  The step and phase
+ * are 32.32 and 0.32 fixed point, so the position stays exact however long
+ * the stream runs even though the samples do not.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.  The +1 on
+ * input_frame is the history the cubic window needs, reserved by the host as
+ * pre_post along with the two frames after it.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;

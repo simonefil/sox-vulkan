@@ -7,6 +7,26 @@
  * your option) any later version.
  */
 
+/* The fast profile's member of the polyphase family; rate_polyphase_f64.comp
+ * carries the family's rationale.  Plain FP32 throughout, with the
+ * accumulation rounding at every tap: that is what the profile buys speed
+ * with, and it is why the accurate and strict variants exist for devices that
+ * cannot fall back to FP64.
+ *
+ * Bindings, in the order rate_polyphase_vulkan.c writes them:
+ *   0 coefficients    -- in: the response, tap major, phase minor.
+ *   1 input_samples   -- in: interleaved input frames.
+ *   2 output_samples  -- out: interleaved output frames.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, normalize, symmetric_presum.  The
+ * counter's quotient by phase_count is the input frame the window starts on
+ * and its remainder is the sub-filter, which is how one counter carries both.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;
@@ -48,6 +68,13 @@ void main()
   uint phase = position % parameters.phase_count;
   float scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   float sum = 0.0;
+
+  /* The symmetric form: a linear-phase response has coefficient[tap] equal to
+   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
+   * before the one multiply, halving them.  The host only sets this for a
+   * response that really is symmetric, and it also requires phase_count == 1
+   * and an odd tap count, which is why the coefficient index has no phase
+   * term.  The zero test skips the exact zeros of a half-band response. */
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
 

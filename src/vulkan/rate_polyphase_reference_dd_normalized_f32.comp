@@ -1,5 +1,36 @@
 /* Double-double polyphase accumulation with normalized FP32 output. */
 
+/* The reference profile's narrowing variant of rate_polyphase_f64.comp: the
+ * accumulation is double-double, the output binding is plain FP32.  The host
+ * selects it when the consumer wants normalized FP32 samples out of a
+ * reference-profile stage, which the reference shader cannot produce -- its
+ * output binding is typed dvec2.
+ *
+ * The pair survives the whole accumulation and the normalisation, and
+ * collapses only at the final store: multiply_dd_scalar keeps the residual of
+ * a scale that is not representable, the two words are added, and the sum is
+ * narrowed once.  Rounding twice, or scaling after narrowing, would put back
+ * the error the profile exists to avoid.
+ *
+ * SOX_SAMPLE_SCALE is applied unconditionally and the normalize push constant
+ * is ignored, the same divergence rate_polyphase_normalized_f32.comp
+ * describes; see the phase 1 notes.
+ *
+ * Bindings, in the order rate_polyphase_vulkan.c writes them:
+ *   0 coefficients    -- in: the response, tap major, phase minor,
+ *                        double-double pairs.
+ *   1 input_samples   -- in: interleaved input frames, pairs.
+ *   2 output_samples  -- out: interleaved output frames, plain FP32.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, normalize (unused here),
+ * symmetric_presum.  The counter's quotient by phase_count is the input frame
+ * and its remainder the sub-filter; see the FP64 shader.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
 
@@ -45,6 +76,12 @@ void main()
   const uint phase = position % parameters.phase_count;
   dvec2 sum = dvec2(0.0);
 
+  /* The symmetric form: a linear-phase response has coefficient[tap] equal to
+   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
+   * before the one multiply, halving them.  The host only sets this for a
+   * response that really is symmetric, and it also requires phase_count == 1
+   * and an odd tap count, which is why the coefficient index has no phase
+   * term. */
   if (parameters.symmetric_presum != 0u) {
     const uint center = parameters.taps / 2u;
     const dvec2 center_coefficient = coefficients.values[center];
@@ -54,6 +91,8 @@ void main()
     for (uint tap = 0u; tap < center; ++tap) {
       const dvec2 coefficient = coefficients.values[tap];
 
+      /* Both words, since a pair is zero only when both are; the half-band
+       * taps this skips are exactly zero by construction. */
       if (coefficient.x != 0.0 || coefficient.y != 0.0) {
         const dvec2 pair = add_dd(
             input_samples.values[

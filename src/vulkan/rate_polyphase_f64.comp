@@ -7,6 +7,42 @@
  * your option) any later version.
  */
 
+/* The direct-form rational resampler: no transform and no history bank, which
+ * is what wins for the short responses a rate plan's intermediate stages use.
+ * rate_vulkan.c's FIR stage is the other half of that trade.
+ *
+ * Bindings, in the order rate_polyphase_vulkan.c writes them:
+ *   0 coefficients    -- in: the response, uploaded once at creation.  Tap
+ *                        major, phase minor, so one phase's taps are
+ *                        phase_count apart.
+ *   1 input_samples   -- in: interleaved input frames.
+ *   2 output_samples  -- out: interleaved output frames.
+ *
+ * Push constants (parameters_t, 32 bytes):
+ *   output_frames     frames to produce, worked out by the host.
+ *   phase_count       phases in the response; the counter wraps at it.
+ *   phase_step        counter increment per output frame.
+ *   phase_start       counter value this batch begins at, so it continues
+ *                     across calls.
+ *   taps              taps per phase.
+ *   channels          channels, and the interleaved frame stride.
+ *   normalize         scale SoX's integer sample domain to unity.
+ *   symmetric_presum  use the symmetric form below.
+ *
+ * One counter carries both coordinates: its quotient by phase_count is the
+ * input frame the window starts on and its remainder is which sub-filter to
+ * use.  Deriving both from phase_start + output_frame * phase_step is what
+ * makes each output frame independent of the ones before it while keeping the
+ * phase exact across an arbitrarily long stream.
+ *
+ * Dispatch is two-dimensional: x covers the output frames rounded up to whole
+ * workgroups of 128, y is one invocation per channel, hence both bounds
+ * tests.  Each invocation writes one distinct output frame; the tap loop is
+ * sequential within it.
+ *
+ * Plain FP64 accumulation.
+ */
+
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 
@@ -49,6 +85,17 @@ void main()
   uint phase = position % parameters.phase_count;
   double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   double sum = 0.0;
+  /* The symmetric form: a linear-phase response has coefficient[tap] equal to
+   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
+   * before the one multiply, halving them.  The host only sets this for a
+   * response that really is symmetric, and it also requires phase_count == 1
+   * and an odd tap count -- which is why the coefficient index here is the
+   * bare tap, with no phase term.
+   *
+   * The zero test skips the alternate taps of a half-band response, which are
+   * exactly zero by construction.  It is a real branch, not a rounding
+   * shortcut, and it is worth taking because it removes about half of what is
+   * left. */
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
 

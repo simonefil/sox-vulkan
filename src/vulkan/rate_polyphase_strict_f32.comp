@@ -1,3 +1,28 @@
+/* Double-single rational polyphase stage for the strict profile.
+ *
+ * The strict profile's member of the polyphase family;
+ * rate_polyphase_f64.comp carries the family's rationale.  Coefficients,
+ * samples and the accumulator are all double-single pairs, so nothing is
+ * narrowed at either end and no step of the tap sum rounds -- including the
+ * symmetric presum, which the accurate profile has to do in plain FP32.
+ *
+ * The coefficient bank is therefore twice the size of the accurate profile's,
+ * holding the low word of each tap alongside its high word.
+ *
+ * Bindings, in the order rate_polyphase_vulkan.c writes them:
+ *   0 coefficients    -- in: the response, tap major, phase minor, pairs.
+ *   1 input_samples   -- in: interleaved input frames, pairs.
+ *   2 output_samples  -- out: interleaved output frames, pairs.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, normalize, symmetric_presum.  The
+ * counter's quotient by phase_count is the input frame and its remainder the
+ * sub-filter.  The strides count vec2 elements, not floats.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 
 layout(local_size_x = 128) in;
@@ -27,6 +52,12 @@ layout(push_constant) uniform Parameters {
 
 const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
+/* Double-single primitives, the FP32 counterpart of double_double.glsl and
+ * subject to its rules for the same reason: every compensation term is
+ * algebraically zero, so each result lands in a `precise` local and no
+ * primitive takes an out parameter. */
+
+/* Knuth: the error term is exactly representable, for any two operands. */
 vec2 two_sum(float left, float right)
 {
   precise float high = left + right;
@@ -65,6 +96,14 @@ void main()
   const uint phase = position % parameters.phase_count;
   precise vec2 sum = vec2(0.0);
 
+  /* The symmetric form: a linear-phase response has coefficient[tap] equal to
+   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
+   * before the one multiply, halving them.  The host only sets this for a
+   * response that really is symmetric, and it also requires phase_count == 1
+   * and an odd tap count, which is why the coefficient index has no phase
+   * term.  The zero test looks at both words, since a pair is zero only when
+   * both are; the taps it skips are the exact zeros of a half-band
+   * response. */
   if (parameters.symmetric_presum != 0u) {
     const uint center = parameters.taps / 2u;
     const vec2 center_coefficient = coefficients.values[center];

@@ -7,6 +7,35 @@
  * your option) any later version.
  */
 
+/* rate_polyphase_f64.comp with an FP32 output, and the reason it exists is
+ * the mismatch in the name: the accumulation is FP64 but the resident buffer
+ * it writes is FP32.
+ *
+ * The host selects this when the stage is FP64 internally and the consumer
+ * wants normalized FP32 samples, which is a narrowing the plain FP64 shader
+ * cannot do -- its output binding is typed double.
+ *
+ * SOX_SAMPLE_SCALE is applied unconditionally and the normalize push constant
+ * is ignored, which is not the same rule the rest of the chain follows: the
+ * host sets that constant to normalize && !lsx_sample_values_are_normalized(),
+ * and rate_select_*.comp honours it.  On a build whose sample values are
+ * already normalized the two disagree, and this shader would scale a second
+ * time.  Unresolved as of this writing; see the phase 1 notes.
+ *
+ * Bindings, in the order rate_polyphase_vulkan.c writes them:
+ *   0 coefficients    -- in: the response, tap major, phase minor, FP64.
+ *   1 input_samples   -- in: interleaved input frames, FP64.
+ *   2 output_samples  -- out: interleaved output frames, FP32 and normalized.
+ *
+ * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, normalize (unused here),
+ * symmetric_presum.  The counter's quotient by phase_count is the input frame
+ * and its remainder the sub-filter; see the FP64 shader.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 
@@ -48,6 +77,13 @@ void main()
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
   double sum = 0.0;
+
+  /* The symmetric form: a linear-phase response has coefficient[tap] equal to
+   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
+   * before the one multiply, halving them.  The host only sets this for a
+   * response that really is symmetric, and it also requires phase_count == 1
+   * and an odd tap count, which is why the coefficient index has no phase
+   * term.  The zero test skips the exact zeros of a half-band response. */
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
 

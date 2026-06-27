@@ -43,8 +43,9 @@
  * The up_factor gain restores the energy zero-stuffing removes, exactly as
  * the CPU path does.
  *
- * Plain FP64 throughout, for the accurate and strict profiles on a device
- * that reports shaderFloat64.
+ * Plain FP64 throughout.  This is the family the resident kernel selector in
+ * rate_vulkan.c picks for any profile but reference once the device reports
+ * shaderFloat64.
  */
 
 #version 450

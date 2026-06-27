@@ -145,7 +145,7 @@ sox_bool lsx_sample_values_are_normalized(void);
 
 
 
-/*------------------------ Implemented in libsoxio.c -------------------------*/
+/*------------------------ Implemented in formats_i.c ------------------------*/
 
 /* Read and write basic data types from "ft" stream. */
 size_t lsx_readbuf(sox_format_t * ft, void *buf, size_t len);

@@ -1,16 +1,51 @@
 /*
  * Convert a resident double-single interleaved stream to the planar FP32 layout used by the Vulkan SDM modulator.
  *
- * Frames added for the fixed-size FSM blocks are explicit silence and do
- * not advance the logical stream.  The scale carries the producer's domain:
- * one for a normalized stream, 1/2^31 for a sox_sample stream.  Values
- * outside full scale are counted, not clamped: the modulator's own input
- * gain is what keeps the loop in range.
- *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
+ */
+
+/* The ingest step of the resident DSD path: one dispatch that transposes,
+ * scales and pads a producer's block into what sdm_mash2_fsm.comp expects.
+ *
+ * Three things happen at once because they are all one read and one write:
+ * the layout goes interleaved to planar, the producer's domain is folded in
+ * through scale, and the tail is zero-filled up to the fixed block the
+ * modulator's finite-state machine requires.  The modulator itself is always
+ * FP32, which is why every member of this family writes plain floats however
+ * wide its input is.
+ *
+ * Bindings, in the order update_resident_descriptors() in sdm_vulkan.c writes
+ * them:
+ *   0 input_samples    -- in: the producer's block, interleaved.
+ *   1 output_samples   -- out: the modulator's input buffer, planar, one
+ *                         whole channel of output_frames at a time.
+ *   2 clipped_samples  -- in/out: a single counter, incremented atomically
+ *                         for every sample outside full scale.
+ *
+ * Push constants (resident_parameters_t, 16 bytes):
+ *   input_frames   frames the producer actually supplied.
+ *   output_frames  frames the modulator's block holds; the difference is the
+ *                  silence padding, and also the planar channel stride.
+ *   channels       channels, and the interleaved input's frame stride.
+ *   scale          the producer's domain as a factor: one for a normalized
+ *                  stream, 1/2^31 for a sox_sample stream.
+ *
+ * Dispatch is two-dimensional: x covers output_frames -- not input_frames, so
+ * the padding is written rather than left stale -- rounded up to whole
+ * workgroups of 128, and y is one invocation per channel, hence both bounds
+ * tests.  Each invocation writes one distinct output element; the clip
+ * counter is the only shared state, which is why that write is atomic.
+ *
+ * Out-of-range values are counted and passed through, not clamped: the
+ * modulator's own input gain is what keeps its loop in range, and clamping
+ * here would hide an input that is already too hot.
+ *
+ * Input is double-single pairs.  The two words are summed before the scale,
+ * so the rounding to the modulator's FP32 happens once and uses the full
+ * precision the pair was carrying.
  */
 
 #version 450

@@ -60,6 +60,14 @@ layout(push_constant) uniform Parameters {
     uint padding;
 } params;
 
+/*
+ * The eleven bindings below are in the order of the BUFFER_* enumeration in
+ * sdm_vulkan.c, which is what the descriptor writes iterate: binding n is
+ * buffers[n].  Nothing checks the two against each other, and a mismatch
+ * would misread buffers rather than fail.  Binding 0 is what the
+ * sdm_resident_*.comp ingest family writes.
+ */
+
 layout(std430, binding = 0) readonly buffer InputSamples {
     float values[];
 } input_samples;

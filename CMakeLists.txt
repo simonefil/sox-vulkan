@@ -35,7 +35,10 @@ project(SoX
     LANGUAGES C
 )
 
-# Library version (SHLIB_VERSION from configure.ac: 3:0:0)
+# The shared library's version, inherited from the libtool current:revision:age
+# of the Autotools build that no longer exists here.  It feeds VERSION and
+# SOVERSION in src/CMakeLists.txt and is independent of the project version
+# above: changing it is an ABI decision, not a release one.
 set(SOX_VERSION_MAJOR 3)
 set(SOX_VERSION_MINOR 0)
 set(SOX_VERSION_PATCH 0)

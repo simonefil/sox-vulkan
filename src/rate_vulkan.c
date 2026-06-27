@@ -182,9 +182,8 @@ lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t c
 
 /* Each resident kernel is compiled once per numerical family, and the select,
  * prepare and stream-append pipelines all choose among the families with the
- * same rule.  Naming the rule once keeps the three in step: previously each
- * repeated the test order, and each paired a SPIR-V blob with a separate
- * sizeof that had to name the same blob. */
+ * same rule.  Naming the rule once is what keeps the three in step: three
+ * copies of the test order would only have to agree by inspection. */
 typedef enum {
   resident_kernel_reference_dd,
   resident_kernel_f64,

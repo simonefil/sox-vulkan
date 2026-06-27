@@ -1,7 +1,10 @@
 /* Partitioned overlap-save convolution, FP64 with compensated summation.
  *
- * The strict and reference profiles reach this through precise_fp64.  It
- * differs from fir_partition_f64.comp only in the accumulator: the partition
+ * This is what the strict profile runs on a device that does report
+ * shaderFloat64: precise_fp64 is set for strict and reference alike, and
+ * reference is caught by the earlier reference_dd test, so strict is what
+ * arrives here.  It differs from fir_partition_f64.comp only in the
+ * accumulator: the partition
  * sum is carried with a Kahan correction term, which matters because the sum
  * runs over every partition of the response and the bins with the largest
  * magnitudes dominate the earlier terms.  The products themselves are still

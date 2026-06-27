@@ -510,6 +510,14 @@ build_libopusenc() {
     log_success "libopusenc installed"
 }
 
+# FFmpeg is built --disable-everything and then opted back in, one component
+# at a time, because SoX uses a fixed and small set: the codecs behind aac.c,
+# ac3.c, eac3.c, alac.c, dts.c, mlp.c, truehd.c and usac.c, plus the mov
+# demuxer and ipod muxer alac.c needs.  A default FFmpeg build would be an
+# order of magnitude larger for nothing, and every enabled decoder is one more
+# thing linked into a static executable.
+#
+# The BSDs need gmake: FFmpeg's generated makefiles use GNU extensions.
 build_ffmpeg() {
     log_info "========== Building FFmpeg ${FFMPEG_VERSION} =========="
 
@@ -570,7 +578,15 @@ build_ffmpeg() {
     log_success "FFmpeg installed"
 }
 
-# Update outdated config.guess/config.sub for ARM64 support
+# Update outdated config.guess/config.sub for ARM64 support.
+#
+# Several of the autotools tarballs below predate arm64-apple-darwin and their
+# bundled config.guess rejects the host outright.  The replacement is taken
+# from the libtool source already unpacked here when it is available, and
+# fetched from GNU config only as a fallback -- so a machine with no network
+# still works once libtool has been built.  The result is validated before it
+# replaces anything, since a proxy error page saved over config.guess would
+# break every later package.
 update_config_scripts() {
     local dir="$1"
     log_info "Updating config.guess/config.sub for ARM64 compatibility..."

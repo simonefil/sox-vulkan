@@ -1023,6 +1023,20 @@ function Find-MsysBash {
     return $null
 }
 
+# Workaround for an FFmpeg build that MSVC rejects.
+#
+# cbs_type_table in libavcodec/cbs.c is populated by #ifdefs, one entry per
+# coded-bitstream type. None of the codecs SoX enables brings one in, so with
+# --disable-everything the initialiser is empty; a zero-sized array is a GNU
+# extension that MSVC refuses outright, and the build stops there.
+#
+# The fix is the smallest one that keeps the semantics: append a NULL sentinel
+# so the array has an element, and terminate the loop on that sentinel instead
+# of on FF_ARRAY_ELEMS, which would now count one entry too many. Both edits
+# are idempotent, so re-running over an already-patched tree is harmless, and
+# every step throws rather than continuing if the source does not look as
+# expected -- an FFmpeg upgrade that reshapes this file must be noticed here,
+# not miscompiled.
 function Patch-FfmpegMsvcEmptyCbsTable($src) {
     $cbsPath = Join-Path $src "libavcodec\cbs.c"
     $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cbsPath)
@@ -1063,6 +1077,19 @@ function Patch-FfmpegMsvcEmptyCbsTable($src) {
     Write-Info "Applied FFmpeg MSVC empty CBS table compatibility patch"
 }
 
+# FFmpeg has no MSVC project: its build system is autoconf-shaped and needs a
+# POSIX shell, so this drives configure and make under MSYS2 bash while the
+# actual compiler stays MSVC through --toolchain=msvc. That is why MSYS2 is a
+# requirement of this script and of nothing else in it.
+#
+# MSYS2_PATH_TYPE=inherit is what makes it work: without it the MSYS2 shell
+# replaces PATH with its own and cl.exe, from the Developer PowerShell this
+# script must run in, disappears. Paths cross the boundary through cygpath,
+# and the environment is passed by variable rather than interpolated into the
+# script text so that a path containing a space or a quote cannot break it.
+#
+# The component selection matches build_static_libs.sh exactly; the two must
+# stay in step, since they produce the same library for the same SoX sources.
 function Build-Ffmpeg {
     Write-Info "========== Building FFmpeg $($Versions.ffmpeg) =========="
 
@@ -1173,6 +1200,11 @@ function Test-StaticDependencies($binary) {
         throw "Unable to inspect executable dependencies with dumpbin"
     }
 
+    # A deny list rather than an allow list: the system DLLs a release build
+    # legitimately imports vary with the toolchain and the Windows version,
+    # while the codec libraries that must not appear are exactly the ones this
+    # script builds. msys- catches an FFmpeg accidentally linked against the
+    # MSYS2 runtime, which would run here and nowhere else.
     $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {

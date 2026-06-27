@@ -1,5 +1,21 @@
 cmake_minimum_required(VERSION 3.15)
 
+# The static build needs all three of these, and each is guarded because it
+# only exists from a later CMake than the minimum above.
+#
+#   CMP0091  the MSVC runtime is chosen through CMAKE_MSVC_RUNTIME_LIBRARY
+#            rather than by rewriting the compile flags; the static build sets
+#            that variable below.
+#   CMP0156  de-duplicate the link line according to what the linker can
+#            actually do, instead of the older fixed rule.
+#   CMP0179  when a static library is de-duplicated, keep its first
+#            occurrence rather than its last.
+#
+# The last two matter because a static link resolves left to right: a codec
+# library dropped to the end of the line, or kept only at its last mention,
+# stops satisfying the references that came before it.  REORDER_FREELY goes
+# further and lets CMake arrange the line itself, which is what handles the
+# cyclic dependencies among the FFmpeg libraries.
 if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
@@ -69,6 +85,10 @@ option(WITH_OPENMP "Enable OpenMP support" ON)
 option(SOX_REQUIRE_OPENMP "Fail configuration when OpenMP support is unavailable" OFF)
 option(WITH_VULKAN "Enable the Vulkan backend for FIR and DSD modulation" OFF)
 
+# macOS is absent on purpose: it ships no static libSystem, so -static cannot
+# work there and the option means "static dependencies, system libraries
+# shared" instead.  That is why this sets SOX_REQUIRE_STATIC_DEPENDENCIES,
+# which every platform honours, and adds -static only where it is achievable.
 if(BUILD_STATIC_EXECUTABLE)
     set(BUILD_SHARED_LIBS OFF)
     set(SOX_REQUIRE_STATIC_DEPENDENCIES ON)
@@ -221,6 +241,18 @@ if(WITH_OPENMP)
     endif()
 endif()
 
+# Three separate Vulkan dependencies, and only the first is the loader:
+# glslc compiles this tree's own shaders at build time, glslang is what VkFFT
+# calls at run time to compile the GLSL it generates, and VkFFT itself is
+# header-only.
+#
+# glslang is found differently per platform because it is consumed
+# differently.  The Windows SDK ships it as a DLL whose import library is not
+# usable from a build that does not otherwise link the SDK, so the DLL is
+# located here to be copied and installed beside the executable, and
+# glslang_dynamic.c resolves the entry points at run time; everywhere else it
+# is an ordinary library and gets linked.  NO_DEFAULT_PATH keeps the search on
+# the SDK, since any other glslang.dll on the machine is the wrong build.
 if(WITH_VULKAN)
     if(NOT IS_WINDOWS AND NOT IS_MACOS)
         message(FATAL_ERROR "The Vulkan FIR and DSD backends support Windows and macOS")
@@ -346,6 +378,15 @@ if(WITH_FLAC)
 endif()
 
 # Ogg Vorbis
+#
+# The modules are listed dependents first, which is the order a static link
+# resolves them in, and the same shape recurs for sndfile below.
+#
+# On a fully static link, PkgConfig:: carries only Libs, so the transitive
+# dependencies in Libs.private never reach the link line; the _STATIC_ variant
+# is the flattened list that does.  It is used only where -static is actually
+# in effect -- Linux and BSD -- because elsewhere the imported target is
+# correct and pulls in fewer system libraries.
 if(WITH_OGGVORBIS)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(VORBIS IMPORTED_TARGET vorbisfile vorbisenc vorbis)
@@ -460,6 +501,12 @@ if(WITH_OPUS)
 endif()
 
 # FFmpeg codecs
+#
+# The version floor is real, not a guess: ffmpeg-codec.c calls
+# avcodec_get_supported_config(), which arrived in libavcodec 61 and replaced
+# the per-field capability arrays that came before it.  libavutil 59 is the
+# matching major from the same FFmpeg release; the two are not independently
+# selectable in practice.
 if(WITH_FFMPEG_CODECS)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(FFMPEG_CODECS IMPORTED_TARGET
@@ -492,7 +539,9 @@ if(WITH_FFMPEG_CODECS)
     endif()
 endif()
 
-# FFmpeg containers
+# FFmpeg containers.  Gated on the codecs: a container yields packets that
+# only ffmpeg-codec.c can decode, so libavformat without libavcodec would
+# build a demuxer with nothing behind it.
 if(WITH_FFMPEG_FORMATS AND HAVE_FFMPEG_CODECS)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(FFMPEG_FORMATS IMPORTED_TARGET libavformat>=61)

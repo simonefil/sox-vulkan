@@ -251,7 +251,6 @@ lsx_vulkan_context_t *lsx_vulkan_context_get(sox_effects_globals_t *effects_glob
 void lsx_vulkan_context_destroy(void *opaque_context);
 
 char const *lsx_vulkan_profile_name(sox_vulkan_profile_t profile);
-char const *lsx_vulkan_numerical_family_name(lsx_vulkan_numerical_family_t family);
 
 /* Turn a VkResult into a SoX status, reporting the operation on failure.
  * Every Vulkan call in the backend goes through this, so that no failure is
@@ -309,18 +308,9 @@ int lsx_vulkan_download_resident_pcm(
  * the two add back to the original pair with no error at all. Every f64x2
  * collapse in the engine must go through here, otherwise the two runs describe
  * different quantities. */
-typedef enum {
-  lsx_vulkan_pair_output_sum = 0,
-  lsx_vulkan_pair_output_residual = 1,
-  lsx_vulkan_pair_output_low = 2
-} lsx_vulkan_pair_output_t;
-
-/* Which half of the pair collapse this run emits, read once from the
- * environment.  Constant for the process, so both runs of a measurement see
- * a fixed choice. */
-lsx_vulkan_pair_output_t lsx_vulkan_pair_output_mode(void);
-
-/* Collapse a double-double to one double according to that mode. */
+/* Which half is emitted is read once from the environment inside the engine
+ * and is constant for the process, so both runs of a measurement see a fixed
+ * choice. */
 double lsx_vulkan_collapse_pair(double high, double low);
 
 /* Build a compute pipeline from embedded SPIR-V.  The shader module is

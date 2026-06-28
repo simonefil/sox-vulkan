@@ -509,7 +509,9 @@ endif()
 # avcodec_get_supported_config(), which arrived in libavcodec 61 and replaced
 # the per-field capability arrays that came before it.  libavutil 59 is the
 # matching major from the same FFmpeg release; the two are not independently
-# selectable in practice.
+# selectable in practice.  Only the pkg-config path can test it: the
+# find_library fallback below has no version to read, so an older libavcodec
+# gets past configure and fails at the call site instead.
 if(WITH_FFMPEG_CODECS)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(FFMPEG_CODECS IMPORTED_TARGET

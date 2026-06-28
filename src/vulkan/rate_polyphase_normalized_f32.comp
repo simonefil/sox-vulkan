@@ -15,12 +15,10 @@
  * wants normalized FP32 samples, which is a narrowing the plain FP64 shader
  * cannot do -- its output binding is typed double.
  *
- * SOX_SAMPLE_SCALE is applied unconditionally and the normalize push constant
- * is ignored, which is not the same rule the rest of the chain follows: the
- * host sets that constant to normalize && !lsx_sample_values_are_normalized(),
- * and rate_select_*.comp honours it.  On a build whose sample values are
- * already normalized the two disagree, and this shader would scale a second
- * time.  Unresolved as of this writing; see the phase 1 notes.
+ * The normalize push constant follows the same rule as rate_select_*.comp:
+ * the host sets it only when the consumer wants normalized output and the
+ * build's sample representation is not already normalized.  The conditional
+ * scale therefore avoids applying SOX_SAMPLE_SCALE twice on such builds.
  *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:
  *   0 coefficients    -- in: the response, tap major, phase minor, FP64.
@@ -28,7 +26,7 @@
  *   2 output_samples  -- out: interleaved output frames, FP32 and normalized.
  *
  * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize (unused here),
+ * phase_step, phase_start, taps, channels, normalize (whether to scale),
  * symmetric_presum.  The counter's quotient by phase_count is the input frame
  * and its remainder the sub-filter; see the FP64 shader.
  *
@@ -104,5 +102,6 @@ void main()
           input_samples[
               (input_base + tap) *
               parameters.channels + channel];
-  output_samples[output_frame * parameters.channels + channel] = float(sum * SOX_SAMPLE_SCALE);
+  double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
+  output_samples[output_frame * parameters.channels + channel] = float(sum * scale);
 }

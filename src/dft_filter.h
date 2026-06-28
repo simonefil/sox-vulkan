@@ -102,22 +102,6 @@ int lsx_set_dft_filter_vulkan_channels(
 /* Release them; safe to call when none were recorded. */
 void lsx_clear_dft_filter_vulkan_channels(dft_filter_priv_t *p);
 
-/* Rebuild the Vulkan backend around a new response, taking ownership of the
- * arrays passed in.  Called when the effect's response changes after start --
- * which is what fusion does -- and each form matches one of the four ways a
- * response can be given: shared or per channel, plain or double-double. */
-int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak);
-int lsx_dft_filter_restart_vulkan_reference_dd(
-    sox_effect_t *effp, double *tap_highs,
-    double *tap_lows, int num_taps, int post_peak);
-int lsx_dft_filter_restart_vulkan_channels(
-    sox_effect_t *effp, double **taps, uint32_t channels,
-    int num_taps, int post_peak);
-int lsx_dft_filter_restart_vulkan_reference_dd_channels(
-    sox_effect_t *effp, double **tap_highs,
-    double **tap_lows, uint32_t channels,
-    int num_taps, int post_peak);
-
 /* Offer second's response to first for fusion, so that a cascade of filters
  * becomes one convolution instead of several.  Returns SOX_SUCCESS if first
  * accepted it, in which case second must not also apply it.  Only the

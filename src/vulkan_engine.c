@@ -36,7 +36,7 @@ char const *lsx_vulkan_profile_name(sox_vulkan_profile_t profile)
   return "unknown";
 }
 
-char const *lsx_vulkan_numerical_family_name(lsx_vulkan_numerical_family_t family)
+static char const *lsx_vulkan_numerical_family_name(lsx_vulkan_numerical_family_t family)
 {
   switch (family) {
     case lsx_vulkan_numerical_family_fp32_emulated: return "FP32 emulated";
@@ -307,10 +307,16 @@ static int create_resident_download(lsx_vulkan_context_t *context, VkDeviceSize 
   return SOX_SUCCESS;
 }
 
+typedef enum {
+  lsx_vulkan_pair_output_sum = 0,
+  lsx_vulkan_pair_output_residual = 1,
+  lsx_vulkan_pair_output_low = 2
+} lsx_vulkan_pair_output_t;
+
 /* Resolved once and cached: the mode has to be the same for every collapse in
  * a run, or the two runs a measurement compares would describe different
  * quantities. */
-lsx_vulkan_pair_output_t lsx_vulkan_pair_output_mode(void)
+static lsx_vulkan_pair_output_t lsx_vulkan_pair_output_mode(void)
 {
   static int resolved;
   static lsx_vulkan_pair_output_t mode;

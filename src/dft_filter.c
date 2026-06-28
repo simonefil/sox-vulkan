@@ -37,6 +37,15 @@ static int consume_vulkan_resident(sox_effect_t *effp, lsx_vulkan_resident_buffe
 static int transform_vulkan_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *active);
 static int drain_transform_vulkan_resident(sox_effect_t *effp, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *done);
 
+/* Rebuild the Vulkan backend around a new response, taking ownership of the
+ * arrays passed in.  Called when the effect's response changes after start --
+ * which is what fusion does -- and each form matches one of the four ways a
+ * response can be given: shared or per channel, plain or double-double. */
+static int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak);
+static int lsx_dft_filter_restart_vulkan_reference_dd(sox_effect_t *effp, double *tap_highs, double *tap_lows, int num_taps, int post_peak);
+static int lsx_dft_filter_restart_vulkan_channels(sox_effect_t *effp, double **taps, uint32_t channels, int num_taps, int post_peak);
+static int lsx_dft_filter_restart_vulkan_reference_dd_channels(sox_effect_t *effp, double **tap_highs, double **tap_lows, uint32_t channels, int num_taps, int post_peak);
+
 static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
   flow_vulkan_resident_producer,
   drain_vulkan_resident_producer,
@@ -81,8 +90,7 @@ static int ensure_vulkan_fusion(sox_effect_t *effp)
   if (p->vulkan_channels) {
     double **channel_taps = lsx_calloc(p->vulkan_channel_count, sizeof(*channel_taps));
     double **channel_lows = p->vulkan_fusion_source_count ?
-        lsx_calloc(
-            p->vulkan_channel_count, sizeof(*channel_lows)) : NULL;
+        lsx_calloc(p->vulkan_channel_count, sizeof(*channel_lows)) : NULL;
     uint32_t channel;
 
     num_taps = p->vulkan_source_num_taps;
@@ -90,14 +98,10 @@ static int ensure_vulkan_fusion(sox_effect_t *effp)
       if (p->vulkan_fusion_source_count) {
         size_t channel_fused_taps = 0;
 
-        if (lsx_fir_vulkan_fuse_reference_coefficients(
-            p->vulkan_context,
-            (double const *const *)
-                p->vulkan_channels[channel].fusion_sources,
-            p->vulkan_channels[channel].fusion_source_taps,
-            p->vulkan_fusion_source_count,
-            &channel_taps[channel], &channel_lows[channel],
-            &channel_fused_taps) != SOX_SUCCESS ||
+        if (lsx_fir_vulkan_fuse_reference_coefficients(p->vulkan_context,
+            (double const *const *)p->vulkan_channels[channel].fusion_sources,
+            p->vulkan_channels[channel].fusion_source_taps, p->vulkan_fusion_source_count,
+            &channel_taps[channel], &channel_lows[channel], &channel_fused_taps) != SOX_SUCCESS ||
             channel_fused_taps > INT_MAX ||
             (channel && channel_fused_taps != fused_taps))
           goto channel_error;
@@ -105,19 +109,15 @@ static int ensure_vulkan_fusion(sox_effect_t *effp)
         num_taps = (int)fused_taps;
       }
       else
-        channel_taps[channel] = lsx_memdup(
-            p->vulkan_channels[channel].source_taps,
+        channel_taps[channel] = lsx_memdup(p->vulkan_channels[channel].source_taps,
             (size_t)num_taps * sizeof(**channel_taps));
     }
     post_peak = p->vulkan_source_post_peak;
     if ((channel_lows ?
         lsx_dft_filter_restart_vulkan_reference_dd_channels(
-            effp, channel_taps, channel_lows,
-            p->vulkan_channel_count,
-            num_taps, post_peak) :
+            effp, channel_taps, channel_lows, p->vulkan_channel_count, num_taps, post_peak) :
         lsx_dft_filter_restart_vulkan_channels(
-            effp, channel_taps, p->vulkan_channel_count,
-            num_taps, post_peak)) != SOX_SUCCESS)
+            effp, channel_taps, p->vulkan_channel_count, num_taps, post_peak)) != SOX_SUCCESS)
       return SOX_EOF;
     p->vulkan_fusion_pending = sox_false;
     return SOX_SUCCESS;
@@ -133,12 +133,9 @@ channel_error:
     return SOX_EOF;
   }
   if (p->vulkan_fusion_source_count) {
-    if (lsx_fir_vulkan_fuse_reference_coefficients(
-        p->vulkan_context,
-        (double const *const *)p->vulkan_fusion_sources,
-        p->vulkan_fusion_source_taps,
-        p->vulkan_fusion_source_count,
-        &taps, &tap_lows, &fused_taps) != SOX_SUCCESS ||
+    if (lsx_fir_vulkan_fuse_reference_coefficients(p->vulkan_context,
+        (double const *const *)p->vulkan_fusion_sources, p->vulkan_fusion_source_taps,
+        p->vulkan_fusion_source_count, &taps, &tap_lows, &fused_taps) != SOX_SUCCESS ||
         fused_taps > INT_MAX)
       return SOX_EOF;
     num_taps = (int)fused_taps;
@@ -149,10 +146,8 @@ channel_error:
   }
   post_peak = p->vulkan_source_post_peak;
   if ((tap_lows ?
-      lsx_dft_filter_restart_vulkan_reference_dd(
-          effp, taps, tap_lows, num_taps, post_peak) :
-      lsx_dft_filter_restart_vulkan(
-          effp, taps, num_taps, post_peak)) != SOX_SUCCESS)
+      lsx_dft_filter_restart_vulkan_reference_dd(effp, taps, tap_lows, num_taps, post_peak) :
+      lsx_dft_filter_restart_vulkan(effp, taps, num_taps, post_peak)) != SOX_SUCCESS)
     return SOX_EOF;
   p->vulkan_fusion_pending = sox_false;
   return SOX_SUCCESS;
@@ -1004,7 +999,7 @@ static int stop(sox_effect_t * effp)
  * caller has already handed them across.  Only valid before any samples have
  * flowed; the state a restart discards includes the filter's history. */
 #if HAVE_VULKAN
-int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak)
+static int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak)
 {
   priv_t *p;
 
@@ -1022,9 +1017,7 @@ int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps
   return start(effp);
 }
 
-int lsx_dft_filter_restart_vulkan_reference_dd(
-    sox_effect_t *effp, double *tap_highs,
-    double *tap_lows, int num_taps, int post_peak)
+static int lsx_dft_filter_restart_vulkan_reference_dd(sox_effect_t *effp, double *tap_highs, double *tap_lows, int num_taps, int post_peak)
 {
   priv_t *p;
 
@@ -1103,17 +1096,12 @@ static int restart_vulkan_channels(
   return start(effp);
 }
 
-int lsx_dft_filter_restart_vulkan_channels(
-    sox_effect_t *effp, double **taps, uint32_t channels,
-    int num_taps, int post_peak)
+static int lsx_dft_filter_restart_vulkan_channels(sox_effect_t *effp, double **taps, uint32_t channels, int num_taps, int post_peak)
 {
   return restart_vulkan_channels(effp, taps, NULL, channels, num_taps, post_peak);
 }
 
-int lsx_dft_filter_restart_vulkan_reference_dd_channels(
-    sox_effect_t *effp, double **tap_highs,
-    double **tap_lows, uint32_t channels,
-    int num_taps, int post_peak)
+static int lsx_dft_filter_restart_vulkan_reference_dd_channels(sox_effect_t *effp, double **tap_highs, double **tap_lows, uint32_t channels, int num_taps, int post_peak)
 {
   return restart_vulkan_channels(effp, tap_highs, tap_lows, channels, num_taps, post_peak);
 }

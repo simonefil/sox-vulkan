@@ -44,3 +44,6 @@ __pycache__/
 
 # Internal development and qualification tools
 /tools/
+
+# Finder metadata
+/.DS_Store

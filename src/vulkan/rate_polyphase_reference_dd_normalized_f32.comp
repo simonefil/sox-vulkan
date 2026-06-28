@@ -12,9 +12,9 @@
  * narrowed once.  Rounding twice, or scaling after narrowing, would put back
  * the error the profile exists to avoid.
  *
- * SOX_SAMPLE_SCALE is applied unconditionally and the normalize push constant
- * is ignored, the same divergence rate_polyphase_normalized_f32.comp
- * describes; see the phase 1 notes.
+ * The normalize push constant follows the same rule as rate_select_*.comp.
+ * When scaling is requested it is still applied to the double-double pair
+ * before the two words are combined, preserving the single final narrowing.
  *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:
  *   0 coefficients    -- in: the response, tap major, phase minor,
@@ -23,7 +23,7 @@
  *   2 output_samples  -- out: interleaved output frames, plain FP32.
  *
  * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize (unused here),
+ * phase_step, phase_start, taps, channels, normalize (whether to scale),
  * symmetric_presum.  The counter's quotient by phase_count is the input frame
  * and its remainder the sub-filter; see the FP64 shader.
  *
@@ -114,8 +114,9 @@ void main()
       sum = add_dd(sum, multiply_dd(coefficient, input_value));
     }
   }
-  const dvec2 normalized = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
-  precise double combined = normalized.x + normalized.y;
+  if (parameters.normalize != 0u)
+    sum = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
+  precise double combined = sum.x + sum.y;
 
   output_samples.values[output_frame * parameters.channels + channel] = float(combined);
 }

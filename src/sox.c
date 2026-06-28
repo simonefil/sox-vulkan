@@ -2004,10 +2004,10 @@ static void usage(char const * message)
   };
 #if HAVE_VULKAN
   static char const * const linesVulkan[] = {
-"--vulkan-fast           Enable Vulkan with the fast numerical profile",
-"--vulkan-accurate       Enable Vulkan with the accurate numerical profile",
-"--vulkan-strict         Enable Vulkan with the strict numerical profile",
-"--vulkan-reference      Enable Vulkan with the reference numerical profile"
+"--vulkan-fast            Enable Vulkan with the fast numerical profile",
+"--vulkan-accurate        Enable Vulkan with the accurate numerical profile",
+"--vulkan-strict          Enable Vulkan with the strict numerical profile",
+"--vulkan-reference       Enable Vulkan with the reference numerical profile"
   };
 #endif
   static char const * const lines3[] = {
@@ -2170,8 +2170,8 @@ static void usage_format1(sox_format_handler_t const * f)
             printf("%s (%u-bit precision)\n", sox_encodings_info[e].desc, sox_precision(e, s));
           }
         } while (s);
-      }
-      else puts("Writes: yes");
+    }
+    else puts("Writes: yes");
   }
   else puts("Writes: no");
   lsx_print_format_channel_layouts(f->names[0]);
@@ -2487,14 +2487,10 @@ static char parse_gopts_and_fopts(file_t * f)
         free(f->channel_layout);
         f->channel_layout = lsx_strdup(optstate.arg);
         break;
-      case 28:
-        set_vulkan_profile(sox_vulkan_profile_fast); break;
-      case 29:
-        set_vulkan_profile(sox_vulkan_profile_accurate); break;
-      case 30:
-        set_vulkan_profile(sox_vulkan_profile_strict); break;
-      case 31:
-        set_vulkan_profile(sox_vulkan_profile_reference); break;
+      case 28: set_vulkan_profile(sox_vulkan_profile_fast); break;
+      case 29: set_vulkan_profile(sox_vulkan_profile_accurate); break;
+      case 30: set_vulkan_profile(sox_vulkan_profile_strict); break;
+      case 31: set_vulkan_profile(sox_vulkan_profile_reference); break;
       }
       break;
 

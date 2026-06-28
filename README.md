@@ -362,10 +362,10 @@ This lists all formats enabled in the current build. Look for:
 - `ogg` - OGG/Vorbis support
 - `opus` - Opus support
 - `ac3` - AC-3 elementary stream support
-- `eac3` - E-AC-3 elementary stream support
+- `eac3`, `ec3` - E-AC-3 elementary stream support
 - `aac`, `adts` - AAC with ADTS framing
 - `latm`, `loas` - AAC with LOAS/LATM framing
-- `usac` - xHE-AAC/USAC with LOAS/LATM framing
+- `usac`, `xheaac`, `xhe-aac` - xHE-AAC/USAC with LOAS/LATM framing
 - `m4a` - Apple Lossless in an M4A container
 - `truehd`, `thd` - Dolby TrueHD elementary stream
 - `mlp` - Meridian Lossless Packing elementary stream
@@ -662,6 +662,7 @@ The build scripts download and compile the following library versions:
 | libtool/libltdl | 2.4.7 |
 | libao | 1.2.2 |
 | FFmpeg | 8.1.2 |
+| VkFFT | 1.3.4 |
 
 ---
 

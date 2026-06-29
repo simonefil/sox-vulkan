@@ -204,7 +204,13 @@ typedef struct {
 /* Only the first test is order-sensitive: reference_dd is set as
  * double_precision && profile == reference, so it has to be recognised before
  * the plain FP64 family.  strict_fp32 is set only when double_precision is
- * false, so the families below cannot overlap. */
+ * false, so the families below cannot overlap.
+ *
+ * Four kernels for five profiles: accurate has none of its own and falls to
+ * the FP32 one alongside fast.  Unlike the polyphase, cubic and FIR partition
+ * families, select, prepare and stream-append only move samples, with at most
+ * the single multiply that normalisation costs, so there is no accumulation
+ * for an accurate variant to order differently. */
 static resident_kernel_t resident_kernel(lsx_rate_vulkan_t const *context)
 {
   if (context->reference_dd)

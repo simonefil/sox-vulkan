@@ -3,9 +3,13 @@
  * buffer and write an interleaved resident stream for the next GPU node.
  */
 
-/* The fast profile's member of the select family; rate_select_f64.comp
- * carries the family's rationale.  One float per sample and a plain multiply
- * for the normalisation.
+/* The FP32 member of the select family; rate_select_f64.comp carries the
+ * family's rationale.  One float per sample and a plain multiply for the
+ * normalisation.
+ *
+ * The fast and accurate profiles both land here.  The family has no accurate
+ * member because it does not accumulate -- see resident_kernel() in
+ * rate_vulkan.c.
  *
  * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
  * them:

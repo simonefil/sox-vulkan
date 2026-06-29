@@ -2,10 +2,14 @@
  * Prepare an overlap-save FIR block directly from resident FP32 input.
  */
 
-/* The fast profile's member of the prepare family; rate_prepare_f64.comp
- * carries the family's rationale, and this differs from it only in element
- * type.  One float per sample, no compensation anywhere: the profile that
- * chooses this has already accepted FP32 rounding through the whole chain.
+/* The FP32 member of the prepare family; rate_prepare_f64.comp carries the
+ * family's rationale, and this differs from it only in element type.  One
+ * float per sample, no compensation anywhere: a profile that chooses this has
+ * already accepted FP32 rounding through the whole chain.
+ *
+ * The fast and accurate profiles both land here.  The family has no accurate
+ * member because it does not accumulate -- see resident_kernel() in
+ * rate_vulkan.c.
  *
  * Bindings, in the order record_resident_prepare() in rate_vulkan.c writes
  * them:

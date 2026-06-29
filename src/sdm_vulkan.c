@@ -1203,7 +1203,7 @@ static lsx_sdm_vulkan_t *create_with_input_target(
   uint16_t endian = 1;
   unsigned channel;
 
-  if (!vulkan || !input_target_frames) {
+  if (!vulkan) {
     lsx_fail("Vulkan DSD requires a shared Vulkan context");
     return NULL;
   }
@@ -1295,10 +1295,8 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
 {
   if (batch_frames > UINT32_MAX)
     return NULL;
-  return create_with_input_target(
-      vulkan, rate, channels,
-      batch_frames ? (uint32_t)batch_frames :
-      SDM_VULKAN_INPUT_FRAMES);
+  return create_with_input_target(vulkan, rate, channels,
+      batch_frames ? (uint32_t)batch_frames : SDM_VULKAN_INPUT_FRAMES);
 }
 
 void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)

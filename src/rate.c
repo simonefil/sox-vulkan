@@ -1599,12 +1599,8 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
 
       while (final_stream_index < p->vulkan_stage_count && p->vulkan_stages[final_stream_index].kind != rate_stage_dft)
         ++final_stream_index;
-      final_stream_chain =
-          resident_chain &&
-          !getenv(
-              "SOX_VULKAN_DISABLE_RESIDENT_POLYPHASE_CHAIN") &&
-          final_stream_index ==
-              p->vulkan_stage_count - 1u;
+      final_stream_chain = resident_chain && !getenv("SOX_VULKAN_DISABLE_RESIDENT_POLYPHASE_CHAIN") &&
+          final_stream_index == p->vulkan_stage_count - 1u;
 
       while (occupancy_frames > taps - 1u) {
         size_t processable_frames = min(block_frames, occupancy_frames - (taps - 1u));

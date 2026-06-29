@@ -2,9 +2,12 @@
  * Gather resident FP32 PCM into the interleaved Vulkan rate stream.
  */
 
-/* The fast profile's member of the stream-append family;
- * rate_stream_append_f64.comp carries the family's rationale.  One float per
- * sample.
+/* The FP32 member of the stream-append family; rate_stream_append_f64.comp
+ * carries the family's rationale.  One float per sample.
+ *
+ * The fast and accurate profiles both land here.  The family has no accurate
+ * member because it does not accumulate -- see resident_kernel() in
+ * rate_vulkan.c.
  *
  * Bindings, in the order append_resident_stream() in rate_vulkan.c writes
  * them:

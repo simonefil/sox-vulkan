@@ -41,6 +41,35 @@ static int drain_vulkan_resident_endpoint(sox_effect_t *effp, lsx_vulkan_residen
 static int transform_vulkan_resident_endpoint(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *active);
 static int drain_transform_vulkan_resident_endpoint(sox_effect_t *effp, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *done);
 
+/*
+ * The effect-level resident interface.  The chain reaches it through the
+ * lsx_vulkan_effect_endpoint_t vtable above, so these names stay inside this
+ * file; the wrappers that go into the vtable are the four declared above.
+ * effp is always a rate effect; calling these on any other is a programming
+ * error.
+ */
+
+/* Whether this effect's chain is a lone DFT or a chain of resident stages, which is what the engine tunes its batch depth against. */
+static lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t const *effp);
+
+/* Resident equivalents of the effect's flow and drain.  *produced says whether a resident block came out, and *done, on drain, whether the effect has finished flushing. */
+static int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced);
+static int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done);
+
+/* What this effect's configuration can take part in.  The three are
+ * independent: an effect may publish resident output without accepting
+ * resident input, and the transform being supported is a further condition
+ * still, so a caller has to ask the one it means. */
+static sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp);
+static sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp);
+static sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp);
+
+/* Whether the effect can take a resident block right now, its stream having room for one. */
+static sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp);
+
+/* Clips counted while quantizing input from another effect, moved out of the effect so the chain can add them to its own total.  Reading them clears the count. */
+static uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp);
+
 static lsx_vulkan_effect_endpoint_t const vulkan_resident_producer_endpoint = {
   flow_vulkan_resident_endpoint,
   drain_vulkan_resident_endpoint,
@@ -1726,7 +1755,7 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
 
 /* Resident output requires the plan to end in a DFT stage: that is the only
  * kind whose output stays on the device in a form a consumer can be given. */
-sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp)
+static sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
 
@@ -1736,7 +1765,7 @@ sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp)
   return p->vulkan_stage_count && p->vulkan_stages[p->vulkan_stage_count - 1u].kind == rate_stage_dft;
 }
 
-lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t const *effp)
+static lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t const *effp)
 {
   priv_t const *p;
   size_t index;
@@ -1758,7 +1787,7 @@ lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t co
  * size, which nothing here reconciles.  A single transform stage is therefore
  * fine, as is a transform followed by polyphase stages ending in either kind
  * -- and nothing else. */
-sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp)
+static sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
   rate_vulkan_stage_executor_t const *last;
@@ -1785,7 +1814,7 @@ sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp)
 
 /* Acting as a middle link needs both ends: resident input, and a final
  * transform stage so the output is resident too. */
-sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp)
+static sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp)
 {
   priv_t const *p;
 
@@ -1795,7 +1824,7 @@ sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp)
   return rate_vulkan_executor_is_fft(&p->vulkan_stages[p->vulkan_stage_count - 1u]);
 }
 
-sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp)
+static sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp)
 {
   priv_t const *p;
 
@@ -1815,7 +1844,7 @@ sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp)
               p->vulkan_stage_count - 1u].dft));
 }
 
-uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp)
+static uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp)
 {
   priv_t *p;
 
@@ -1991,7 +2020,7 @@ output_ready:
  * blocks.  Output is offered before input is taken, and *isamp is set to zero
  * when a block is produced -- the caller keeps its samples and offers them
  * again next time, so nothing is buffered that has not been paid for. */
-int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
+static int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   priv_t *p;
   size_t channels;
@@ -2102,7 +2131,7 @@ static int drain_vulkan_resident_external_input(sox_effect_t *effp, lsx_vulkan_r
  * stages hold, so the effect emits exactly the number of output samples the
  * resampling implies.  Zero blocks are pushed in until that many have come
  * out; done says nothing further is owed. */
-int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done)
+static int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done)
 {
   priv_t *p;
   size_t channels;

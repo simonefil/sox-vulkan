@@ -135,38 +135,4 @@ uint32_t lsx_rate_vulkan_resident_stream_clips_completed(lsx_rate_vulkan_t *cont
 uint32_t lsx_rate_vulkan_resident_batch_depth(lsx_rate_vulkan_t const *context);
 lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t const *context);
 
-/*
- * The effect-level interface, implemented in rate.c.  It is declared here
- * because the resident chain in dft_filter.c drives the rate effect through
- * it without including rate.c's private state.  effp is always a rate effect;
- * calling these on any other is a programming error.
- */
-
-/* Whether this effect's chain is a lone DFT or a chain of resident stages,
- * which is what the engine tunes its batch depth against. */
-lsx_vulkan_resident_topology_t lsx_rate_effect_resident_topology(sox_effect_t const *effp);
-
-/* Resident equivalents of the effect's flow and drain.  *produced says
- * whether a resident block came out, and *done, on drain, whether the effect
- * has finished flushing. */
-int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced);
-int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done);
-
-/* What this effect's configuration can take part in.  The three are
- * independent: an effect may publish resident output without accepting
- * resident input, and the transform being supported is a further condition
- * still, so a caller has to ask the one it means. */
-sox_bool lsx_rate_effect_resident_supported(sox_effect_t const *effp);
-sox_bool lsx_rate_effect_resident_input_supported(sox_effect_t const *effp);
-sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const *effp);
-
-/* Whether the effect can take a resident block right now, its stream having
- * room for one. */
-sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp);
-
-/* Clips counted while quantizing input from another effect, moved out of the
- * effect so the chain can add them to its own total.  Reading them clears the
- * count. */
-uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp);
-
 #endif

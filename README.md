@@ -304,6 +304,13 @@ chmod +x build_static_libs.sh
 | `--no-png` | Exclude PNG spectrogram support |
 | `--no-magic` | Exclude libmagic support |
 
+**Vulkan Backend:**
+
+| Argument | Description |
+|----------|-------------|
+| `--vulkan` | Enable the Vulkan FIR and DSD backends (needs a Vulkan loader, `glslc` and the glslang headers) |
+| `--no-vulkan` | Disable them (default) |
+
 **Audio Driver Exclusion:**
 
 | Argument | Description |

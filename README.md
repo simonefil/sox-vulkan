@@ -107,8 +107,31 @@ brew install cmake pkgconf
 
 **Required by the full static build:**
 ```bash
-brew install autoconf automake libtool nasm
+brew install autoconf automake libtool libomp
 ```
+
+`libomp` is not optional: the script builds with `SOX_REQUIRE_OPENMP=ON` and
+links Homebrew's `libomp.a`, so configuration fails without it.
+
+**Required by `--vulkan`:**
+```bash
+brew install vulkan-loader vulkan-headers glslang shaderc
+```
+
+CMake needs all four: the loader and headers for `find_package(Vulkan)`,
+`glslc` from `shaderc` to compile this tree's shaders at build time, and
+glslang's C headers and library for VkFFT's run-time shader compilation. The
+Vulkan backends are available on macOS and Windows only; CMake stops with an
+error if `WITH_VULKAN` is on anywhere else.
+
+**Optional:**
+```bash
+brew install nasm
+```
+
+`nasm` enables LAME's x86 assembly. Apple Silicon does not use it — LAME's
+configure reports `checking for nasm... no` and builds without it — so install
+it only on an Intel Mac.
 
 ### FreeBSD
 
@@ -587,6 +610,11 @@ On macOS, every dependency must come from `/usr/lib` or `/System/Library`, for e
 - `CoreFoundation.framework`
 
 FFmpeg and the bundled codec libraries must not appear as `.dylib` dependencies.
+
+A `--vulkan` build adds `libvulkan` and `libglslang`, which are dynamic here for
+the same reason they are on Windows: the loader belongs to the display driver
+and glslang is what VkFFT compiles shaders with, so neither can be linked
+statically. Without `--vulkan` neither appears at all.
 
 On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and
 `bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual

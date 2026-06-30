@@ -230,6 +230,14 @@ verify_static_dependencies() {
                 case "$dependency" in
                     /usr/lib/*|/System/Library/*)
                         ;;
+                    */libvulkan.*|*/libglslang.*)
+                        # The same exemption the Windows build makes.  The
+                        # Vulkan loader belongs to the display driver and
+                        # glslang is what VkFFT compiles shaders with; neither
+                        # can be linked statically, and neither appears at all
+                        # unless --vulkan was given.  Codec libraries still
+                        # may not, which is what this check is for.
+                        ;;
                     *)
                         log_error "Unexpected dynamic dependency: ${dependency}"
                         return 1

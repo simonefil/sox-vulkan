@@ -143,8 +143,6 @@ static int dff_startread(sox_format_t *ft)
 	}
 
 	dff->buf = lsx_malloc(num_channels);
-	if (!dff->buf)
-		return SOX_ENOMEM;
 
 	ft->data_start = lsx_tell(ft);
 
@@ -306,8 +304,6 @@ static int dff_startwrite(sox_format_t *ft)
 	ft->write_packed_dsd = dff_write_packed;
 	ft->write_packed_dsd_words = dff_write_packed_words;
 	dff->buf = lsx_calloc(ft->signal.channels, 1);
-	if (!dff->buf)
-		return SOX_ENOMEM;
 
 	return dff_writeheader(ft);
 }
@@ -648,8 +644,6 @@ static int wsd_startread(sox_format_t *ft)
 		return SOX_EOF;
 
 	dff->buf = lsx_malloc(ch_n);
-	if (!dff->buf)
-		return SOX_ENOMEM;
 
 	ft->data_start = data_sp;
 

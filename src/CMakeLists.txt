@@ -1307,26 +1307,6 @@ endif()
 
 target_link_libraries(sox_exe PRIVATE libsox)
 
-# The test-only probe lives under the intentionally ignored tools directory.
-# Keep its former target definition documented here, but do not expose a build
-# option whose source is not part of the tracked repository.
-# option(
-#     SOX_BUILD_VULKAN_QUALITY_PROBES
-#     "Build test-only Vulkan numerical quality probes"
-#     OFF
-# )
-#
-# if(SOX_BUILD_VULKAN_QUALITY_PROBES AND HAVE_VULKAN)
-#     add_executable(
-#         vulkan_prequant_probe
-#         ../tools/effects/vulkan_prequant_probe.c
-#     )
-#     target_include_directories(
-#         vulkan_prequant_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-#     )
-#     target_link_libraries(vulkan_prequant_probe PRIVATE libsox)
-# endif()
-
 # glslang_dynamic.c resolves the DLL by name at run time rather than linking
 # it, so nothing puts it next to the executable; these two steps do, for the
 # build tree and for an install.  Without them a Vulkan effect fails at the

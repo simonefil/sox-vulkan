@@ -15,7 +15,6 @@
 
 #include "soxomp.h"  /* Note: soxomp.h includes soxconfig.h */
 #include "sox.h"
-#include "vulkan_quality_probe.h"
 
 #if defined HAVE_FMEMOPEN
 #define _GNU_SOURCE

@@ -32,11 +32,14 @@ official dynamic `glslang.dll`.
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
 
-The build script must run inside a Visual Studio developer environment, because
-FFmpeg is configured with `--toolchain=msvc` and built under MSYS2: `cl.exe` has
-to be on `PATH` for MSYS2 to inherit it, and `dumpbin.exe` is what verifies the
-finished executable. The script stops with an error if either is missing.
-Neither a plain PowerShell prompt nor `pwsh` on its own provides them.
+These two are separate requirements. `pwsh` is the interpreter; Visual Studio's
+developer environment is a set of environment variables that must already be
+loaded when it starts. The environment is needed because FFmpeg is configured
+with `--toolchain=msvc` and built under MSYS2, so `cl.exe` has to be on `PATH`
+for MSYS2 to inherit it, and because `dumpbin.exe` is what verifies the finished
+executable; the script stops with an error if either is missing. Installing
+PowerShell 7 does not provide them, and a developer shell does not provide
+PowerShell 7. See Quick Start below for how to get both.
 
 CMake is usually included with Visual Studio. If not, install it from https://cmake.org/download/
 
@@ -153,17 +156,31 @@ sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nas
 
 ### Quick Start
 
-**Windows (Visual Studio Developer PowerShell):**
-```powershell
+**Windows:** the script needs two independent things at once — PowerShell 7 as
+the interpreter, and Visual Studio's developer environment on `PATH`. They are
+not alternatives, and neither implies the other. The developer environment is
+just environment variables, so any child process inherits it: enter it first,
+then start `pwsh` inside it.
+
+From a Developer Command Prompt for VS:
+```bat
 cd C:\path\to\sox-repo
 pwsh -File .\build_static_libs.ps1
 ```
 
-Open "Developer PowerShell for VS" from the Start menu, or run `VsDevCmd.bat`
-from a plain prompt, so that `cl.exe` and `dumpbin.exe` are on `PATH`. Call
-`pwsh` explicitly as above: the default FFmpeg build needs PowerShell 7, and the
-developer shell may well be Windows PowerShell 5.1. With `-NoFfmpeg` the script
-runs on 5.1 too.
+If you only have a plain prompt, load the environment first:
+```bat
+call "C:\Program Files\Microsoft Visual Studio\<version>\<edition>\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+cd C:\path\to\sox-repo
+pwsh -File .\build_static_libs.ps1
+```
+
+Running `.\build_static_libs.ps1` directly works only if that shell is already
+`pwsh` **and** already has the developer environment. Note that a "Developer
+PowerShell for VS" shortcut is often Windows PowerShell 5.1, and some Visual
+Studio installations ship only the Command Prompt shortcut. With `-NoFfmpeg` the
+PowerShell 7 requirement drops and 5.1 is enough, but the developer environment
+is still needed.
 
 **Linux/macOS/BSD (Bash):**
 ```bash

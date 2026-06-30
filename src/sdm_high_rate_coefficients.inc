@@ -4,8 +4,11 @@
  * stable pole polynomial.  sdm_alpha is 0.1 and clans_alpha 0.4.
  *
  * Each entry is an sdm_filter_t in declaration order: a, g, order, freq, name,
- * then trellis_order, trellis_num and trellis_lat, which every set here
- * leaves at zero. */
+ * then trellis_order, trellis_num and trellis_lat.  Those three are the
+ * filter's own trellis defaults, and zero means it has none of its own: the
+ * effect then falls back to 13, 8 and 1024, and only searches at all if the
+ * user asked for a trellis.  Every set here leaves them at zero, as does
+ * every set in sdm.c. */
   {
     {
       8.35924810311280e-01,

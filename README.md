@@ -24,12 +24,19 @@ official dynamic `glslang.dll`.
 
 **Required:**
 - Visual Studio 2019 or later (with C++ workload)
-- PowerShell 7 (`pwsh`)
+- PowerShell 7 (`pwsh`) for the FFmpeg build; the script refuses to start on
+  Windows PowerShell 5.1 unless `-NoFfmpeg` is given
 - CMake 3.15 or later
 - Vulkan SDK with `glslc`, glslang C headers, and `glslang.dll` (required by default for the Vulkan FIR and DSD backends; use `-NoVulkan` to disable them)
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
+
+The build script must run inside a Visual Studio developer environment, because
+FFmpeg is configured with `--toolchain=msvc` and built under MSYS2: `cl.exe` has
+to be on `PATH` for MSYS2 to inherit it, and `dumpbin.exe` is what verifies the
+finished executable. The script stops with an error if either is missing.
+Neither a plain PowerShell prompt nor `pwsh` on its own provides them.
 
 CMake is usually included with Visual Studio. If not, install it from https://cmake.org/download/
 
@@ -146,11 +153,17 @@ sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nas
 
 ### Quick Start
 
-**Windows (PowerShell):**
+**Windows (Visual Studio Developer PowerShell):**
 ```powershell
 cd C:\path\to\sox-repo
-.\build_static_libs.ps1
+pwsh -File .\build_static_libs.ps1
 ```
+
+Open "Developer PowerShell for VS" from the Start menu, or run `VsDevCmd.bat`
+from a plain prompt, so that `cl.exe` and `dumpbin.exe` are on `PATH`. Call
+`pwsh` explicitly as above: the default FFmpeg build needs PowerShell 7, and the
+developer shell may well be Windows PowerShell 5.1. With `-NoFfmpeg` the script
+runs on 5.1 too.
 
 **Linux/macOS/BSD (Bash):**
 ```bash

@@ -20,13 +20,6 @@ void lsx_ddst(int, int, double *, int *, double *);
 void lsx_dfct(int, double *, double *, int *, double *);
 void lsx_dfst(int, double *, double *, int *, double *);
 
-void lsx_cdft_f(int, int, float *, int *, float *);
-void lsx_rdft_f(int, int, float *, int *, float *);
-void lsx_ddct_f(int, int, float *, int *, float *);
-void lsx_ddst_f(int, int, float *, int *, float *);
-void lsx_dfct_f(int, float *, float *, int *, float *);
-void lsx_dfst_f(int, float *, float *, int *, float *);
-
 #define dft_br_len(l) (2 + (1 << (int)(log(l / 2 + .5) / log(2.)) / 2))
 #define dft_sc_len(l) (l / 2)
 

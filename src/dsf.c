@@ -133,8 +133,6 @@ static int dsf_startread(sox_format_t *ft)
 	}
 
 	dsf->block = lsx_calloc(dsf->chan_num, (size_t)dsf->block_size);
-	if (!dsf->block)
-		return SOX_ENOMEM;
 
 	ft->data_start = lsx_tell(ft);
 
@@ -293,8 +291,6 @@ static int dsf_startwrite(sox_format_t *ft)
 	dsf->block_size = 4096;
 
 	dsf->block = lsx_calloc(dsf->chan_num, (size_t)dsf->block_size);
-	if (!dsf->block)
-		return SOX_ENOMEM;
 
 	return dsf_writeheader(ft);
 }

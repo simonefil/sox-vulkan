@@ -285,26 +285,12 @@ Appendix :
 #include <math.h>
 #include "fft4g.h"
 
-#ifdef FFT4G_FLOAT
-  #define double float
-  #define sin   sinf
-  #define cos   cosf
-  #define atan  atanf
-
-  #define cdft  lsx_cdft_f
-  #define rdft  lsx_rdft_f
-  #define ddct  lsx_ddct_f
-  #define ddst  lsx_ddst_f
-  #define dfct  lsx_dfct_f
-  #define dfst  lsx_dfst_f
-#else
-  #define cdft  lsx_cdft
-  #define rdft  lsx_rdft
-  #define ddct  lsx_ddct
-  #define ddst  lsx_ddst
-  #define dfct  lsx_dfct
-  #define dfst  lsx_dfst
-#endif
+#define cdft  lsx_cdft
+#define rdft  lsx_rdft
+#define ddct  lsx_ddct
+#define ddst  lsx_ddst
+#define dfct  lsx_dfct
+#define dfst  lsx_dfst
 
 static void bitrv2conj(int n, int *ip, double *a);
 static void bitrv2(int n, int *ip, double *a);

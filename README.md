@@ -32,14 +32,10 @@ official dynamic `glslang.dll`.
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
 
-These two are separate requirements. `pwsh` is the interpreter; Visual Studio's
-developer environment is a set of environment variables that must already be
-loaded when it starts. The environment is needed because FFmpeg is configured
-with `--toolchain=msvc` and built under MSYS2, so `cl.exe` has to be on `PATH`
-for MSYS2 to inherit it, and because `dumpbin.exe` is what verifies the finished
-executable; the script stops with an error if either is missing. Installing
-PowerShell 7 does not provide them, and a developer shell does not provide
-PowerShell 7. See Quick Start below for how to get both.
+Run `pwsh` from a Visual Studio developer environment: FFmpeg is built under
+MSYS2 with `--toolchain=msvc`, which needs `cl.exe` on `PATH`, and `dumpbin.exe`
+verifies the result. These are separate requirements — installing PowerShell 7
+does not supply the environment, and a developer shell is usually 5.1.
 
 CMake is usually included with Visual Studio. If not, install it from https://cmake.org/download/
 
@@ -120,28 +116,24 @@ brew install cmake pkgconf
 brew install autoconf automake libtool libomp
 ```
 
-`libomp` is not optional: the script builds with `SOX_REQUIRE_OPENMP=ON` and
-links Homebrew's `libomp.a`, so configuration fails without it.
+`libomp` is required, not optional: the script builds with
+`SOX_REQUIRE_OPENMP=ON` and links Homebrew's `libomp.a`.
 
 **Required by `--vulkan`:**
 ```bash
 brew install vulkan-loader vulkan-headers glslang shaderc
 ```
 
-CMake needs all four: the loader and headers for `find_package(Vulkan)`,
-`glslc` from `shaderc` to compile this tree's shaders at build time, and
-glslang's C headers and library for VkFFT's run-time shader compilation. The
-Vulkan backends are available on macOS and Windows only; CMake stops with an
-error if `WITH_VULKAN` is on anywhere else.
+`find_package(Vulkan)` needs the loader and headers, `glslc` compiles this
+tree's shaders, and glslang builds VkFFT's shaders at run time. The Vulkan
+backends exist on macOS and Windows only.
 
 **Optional:**
 ```bash
 brew install nasm
 ```
 
-`nasm` enables LAME's x86 assembly. Apple Silicon does not use it — LAME's
-configure reports `checking for nasm... no` and builds without it — so install
-it only on an Intel Mac.
+`nasm` enables LAME's x86 assembly, so it is only useful on an Intel Mac.
 
 ### FreeBSD
 
@@ -156,31 +148,15 @@ sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nas
 
 ### Quick Start
 
-**Windows:** the script needs two independent things at once — PowerShell 7 as
-the interpreter, and Visual Studio's developer environment on `PATH`. They are
-not alternatives, and neither implies the other. The developer environment is
-just environment variables, so any child process inherits it: enter it first,
-then start `pwsh` inside it.
-
-From a Developer Command Prompt for VS:
+**Windows**, from a Developer Command Prompt for VS:
 ```bat
 cd C:\path\to\sox-repo
 pwsh -File .\build_static_libs.ps1
 ```
 
-If you only have a plain prompt, load the environment first:
-```bat
-call "C:\Program Files\Microsoft Visual Studio\<version>\<edition>\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
-cd C:\path\to\sox-repo
-pwsh -File .\build_static_libs.ps1
-```
-
-Running `.\build_static_libs.ps1` directly works only if that shell is already
-`pwsh` **and** already has the developer environment. Note that a "Developer
-PowerShell for VS" shortcut is often Windows PowerShell 5.1, and some Visual
-Studio installations ship only the Command Prompt shortcut. With `-NoFfmpeg` the
-PowerShell 7 requirement drops and 5.1 is enough, but the developer environment
-is still needed.
+Without one, load the environment first with `VsDevCmd.bat -arch=x64
+-host_arch=x64` from the Visual Studio `Common7\Tools` directory. Call `pwsh`
+explicitly: the developer shell is usually Windows PowerShell 5.1.
 
 **Linux/macOS/BSD (Bash):**
 ```bash
@@ -641,10 +617,9 @@ On macOS, every dependency must come from `/usr/lib` or `/System/Library`, for e
 
 FFmpeg and the bundled codec libraries must not appear as `.dylib` dependencies.
 
-A `--vulkan` build adds `libvulkan` and `libglslang`, which are dynamic here for
-the same reason they are on Windows: the loader belongs to the display driver
-and glslang is what VkFFT compiles shaders with, so neither can be linked
-statically. Without `--vulkan` neither appears at all.
+A `--vulkan` build also shows `libvulkan` and `libglslang`. Neither can be
+static: the loader belongs to the display driver, and glslang compiles VkFFT's
+shaders at run time.
 
 On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and
 `bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual

@@ -245,8 +245,6 @@ int lsx_fir_vulkan_try_fuse(sox_effect_t *first, sox_effect_t const *second)
    * behaved differently on an RTX 3080 and on an M5 Pro, and why accurate
    * scored below fast on Apple Silicon: the two were not running the same
    * computation. */
-  if (getenv("SOX_VULKAN_DISABLE_FIR_FUSION"))
-    return 0;
   if ((!first_base->vulkan_source_taps &&
        !first_base->vulkan_channels) ||
       (!second_base->vulkan_source_taps &&

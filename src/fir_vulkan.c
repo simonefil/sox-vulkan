@@ -8,6 +8,7 @@
 
 #include "sox_i.h"
 #include "fir_vulkan.h"
+#include "diagnostics.h"
 #include "vulkan_fft.h"
 
 #include <inttypes.h>
@@ -134,7 +135,6 @@ struct lsx_fir_vulkan {
   sox_bool authoritative_fp64_kernels;
   sox_bool precise_fp64;
   sox_bool reference_dd;
-  int emit_low_residual;         /* Reference profile diagnostic tap. */
 
   uint32_t taps;
   uint32_t fft_size;
@@ -365,13 +365,8 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
    * 8x 622.32, 16x 624.77 -- the whole range inside 6.5 dB, on a profile
    * sitting nearly 300 dB above the FP64 representation floor. The setup
    * transform is meanwhile the whole of this profile's fixed cost, so the
-   * default is one. */
-  {
-    char const *selector = getenv("SOX_VULKAN_REFERENCE_FUSION_OVERSAMPLING");
-    unsigned long requested = selector && selector[0] ? strtoul(selector, NULL, 10) : 1ul;
-
-    oversampling = requested >= 1ul && requested <= 64ul ? (uint32_t)requested : 1u;
-  }
+   * qualified value is therefore one. */
+  oversampling = 1u;
   if (combined_count > UINT32_MAX / oversampling)
     return SOX_EOF;
   transform_count = combined_count * oversampling;
@@ -551,18 +546,6 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   vkCmdCopyBuffer(scratch.command_buffer, scratch.working.buffer, download.buffer, 1, &output_copy);
   if (submit_commands(&scratch, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS)
     goto cleanup;
-  {
-    char const *raw_dump_path = getenv("SOX_VULKAN_REFERENCE_FUSION_RAW_DUMP");
-
-    if (raw_dump_path && raw_dump_path[0]) {
-      FILE *raw_dump = fopen(raw_dump_path, "wb");
-      size_t written = raw_dump ? fwrite(download.mapped, 1, (size_t)output_size, raw_dump) : 0;
-      int close_result = raw_dump ? fclose(raw_dump) : EOF;
-
-      if (!raw_dump || written != (size_t)output_size || close_result)
-        lsx_warn("cannot write raw Vulkan reference fusion dump");
-    }
-  }
   *result_highs = lsx_malloc(
       combined_count * sizeof(**result_highs));
   *result_lows = lsx_malloc(
@@ -574,18 +557,6 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
     (*result_lows)[set_index] = pair[1];
   }
   *result_count = combined_count;
-  {
-    char const *dump_path = getenv("SOX_VULKAN_REFERENCE_FUSION_DUMP");
-
-    if (dump_path && dump_path[0]) {
-      FILE *dump = fopen(dump_path, "wb");
-      size_t written = dump ? fwrite(*result_highs, sizeof(**result_highs), combined_count, dump) : 0;
-      int close_result = dump ? fclose(dump) : EOF;
-
-      if (!dump || written != combined_count || close_result)
-        lsx_warn("cannot write Vulkan reference fusion dump");
-    }
-  }
   status = SOX_SUCCESS;
   lsx_report(
       "Vulkan REFERENCE spectral fusion: %lu filters, "
@@ -723,7 +694,7 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
    * disagree.  Selection order matters: reference_dd and precise_fp64 both
    * imply double_precision, and precise_fp64 is also set for reference, so the
    * reference test has to come first.  On the FP32 side strict outranks
-   * accurate, which the SOX_VULKAN_PLAIN_FP32_PARTITION knob can switch off. */
+   * accurate; both are fixed properties of their selected profile. */
   if (context->double_precision) {
     if (context->reference_dd)
       partition_spirv = fir_partition_reference_dd_spv, partition_size = sizeof(fir_partition_reference_dd_spv);
@@ -1475,24 +1446,11 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    /* Diagnostic tap: copies the spectrum the partition shader just wrote,
-     * before the inverse transform runs, so that a capture can tell whether
-     * the low half of each pair is already missing here or is lost later. */
-    if (context->emit_low_residual >= 3 && download_output) {
-      VkBufferCopy spectrum_copy = { 0, 0, block_size };
-
-      memory_barrier(
-          command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
-          VK_ACCESS_TRANSFER_READ_BIT,
-          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-          VK_PIPELINE_STAGE_TRANSFER_BIT);
-      vkCmdCopyBuffer(command_buffer, context->working.buffer, context->download.buffer, 1, &spectrum_copy);
-    }
     lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR inverse FFT");
     if (lsx_vulkan_fft_append(context->fft, command_buffer, sox_true) != SOX_SUCCESS)
       goto error;
     lsx_vulkan_label_end(context->vulkan, command_buffer);
-    if (download_output && context->emit_low_residual < 3) {
+    if (download_output) {
       lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR output download");
       memory_barrier(
           command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
@@ -1698,18 +1656,12 @@ static lsx_fir_vulkan_t *create_fir(
   context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
   context->accurate_fp32 =
       !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_accurate &&
-      !getenv("SOX_VULKAN_PLAIN_FP32_PARTITION");
+      vulkan->profile == sox_vulkan_profile_accurate;
   context->precise_fp64 =
       context->double_precision &&
       (vulkan->profile == sox_vulkan_profile_strict ||
        vulkan->profile == sox_vulkan_profile_reference);
   context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
-  {
-    char const *residual = getenv("SOX_VULKAN_REFERENCE_LOW_RESIDUAL");
-
-    context->emit_low_residual = context->reference_dd && residual && residual[0] ? atoi(residual) : 0;
-  }
   /* Not for the reference profile: its coefficients are double-double, and a
    * host transform would have to collapse them to plain doubles first, which
    * is exactly the loss the profile exists to avoid.  It transforms its
@@ -1757,6 +1709,24 @@ static lsx_fir_vulkan_t *create_fir(
 
 error: lsx_fir_vulkan_destroy(context);
   return NULL;
+}
+
+/* Publish what only the backend knows about this effect.  It is the same
+ * material the -V3 lines above carry, emitted a second time as keys rather
+ * than measured again, which is why nothing here computes anything. */
+void lsx_fir_vulkan_diagnostics(lsx_fir_vulkan_t const *context, sox_effect_t const *effp)
+{
+  if (!context || !lsx_diagnostics_on)
+    return;
+  lsx_diagnostics_effect_setf(effp, "precision", "%s",
+      context->reference_dd ? "FP64x2" :
+      context->double_precision ? "FP64" : "FP32");
+  lsx_diagnostics_effect_setf(effp, "strategy", "%s", strategy_name(context));
+  lsx_diagnostics_effect_setf(effp, "taps", "%u", context->taps);
+  lsx_diagnostics_effect_setf(effp, "partitions", "%u", context->partitions);
+  lsx_diagnostics_effect_setf(effp, "fft_size", "%u", context->fft_size);
+  lsx_diagnostics_effect_setf(effp, "block_frames", "%u", context->block_frames);
+  lsx_diagnostics_effect_setf(effp, "startup_s", "%.6f", context->startup_seconds);
 }
 
 lsx_fir_vulkan_t *lsx_fir_vulkan_create(

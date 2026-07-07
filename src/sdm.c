@@ -42,6 +42,7 @@
 
 #include "sox_i.h"
 #include "sdm.h"
+#include "diagnostics.h"
 #if HAVE_VULKAN
 #include "rate_vulkan.h"
 #include "sdm_vulkan.h"
@@ -2015,8 +2016,15 @@ static int start(sox_effect_t *effp)
       return SOX_EOF;
     p->vulkan_engine = vulkan;
     p->vulkan_rate = (unsigned)sdm_rate;
-    if (!getenv("SOX_VULKAN_DISABLE_RESIDENT_EFFECT_BOUNDARY"))
-      effp->internal_chain_endpoint = &vulkan_resident_endpoint;
+    if (lsx_diagnostics_on) {
+      /* Two modulators, not two precisions: the Vulkan path is MASH-2/FSM and
+       * the CPU has no such modulator, so a row comparing the two is
+       * comparing algorithms and has to say so. */
+      lsx_diagnostics_effect_setf(effp, "backend", "vulkan");
+      lsx_diagnostics_effect_setf(effp, "modulator", "MASH-2/FSM");
+      lsx_diagnostics_effect_setf(effp, "dsd_rate", "%u", (unsigned)sdm_rate);
+    }
+    effp->internal_chain_endpoint = &vulkan_resident_endpoint;
     effp->out_signal.precision = 1;
     effp->out_signal.rate = sdm_rate;
     effp->out_signal.packing = SOX_DSD_PACKING_WORD;
@@ -2025,6 +2033,11 @@ static int start(sox_effect_t *effp)
 #endif
   p->sdm = lsx_calloc(p->channels, sizeof(*p->sdm));
   p->emitted = lsx_calloc(p->channels, sizeof(*p->emitted));
+  if (lsx_diagnostics_on) {
+    lsx_diagnostics_effect_setf(effp, "backend", "cpu");
+    lsx_diagnostics_effect_setf(effp, "modulator", "%s",
+        p->filter_name ? p->filter_name : "default");
+  }
 
   for (channel = 0; channel < p->channels; ++channel) {
     p->sdm[channel] = sdm_init(

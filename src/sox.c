@@ -24,6 +24,7 @@
 #include "soxconfig.h"
 #include "sox.h"
 #include "util.h"
+#include "diagnostics.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -230,11 +231,67 @@ static sox_bool original_termios_saved = sox_false;
 static sox_bool stdin_is_a_tty, is_player, is_guarded, do_guarded_norm, no_dither, reported_sox_opts;
 
 struct timeval load_timeofday;
+/* The command as it was given, for --diagnostics: a report that cannot be
+ * traced back to an invocation is not reproducible. */
+static char * invocation;
+
+static void write_output_diagnostics(void)
+{
+  if (!lsx_diagnostics_on || !file_count || !ofile->ft)
+    return;
+  lsx_diagnostics_setf("output.rate", "%g", ofile->ft->signal.rate);
+  lsx_diagnostics_setf("output.channels", "%u", ofile->ft->signal.channels);
+  lsx_diagnostics_setf("output.bits", "%u", ofile->ft->encoding.bits_per_sample);
+  lsx_diagnostics_setf("output.precision", "%u", ofile->ft->signal.precision);
+  lsx_diagnostics_setf("output.encoding", "%s",
+      sox_get_encodings_info()[ofile->ft->encoding.encoding].name);
+  lsx_diagnostics_setf("output.type", "%s",
+      ofile->ft->filetype ? ofile->ft->filetype : "unknown");
+  lsx_diagnostics_setf("output.clips", "%" PRIu64, ofile->ft->clips);
+}
+
+static void write_diagnostics(void)
+{
+  struct timeval now;
+  if (!lsx_diagnostics_on)
+    return;
+  lsx_diagnostics_setf("output.frames", "%" PRIu64, output_samples);
+  /* Freeze the pipeline time after the real output writer has been closed,
+   * but before captures are assembled and quality metrics are calculated by
+   * the suite.  One diagnosed run therefore supplies both speed and quality. */
+  gettimeofday(&now, NULL);
+  lsx_diagnostics_setf("timing.end_to_end_s", "%.6f",
+      now.tv_sec - load_timeofday.tv_sec +
+      (now.tv_usec - load_timeofday.tv_usec) / TIME_FRAC);
+  lsx_diagnostics_close(success ? SOX_SUCCESS : SOX_EOF);
+}
 
 static void cleanup(void)
 {
   size_t i;
 
+  /* Finalising the actual output belongs to the end-to-end pipeline time.
+   * Preserve its diagnostics first, close it, and only then freeze the timer
+   * and assemble captures. */
+  if (file_count && ofile->ft) {
+    char *failed_output = NULL;
+
+    write_output_diagnostics();
+    if (!success && ofile->ft->io_type == lsx_io_file) {
+      struct stat st;
+      if (!stat(ofile->ft->filename, &st) &&
+          (st.st_mode & S_IFMT) == S_IFREG)
+        failed_output = lsx_strdup(ofile->ft->filename);
+    }
+    if (sox_close(ofile->ft) != SOX_SUCCESS)
+      success = 0;
+    ofile->ft = NULL;
+    if (failed_output) {
+      unlink(failed_output);
+      free(failed_output);
+    }
+  }
+  write_diagnostics();
   if (!success && !reported_sox_opts) {
     char const * env_opts = getenv(SOX_OPTS);
     if (env_opts && *env_opts)
@@ -252,21 +309,6 @@ static void cleanup(void)
   }
 
   if (file_count) {
-    if (ofile->ft) {
-      char *failed_output = NULL;
-
-      if (!success && ofile->ft->io_type == lsx_io_file) {   /* If we failed part way through */
-        struct stat st;                  /* writing a normal file, remove it. */
-        if (!stat(ofile->ft->filename, &st) &&
-            (st.st_mode & S_IFMT) == S_IFREG)
-          failed_output = lsx_strdup(ofile->ft->filename);
-      }
-      sox_close(ofile->ft);
-      if (failed_output) {
-        unlink(failed_output);
-        free(failed_output);
-      }
-    }
     free(ofile->codec_options);
     free(ofile->channel_layout);
     free(ofile->filename);
@@ -687,9 +729,15 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
 
     if (effp->in_signal.packing == SOX_DSD_PACKING_WORD) {
       len = *isamp ? sox_write_packed_dsd_words(ofile->ft, ibuf, *isamp) : 0;
+      if (len)
+        lsx_diagnostics_capture_dsd(ibuf, len, (unsigned)channels,
+            SOX_DSD_PACKING_WORD);
       output_samples += 32 * (len / channels);
     } else {
       len = *isamp ? sox_write_packed_dsd(ofile->ft, ibuf, *isamp) : 0;
+      if (len)
+        lsx_diagnostics_capture_dsd(ibuf, len, (unsigned)channels,
+            SOX_DSD_PACKING_BYTE);
       if (len && SOX_DSD_PACKED_VALID_BITS(ibuf[0]) == 8 && SOX_DSD_PACKED_VALID_BITS(ibuf[len - channels]) == 8)
         output_samples += 8 * (len / channels);
       else {
@@ -1984,6 +2032,7 @@ static void usage(char const * message)
 "--combine sequence       Sequence all input files (default for play)",
 "-D, --no-dither          Don't dither automatically",
 "--dft-min NUM            Minimum size (log2) for DFT processing (default 10)",
+"--diagnostics DIR        Write machine-readable diagnostics for this run to DIR",
 "--effects-file FILENAME  File containing effects and options",
 "-G, --guard              Use temporary files to guard against clipping",
 "-h, --help               Display version number and usage information",
@@ -2270,6 +2319,7 @@ static struct lsx_option_t const long_options[] = {
   {"vulkan-accurate" , lsx_option_arg_none    , NULL, 0},
   {"vulkan-strict"   , lsx_option_arg_none    , NULL, 0},
   {"vulkan-reference", lsx_option_arg_none    , NULL, 0},
+  {"diagnostics"     , lsx_option_arg_required, NULL, 0},
 
   {"bits"            , lsx_option_arg_required, NULL, 'b'},
   {"channels"        , lsx_option_arg_required, NULL, 'c'},
@@ -2372,6 +2422,25 @@ static void set_vulkan_profile(sox_vulkan_profile_t profile)
   lsx_fail("this build of SoX does not include Vulkan support");
   exit(1);
 #endif
+}
+
+/* --diagnostics DIR.  Opened as the option is read rather than later, so that
+ * a failure anywhere after this point still leaves a run.txt saying what went
+ * wrong instead of an empty directory. */
+static void start_diagnostics(char const *dir)
+{
+  if (lsx_diagnostics_on)
+    usage("only one --diagnostics directory may be given");
+  lsx_diagnostics_open(dir);
+  lsx_diagnostics_setf("sox.version", "%s", sox_version());
+#ifdef SOX_GIT_COMMIT
+  lsx_diagnostics_setf("sox.commit", "%s", SOX_GIT_COMMIT);
+#endif
+  /* Not whether the binary is static: the suite reads that off the file
+   * itself, where it is a fact rather than a claim. */
+  lsx_diagnostics_setf("sox.threads_available", "%d",
+      sox_version_info()->flags & sox_version_have_threads ? 1 : 0);
+  lsx_diagnostics_setf("sox.command", "%s", invocation ? invocation : "unknown");
 }
 
 static char parse_gopts_and_fopts(file_t * f)
@@ -2491,6 +2560,7 @@ static char parse_gopts_and_fopts(file_t * f)
       case 29: set_vulkan_profile(sox_vulkan_profile_accurate); break;
       case 30: set_vulkan_profile(sox_vulkan_profile_strict); break;
       case 31: set_vulkan_profile(sox_vulkan_profile_reference); break;
+      case 32: start_diagnostics(optstate.arg); break;
       }
       break;
 
@@ -2950,6 +3020,19 @@ static void set_replay_gain(sox_comments_t comments, file_t * f)
 static void output_message(unsigned level, const char *filename, const char *fmt, va_list ap)
 {
   char const * const str[] = {"FAIL", "WARN", "INFO", "DBUG"};
+  /* The first failure, which is the one that explains the run; later ones are
+   * usually its consequences.  Recorded whatever the verbosity, since a quiet
+   * run still has to say in run.txt why it stopped. */
+  if (level == 1 && lsx_diagnostics_on) {
+    va_list copy;
+    char message[512];
+
+    va_copy(copy, ap);
+    vsnprintf(message, sizeof(message), fmt, copy);
+    va_end(copy);
+    if (!lsx_diagnostics_have("result.message"))
+      lsx_diagnostics_setf("result.message", "%s", message);
+  }
   if (sox_globals.verbosity >= level) {
     char base_name[128];
     sox_basename(base_name, sizeof(base_name), filename);
@@ -2972,6 +3055,20 @@ int main(int argc, char **argv)
 
   gettimeofday(&load_timeofday, NULL);
   myname = argv[0];
+  {
+    size_t length = 0;
+    int arg;
+
+    for (arg = 0; arg < argc; ++arg)
+      length += strlen(argv[arg]) + 1;
+    invocation = lsx_malloc(length + 1);
+    invocation[0] = '\0';
+    for (arg = 0; arg < argc; ++arg) {
+      if (arg)
+        strcat(invocation, " ");
+      strcat(invocation, argv[arg]);
+    }
+  }
   sox_globals.output_message_handler = output_message;
 
   if (0 != sox_basename(mybase, sizeof(mybase), myname))

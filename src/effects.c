@@ -17,6 +17,7 @@
 
 #define LSX_EFF_ALIAS
 #include "sox_i.h"
+#include "diagnostics.h"
 #if HAVE_VULKAN
 #include "dft_filter.h"
 #endif
@@ -31,6 +32,32 @@
 #endif
 
 #define DEBUG_EFFECTS_CHAIN 0
+
+/* Which effect the sample taps listen to: the last one before the chain's
+ * sink.  Its output is the chain's output, and inside it the samples are
+ * still doubles, which they never are again.  Tapping every effect instead
+ * would write several different signals into one file. */
+static sox_bool effect_is_tapped(sox_effects_chain_t const * chain, size_t n)
+{
+  return lsx_diagnostics_on && chain->length >= 2 && n + 2 == chain->length ?
+      sox_true : sox_false;
+}
+
+/* Frames rather than samples, so the number means the same thing whatever the
+ * channel count, and separately for the two sides because an effect like rate
+ * has a different count on each. */
+static void count_frames(sox_effects_chain_t const * chain, size_t n,
+    size_t in_samples, size_t out_samples)
+{
+  sox_effect_t const *effp = chain->effects[n];
+
+  if (!lsx_diagnostics_on)
+    return;
+  lsx_diagnostics_effect_frames(n,
+      effp->in_signal.channels ? in_samples / effp->in_signal.channels : 0,
+      effp->out_signal.channels ? out_samples / effp->out_signal.channels : 0);
+}
+
 
 /* Default effect handler functions for do-nothing situations: */
 
@@ -165,6 +192,7 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
     (effp->handler.flags & SOX_EFF_MCHAN)? 1 : effp->in_signal.channels;
   effp->clips = 0;
   effp->imin = 0;
+  lsx_diagnostics_effect_pending_clear();
   eff0 = *effp, eff0.priv = lsx_memdup(eff0.priv, eff0.handler.priv_size);
   eff0.in_signal.mult = NULL; /* Only used in channel 0 */
   ret = start(effp);
@@ -237,6 +265,9 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
     }
   }
 
+  /* Now that the effect has a position, the keys its start function
+   * published can be written under it. */
+  lsx_diagnostics_effect_pending_flush(chain->length);
   ++chain->length;
   free(eff0.priv);
   return SOX_SUCCESS;
@@ -521,9 +552,19 @@ static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, l
   lsx_vulkan_effect_endpoint_t const *endpoint = vulkan_endpoint(effp);
   size_t produced = sox_globals.bufsiz - effp->oend;
   uint64_t input_clips;
+  sox_bool tapped = effect_is_tapped(chain, n);
   int status;
 
+  /* The tail of a resident segment goes to the host through this call rather
+   * than through flow_effect, so the tap has to be armed here as well or the
+   * one path the reference profile actually takes would capture nothing. */
+  if (tapped) {
+    lsx_diagnostics_tap_begin(effp, effp->flows);
+    lsx_diagnostics_tap_flow(0);
+  }
   status = endpoint->consume(effp, resident, input_consumed, &input_clips, effp->obuf + effp->oend, &produced, active);
+  if (tapped)
+    lsx_diagnostics_tap_end();
 
   if (produced % effp->out_signal.channels) {
     lsx_fail("resident multi-channel effect flowed asymmetrically");
@@ -531,6 +572,7 @@ static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, l
   }
   chain->effects[n - 1u]->clips += input_clips;
   effp->oend += produced;
+  count_frames(chain, n, 0, produced);
   *progress = produced || *input_consumed;
   return status;
 }
@@ -628,13 +670,18 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
   size_t obeg = sox_globals.bufsiz - effp->oend;
   sox_bool il_change = (effp->flows == 1) !=
       (chain->length == n + 1 || chain->effects[n+1]->flows == 1);
+  sox_bool tapped = effect_is_tapped(chain, n);
 #if DEBUG_EFFECTS_CHAIN
   size_t pre_idone = idone;
   size_t pre_odone = obeg;
 #endif
 
+  if (tapped)
+    lsx_diagnostics_tap_begin(effp, effp->flows);
   if (effp->flows == 1) {     /* Run effect on all channels at once */
     idone -= idone % effp->in_signal.channels;
+    if (tapped)
+      lsx_diagnostics_tap_flow(0);
     effstatus = effp->handler.flow(effp, effp1->obuf + effp1->obeg,
                     il_change ? chain->il_buf : effp->obuf + effp->oend,
                     &idone, &obeg);
@@ -659,21 +706,29 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
         if(sox_globals.use_threads && thread_count > 1) \
         num_threads(thread_count) \
         schedule(static) default(none) \
-        shared(effp,effp1,idone,obeg,obuf,flow_offs,chain,n,effstatus) \
+        shared(effp,effp1,idone,obeg,obuf,flow_offs,chain,n,effstatus,tapped) \
         reduction(min:idone_min,odone_min) reduction(max:idone_max,odone_max)
 #elif defined HAVE_OPENMP
     #pragma omp parallel for \
         if(sox_globals.use_threads && thread_count > 1) \
         num_threads(thread_count) \
         schedule(static) default(none) \
-        shared(effp,effp1,idone,obeg,obuf,flow_offs,chain,n,effstatus) \
+        shared(effp,effp1,idone,obeg,obuf,flow_offs,chain,n,effstatus,tapped) \
         firstprivate(idone_min,odone_min,idone_max,odone_max) \
         lastprivate(idone_min,odone_min,idone_max,odone_max)
 #endif
     for (f = 0; f < (ptrdiff_t)effp->flows; ++f) {
       size_t idonec = idone / effp->flows;
       size_t odonec = obeg / effp->flows;
-      int eff_status_c = effp->handler.flow(&chain->effects[n][f],
+      int eff_status_c;
+
+      /* Each flow writes its own part of the capture, and the parts are
+       * interleaved when the run ends: a single file written by whichever
+       * flow got there first would be in thread arrival order, which is no
+       * order at all. */
+      if (tapped)
+        lsx_diagnostics_tap_flow((size_t)f);
+      eff_status_c = effp->handler.flow(&chain->effects[n][f],
           effp1->obuf + f*flow_offs + effp1->obeg/effp->flows,
           obuf + f*flow_offs + effp->oend/effp->flows,
           &idonec, &odonec);
@@ -709,6 +764,9 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
   }
 
   effp->oend += obeg;
+  if (tapped)
+    lsx_diagnostics_tap_end();
+  count_frames(chain, n, idone, obeg);
 
 #if DEBUG_EFFECTS_CHAIN
   lsx_report("\t" "flow:  %2" PRIuPTR " (%1" PRIuPTR ")  "
@@ -730,11 +788,16 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
   size_t obeg = sox_globals.bufsiz - effp->oend;
   sox_bool il_change = (effp->flows == 1) !=
       (chain->length == n + 1 || chain->effects[n+1]->flows == 1);
+  sox_bool tapped = effect_is_tapped(chain, n);
 #if DEBUG_EFFECTS_CHAIN
   size_t pre_odone = obeg;
 #endif
 
+  if (tapped)
+    lsx_diagnostics_tap_begin(effp, effp->flows);
   if (effp->flows == 1) { /* Run effect on all channels at once */
+    if (tapped)
+      lsx_diagnostics_tap_flow(0);
     effstatus = effp->handler.drain(effp,
                     il_change ? chain->il_buf : effp->obuf + effp->oend,
                     &obeg);
@@ -752,7 +815,11 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
 
     for (f = 0; f < effp->flows; ++f) {
       size_t odonec = obeg / effp->flows;
-      int eff_status_c = effp->handler.drain(&chain->effects[n][f],
+      int eff_status_c;
+
+      if (tapped)
+        lsx_diagnostics_tap_flow(f);
+      eff_status_c = effp->handler.drain(&chain->effects[n][f],
           obuf + f*flow_offs + effp->oend/effp->flows,
           &odonec);
       if (f && (odonec != odone_last)) {
@@ -776,6 +843,9 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
     effstatus = SOX_EOF;
 
   effp->oend += obeg;
+  if (tapped)
+    lsx_diagnostics_tap_end();
+  count_frames(chain, n, 0, obeg);
 
 #if DEBUG_EFFECTS_CHAIN
   lsx_report("\t" "drain: %2" PRIuPTR " (%1" PRIuPTR ")  "
@@ -822,6 +892,19 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
     chain->il_buf = lsx_malloc(sox_globals.bufsiz * sizeof(sox_sample_t));
   else
     chain->il_buf = NULL;
+
+  if (lsx_diagnostics_on) {
+    lsx_diagnostics_chain(chain);
+    /* What the effects will actually run with, not what the machine offers:
+     * a report that says eight threads where one ran is worse than no report
+     * at all. */
+#if defined HAVE_OPENMP
+    lsx_diagnostics_setf("openmp.threads", "%d",
+        sox_globals.use_threads ? (int)min(max_flows, (size_t)omp_get_max_threads()) : 1);
+#else
+    lsx_diagnostics_setf("openmp.threads", "1");
+#endif
+  }
 
   /* Go through the effects, and if there are samples in one of the
      buffers, deinterleave it (if necessary).  */
@@ -1148,6 +1231,9 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
   }
   vulkan_resident_segment_state_destroy(&resident_segment);
 #endif
+  /* While the effects are still alive: their clip counts and frame totals are
+   * final here, and the chain is deleted before the diagnostics are closed. */
+  lsx_diagnostics_chain_done();
   return flow_status;
 }
 

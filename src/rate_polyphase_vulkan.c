@@ -695,6 +695,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
     resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
     resident->capacity_elements = context->max_output_frames;
     resident->valid_elements = (size_t)count;
+    resident->block_elements = context->max_output_frames;
     resident->frame_stride_elements = context->parameters.channels;
     resident->channel_stride_elements = 1u;
     resident->rate = rate;

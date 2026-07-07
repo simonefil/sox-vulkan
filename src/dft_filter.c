@@ -18,6 +18,7 @@
 #include "sox_i.h"
 #include "fft4g.h"
 #include "dft_filter.h"
+#include "diagnostics.h"
 #include <string.h>
 
 #if HAVE_VULKAN
@@ -244,13 +245,28 @@ static int start(sox_effect_t * effp)
   priv_t * p = (priv_t *) effp->priv;
   filter_t * f = p->filter_ptr;
 
+  if (lsx_diagnostics_on) {
+    /* The response's shape and the latency that follows from it.  Both paths
+     * account for the same pre_peak -- the CPU one by priming its input FIFO,
+     * the Vulkan one by discarding that many output samples -- so a profile
+     * that moves the impulse by a sample is visible here even when the SNR
+     * says nothing. */
+    lsx_diagnostics_effect_setf(effp, "taps", "%d", f->num_taps);
+    lsx_diagnostics_effect_setf(effp, "post_peak", "%d", f->post_peak);
+    lsx_diagnostics_effect_setf(effp, "pre_peak", "%d", f->num_taps - 1 - f->post_peak);
+    lsx_diagnostics_effect_setf(effp, "latency_samples", "%d", f->num_taps - 1 - f->post_peak);
+  }
 #if HAVE_VULKAN
   if (sox_globals.vulkan_profile != sox_vulkan_profile_none) {
     lsx_vulkan_context_t *vulkan = lsx_vulkan_context_get(effp->global_info);
-    sox_bool enable_resident = vulkan && !getenv("SOX_VULKAN_DISABLE_RESIDENT_DFT_CONSUMER");
+    sox_bool enable_resident = vulkan != NULL;
     size_t block_samples;
 
     effp->flows = 1;
+    if (lsx_diagnostics_on) {
+      lsx_diagnostics_effect_setf(effp, "backend", "vulkan");
+      lsx_diagnostics_effect_setf(effp, "resident", "%d", enable_resident ? 1 : 0);
+    }
     if (!vulkan) {
       free(f->taps);
       f->taps = NULL;
@@ -284,6 +300,13 @@ static int start(sox_effect_t * effp)
 #endif
   if (!f->coefs)
     prepare_cpu_filter(f);
+  if (lsx_diagnostics_on) {
+    lsx_diagnostics_effect_setf(effp, "backend", "cpu");
+    lsx_diagnostics_effect_setf(effp, "resident", "0");
+    lsx_diagnostics_effect_setf(effp, "precision", "FP64");
+    lsx_diagnostics_effect_setf(effp, "strategy", "FP64 overlap-save FFT + FP64 accumulation");
+    lsx_diagnostics_effect_setf(effp, "fft_size", "%d", f->dft_length);
+  }
   fifo_create(&p->input_fifo, sizeof(double));
   memset(fifo_reserve(&p->input_fifo,
         f->post_peak), 0, sizeof(double) * f->post_peak);
@@ -367,6 +390,8 @@ static int ensure_vulkan_producer(sox_effect_t *effp)
       p->vulkan = lsx_fir_vulkan_create_reference_dd(p->vulkan_context, p->vulkan_source_taps, p->vulkan_reference_low_taps, (size_t)p->vulkan_source_num_taps, (uint32_t)effp->in_signal.channels);
     else
       p->vulkan = lsx_fir_vulkan_create(p->vulkan_context, p->vulkan_source_taps, (size_t)p->vulkan_source_num_taps, (uint32_t)effp->in_signal.channels);
+  if (p->vulkan && lsx_diagnostics_on)
+    lsx_fir_vulkan_diagnostics(p->vulkan, effp);
   return p->vulkan ? SOX_SUCCESS : SOX_EOF;
 }
 

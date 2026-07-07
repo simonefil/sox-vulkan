@@ -9,6 +9,7 @@
 
 #include "sox_i.h"
 #include "vulkan_fft_cache.h"
+#include "diagnostics.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -62,9 +63,7 @@ static int key_equal(lsx_vulkan_fft_cache_key_t const *left, lsx_vulkan_fft_cach
 
 int lsx_vulkan_fft_cache_enabled(void)
 {
-  char const *setting = getenv("SOX_VULKAN_FFT_CACHE");
-
-  return !setting || strcmp(setting, "0") != 0;
+  return 1;
 }
 
 /* ---------------------------------------------------------------- on disk */
@@ -85,9 +84,7 @@ int lsx_vulkan_fft_cache_enabled(void)
 
 static int disk_enabled(void)
 {
-  char const *setting = getenv("SOX_VULKAN_FFT_DISK_CACHE");
-
-  return lsx_vulkan_fft_cache_enabled() && (!setting || strcmp(setting, "0") != 0);
+  return 1;
 }
 
 /* FNV-1a over the whole blob.  Only has to catch a truncated or corrupted
@@ -176,25 +173,16 @@ static int append_directory(char *path, size_t size, char const *component)
 }
 
 /* %LOCALAPPDATA%\sox\vkfft-cache, ~/Library/Caches/sox/vkfft-cache, or
- * $XDG_CACHE_HOME/sox/vkfft-cache; SOX_VULKAN_FFT_CACHE_DIR overrides. */
+ * $XDG_CACHE_HOME/sox/vkfft-cache. */
 static char const *cache_directory(void)
 {
   static char path[1024];
   static int resolved;
-  char const *override = getenv("SOX_VULKAN_FFT_CACHE_DIR");
   char const *base;
 
   if (resolved)
     return path[0] ? path : NULL;
   resolved = 1;
-  if (override && *override) {
-    if (strlen(override) + 1 > sizeof(path))
-      return NULL;
-    strcpy(path, override);
-    if (cache_mkdir(path) != 0 && errno != EEXIST)
-      path[0] = '\0';
-    return path[0] ? path : NULL;
-  }
   {
     /* Each platform's cache root, then the same sox/vkfft-cache below it. */
     char const *below[3];
@@ -489,6 +477,18 @@ void lsx_vulkan_fft_cache_clear(void)
     entry = next;
   }
   entries = NULL;
+  if (lsx_diagnostics_on) {
+    char const *directory = cache_directory();
+
+    /* misses are compiles: what the cache exists to avoid, and the number a
+     * cold run and a warm one differ by. */
+    lsx_diagnostics_setf("cache.vkfft.enabled", "%d", lsx_vulkan_fft_cache_enabled() ? 1 : 0);
+    lsx_diagnostics_setf("cache.vkfft.hits", "%u", hits);
+    lsx_diagnostics_setf("cache.vkfft.disk_hits", "%u", disk_hits);
+    lsx_diagnostics_setf("cache.vkfft.misses", "%u", misses);
+    lsx_diagnostics_setf("cache.vkfft.writes", "%u", disk_writes);
+    lsx_diagnostics_setf("cache.vkfft.dir", "%s", directory ? directory : "unavailable");
+  }
   if (hits || misses || disk_hits)
     lsx_report(
         "VkFFT kernel cache: %u compiled, %u from disk, %u in process, "

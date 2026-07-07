@@ -27,6 +27,7 @@
 #include "sox_i.h"
 #include "fft4g.h"
 #include "dft_filter.h"
+#include "diagnostics.h"
 #include <assert.h>
 #include <string.h>
 
@@ -1037,13 +1038,13 @@ static sox_bool rate_vulkan_dft_fft_supported(stage_t const *stage)
   return stage->L >= 1 && stage->M >= 1 && lsx_fir_vulkan_block_frames() % stage->L == 0;
 }
 
-/* A pure interpolation by a factor that is not a power of two can be run as a
- * polyphase stage instead of a transform.  Powers of two are excluded because
- * the plan already builds those from half-band stages, which are cheaper
- * still; and M must be 1, a polyphase stage here doing no decimation. */
+/* A pure interpolation can be run as a polyphase stage instead of a
+ * transform.  This includes a power-of-two final stage: a preceding chain of
+ * half-band stages does not make that final DFT stage disappear.  M must be
+ * 1, a direct stage here doing no decimation. */
 static sox_bool rate_vulkan_dft_direct_supported(stage_t const *stage)
 {
-  return stage->L > 1 && stage->M == 1 && !lsx_is_power_of_2(stage->L);
+  return stage->L > 1 && stage->M == 1;
 }
 
 /* Whether every stage of a plan has a Vulkan executor.  All or nothing: a
@@ -1145,8 +1146,9 @@ static double *rate_vulkan_dft_polyphase_taps(
  *
  * A DFT stage's response is split into polyphase sub-filters when the direct
  * form is the better fit for its ratio; otherwise it goes to the partitioned
- * transform.  The environment knob forces the polyphase form for comparison,
- * and is not a supported configuration. */
+ * transform.  High interpolation factors use the direct form automatically:
+ * this is the same policy used by the resident PCM-to-DSD path before rate and
+ * SDM became explicit adjacent effects. */
 static int rate_vulkan_start(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1177,10 +1179,8 @@ static int rate_vulkan_start(sox_effect_t *effp)
     if (stage->kind == rate_stage_dft) {
       dft_filter_t const *filter = &stage->shared->dft_filter[stage->dft_filter_num];
       sox_bool use_polyphase =
-          (!rate_vulkan_dft_fft_supported(stage) &&
-           rate_vulkan_dft_direct_supported(stage)) ||
-          (stage->L >= 4 &&
-           getenv("SOX_VULKAN_RATE_DFT_POLYPHASE") != NULL);
+          rate_vulkan_dft_direct_supported(stage) &&
+          (!rate_vulkan_dft_fft_supported(stage) || stage->L >= 4);
 
       if (use_polyphase) {
         uint32_t taps_per_phase;
@@ -1422,6 +1422,25 @@ static int start(sox_effect_t * effp)
       stage_t const *stage = &p->rate.plan.stages[stage_index];
       lsx_debug("rate plan stage %d/%d: %s L=%d M=%d phases=%d interpolation=%d taps=%d preload=%d remL=%d", stage_index + 1, p->rate.plan.num_stages, rate_stage_name(stage->kind), stage->L, stage->M, stage->phase_count, stage->interp_order, stage->n, stage->preload, stage->remL);
     }
+    /* The plan, not the ratio: it is the plan that decides which code runs,
+     * and whether the Vulkan backend will take the effect at all. */
+    if (lsx_diagnostics_on) {
+      lsx_diagnostics_effect_setf(effp, "stages", "%d", p->rate.plan.num_stages);
+      lsx_diagnostics_effect_setf(effp, "rejection_db", "%.2f", p->bit_depth * linear_to_dB(2.));
+      /* False when a rejection target was given instead of a preset, which is
+       * the whole of what excludes the Vulkan backend at rate.c's own gate. */
+      lsx_diagnostics_effect_setf(effp, "preset_eligible", "%d", p->vulkan_eligible ? 1 : 0);
+      for (stage_index = 0; stage_index < p->rate.plan.num_stages; ++stage_index) {
+        stage_t const *stage = &p->rate.plan.stages[stage_index];
+        char leaf[32];
+
+        sprintf(leaf, "stage.%d", stage_index);
+        lsx_diagnostics_effect_setf(effp, leaf,
+            "%s L=%d M=%d phases=%d interpolation=%d taps=%d",
+            rate_stage_name(stage->kind), stage->L, stage->M,
+            stage->phase_count, stage->interp_order, stage->n);
+      }
+    }
   }
 
 #if HAVE_VULKAN
@@ -1435,6 +1454,8 @@ static int start(sox_effect_t * effp)
       rate_plan_destroy(&p->rate.plan);
       return SOX_EOF;
     }
+    if (lsx_diagnostics_on)
+      lsx_diagnostics_effect_setf(effp, "backend", "vulkan");
     if (lsx_rate_effect_resident_transform_supported(effp))
       effp->internal_chain_endpoint = &vulkan_resident_transform_endpoint;
     else if (lsx_rate_effect_resident_supported(effp))
@@ -1454,6 +1475,10 @@ static int start(sox_effect_t * effp)
   }
 #endif
   rate_cpu_start(&p->rate);
+  if (lsx_diagnostics_on) {
+    lsx_diagnostics_effect_setf(effp, "backend", "cpu");
+    lsx_diagnostics_effect_setf(effp, "precision", "FP64");
+  }
   return SOX_SUCCESS;
 }
 
@@ -1599,7 +1624,7 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
 
       while (final_stream_index < p->vulkan_stage_count && p->vulkan_stages[final_stream_index].kind != rate_stage_dft)
         ++final_stream_index;
-      final_stream_chain = resident_chain && !getenv("SOX_VULKAN_DISABLE_RESIDENT_POLYPHASE_CHAIN") &&
+      final_stream_chain = resident_chain &&
           final_stream_index == p->vulkan_stage_count - 1u;
 
       while (occupancy_frames > taps - 1u) {
@@ -1863,8 +1888,6 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
   rate_vulkan_stage_executor_t *first = &p->vulkan_stages[0];
   lsx_vulkan_resident_buffer_t current;
   sox_bool first_produced;
-  size_t index;
-  size_t output_frames;
 
   *advanced = sox_false;
   /*
@@ -1890,29 +1913,11 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
     return SOX_EOF;
   if (!first_produced)
     return SOX_SUCCESS;
-  if (p->vulkan_stages[p->vulkan_stage_count - 1u].dft_polyphase) {
-    p->vulkan_pending_chain_input[1u] = current;
-    p->vulkan_pending_chain_input_valid[1u] = sox_true;
-    if (process_vulkan_pending_polyphase_chain(effp, p->vulkan_stage_count - 1u) != SOX_SUCCESS)
-      return SOX_EOF;
-    *advanced = sox_true;
-    return SOX_SUCCESS;
-  }
-  for (index = 1u; index + 1u < p->vulkan_stage_count; ++index) {
-    rate_vulkan_stage_executor_t *polyphase = &p->vulkan_stages[index];
-    lsx_vulkan_resident_buffer_t output;
-
-    if (lsx_rate_polyphase_vulkan_process_resident_input(polyphase->polyphase, &current, NULL, &output_frames, polyphase->output_rate, state, &output) != SOX_SUCCESS)
-      return SOX_EOF;
-    current = output;
-  }
-  {
-    rate_vulkan_stage_executor_t *last = &p->vulkan_stages[p->vulkan_stage_count - 1u];
-
-    if (lsx_rate_vulkan_append_resident_stream(last->dft, &current) != SOX_SUCCESS)
-      return SOX_EOF;
-    p->vulkan_final_stream_active = sox_true;
-  }
+  p->vulkan_pending_chain_input[1u] = current;
+  p->vulkan_pending_chain_input_valid[1u] = sox_true;
+  if (process_vulkan_pending_polyphase_chain(
+          effp, p->vulkan_stage_count - 1u) != SOX_SUCCESS)
+    return SOX_EOF;
   *advanced = sox_true;
   return SOX_SUCCESS;
 }
@@ -1980,8 +1985,24 @@ static int flow_vulkan_resident_input_mode(sox_effect_t *effp, lsx_vulkan_reside
     *input_consumed = sox_true;
     return SOX_SUCCESS;
   }
-  if (input->rate != effp->in_signal.rate || input->channels != channels || lsx_rate_vulkan_append_resident_stream_quantized(p->vulkan_stages[0].dft, input) != SOX_SUCCESS)
+  if (input->rate != effp->in_signal.rate || input->channels != channels) {
+    lsx_fail(
+        "resident Vulkan rate transform input mismatch: "
+        "%.0f/%.0f Hz, %u/%lu channels",
+        input->rate, effp->in_signal.rate,
+        input->channels, (unsigned long)channels);
     return SOX_EINVAL;
+  }
+  if (lsx_rate_vulkan_append_resident_stream_quantized(
+          p->vulkan_stages[0].dft, input) != SOX_SUCCESS) {
+    lsx_fail(
+        "resident Vulkan rate transform input append failed: "
+        "%lu frames, %lu frames available",
+        (unsigned long)input->valid_elements,
+        (unsigned long)lsx_rate_vulkan_resident_stream_room(
+            p->vulkan_stages[0].dft));
+    return SOX_EINVAL;
+  }
   if (p->vulkan_stage_count == 1u)
     p->vulkan_final_stream_active = sox_true;
   ++p->vulkan_external_input_pending;
@@ -2029,14 +2050,14 @@ static int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const 
   memset(resident, 0, sizeof(*resident));
   if (!p->vulkan_stage_count)
     return SOX_EINVAL;
-  if (take_vulkan_resident_output(effp, lsx_vulkan_resident_ready, sox_true, resident, produced) != SOX_SUCCESS)
+  if (take_vulkan_resident_output(effp, lsx_vulkan_resident_ready, sox_false, resident, produced) != SOX_SUCCESS)
     return SOX_EINVAL;
   if (*produced) {
     p->rate.samples_out += resident->valid_elements * channels;
     *isamp = 0;
     return SOX_SUCCESS;
   }
-  if (process_vulkan_stages(effp, p->vulkan_stage_count - 1u, sox_true) != SOX_SUCCESS || take_vulkan_resident_output(effp, lsx_vulkan_resident_ready, sox_true, resident, produced) != SOX_SUCCESS)
+  if (process_vulkan_stages(effp, p->vulkan_stage_count - 1u, sox_true) != SOX_SUCCESS || take_vulkan_resident_output(effp, lsx_vulkan_resident_ready, sox_false, resident, produced) != SOX_SUCCESS)
     return SOX_EINVAL;
   if (*produced) {
     p->rate.samples_out += resident->valid_elements * channels;
@@ -2053,7 +2074,7 @@ static int lsx_rate_effect_flow_resident(sox_effect_t *effp, sox_sample_t const 
     p->rate.samples_in += idone;
     if (process_vulkan_stages(effp, p->vulkan_stage_count - 1u, sox_true) != SOX_SUCCESS ||
         take_vulkan_resident_output(
-        effp, lsx_vulkan_resident_ready, sox_true,
+        effp, lsx_vulkan_resident_ready, sox_false,
         resident, produced) != SOX_SUCCESS) {
       lsx_fail("resident Vulkan rate flow failed");
       return SOX_EINVAL;
@@ -2154,7 +2175,7 @@ static int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_residen
   block_frames = rate_vulkan_executor_input_frames(first);
   block_samples = block_frames * channels;
   while (!*produced) {
-    if (take_vulkan_resident_output(effp, lsx_vulkan_resident_draining, sox_true, resident, produced) != SOX_SUCCESS) {
+    if (take_vulkan_resident_output(effp, lsx_vulkan_resident_draining, sox_false, resident, produced) != SOX_SUCCESS) {
       lsx_fail("resident Vulkan rate drain output failed");
       return SOX_EINVAL;
     }
@@ -2164,7 +2185,7 @@ static int lsx_rate_effect_drain_resident(sox_effect_t *effp, lsx_vulkan_residen
       lsx_fail("resident Vulkan rate drain stages failed");
       return SOX_EINVAL;
     }
-    if (take_vulkan_resident_output(effp, lsx_vulkan_resident_draining, sox_true, resident, produced) != SOX_SUCCESS) {
+    if (take_vulkan_resident_output(effp, lsx_vulkan_resident_draining, sox_false, resident, produced) != SOX_SUCCESS) {
       lsx_fail("resident Vulkan rate drain final output failed");
       return SOX_EINVAL;
     }

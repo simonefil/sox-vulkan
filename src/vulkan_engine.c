@@ -8,6 +8,7 @@
 
 #include "sox_i.h"
 #include "vulkan_engine.h"
+#include "diagnostics.h"
 #include "vulkan_fft_cache.h"
 
 #include <stdint.h>
@@ -307,49 +308,15 @@ static int create_resident_download(lsx_vulkan_context_t *context, VkDeviceSize 
   return SOX_SUCCESS;
 }
 
-typedef enum {
-  lsx_vulkan_pair_output_sum = 0,
-  lsx_vulkan_pair_output_residual = 1,
-  lsx_vulkan_pair_output_low = 2
-} lsx_vulkan_pair_output_t;
-
-/* Resolved once and cached: the mode has to be the same for every collapse in
- * a run, or the two runs a measurement compares would describe different
- * quantities. */
-static lsx_vulkan_pair_output_t lsx_vulkan_pair_output_mode(void)
-{
-  static int resolved;
-  static lsx_vulkan_pair_output_t mode;
-
-  if (!resolved) {
-    char const *selector = getenv("SOX_VULKAN_REFERENCE_LOW_RESIDUAL");
-    int value = selector && selector[0] ? atoi(selector) : 0;
-
-    /* Values above the raw low word select diagnostic taps inside individual
-     * effects; as far as the collapse is concerned they behave like the raw
-     * low word, because that is the half those taps are there to expose. */
-    mode = value == 1 ? lsx_vulkan_pair_output_residual :
-        value >= 2 ? lsx_vulkan_pair_output_low :
-        lsx_vulkan_pair_output_sum;
-    resolved = 1;
-  }
-  return mode;
-}
-
 double lsx_vulkan_collapse_pair(double high, double low)
 {
-  double sum = high + low;
-  double shifted;
-
-  switch (lsx_vulkan_pair_output_mode()) {
-  case lsx_vulkan_pair_output_low: return low;
-  case lsx_vulkan_pair_output_residual:
-    /* Knuth's two-sum: the residual is exactly representable, so the pair is
-     * recovered as sum + residual without any rounding of its own. */
-    shifted = sum - high;
-    return (high - (sum - shifted)) + (low - shifted);
-  default: return sum;
-  }
+  /* Every f64x2 collapse in the engine comes through here, which makes this
+   * the one place the pair can be captured before half of it is thrown away.
+   * The capture is a write to a file and never touches the return value: the
+   * audio is the same whether the diagnostics are on or off. */
+  if (lsx_diagnostics_on && lsx_diagnostics_tap_armed())
+    lsx_diagnostics_capture_dd(high, low);
+  return high + low;
 }
 
 int lsx_vulkan_download_resident_pcm(
@@ -430,8 +397,8 @@ int lsx_vulkan_download_resident_pcm(
    * whole region, strides included, so this walks it with the source strides
    * and writes plain interleaved output.  The paired formats collapse here,
    * which is the last point at which both halves exist -- f32x2 by plain
-   * addition, f64x2 through the shared collapse so that the reference
-   * profile's two runs agree on what they measured. */
+   * addition, f64x2 through the shared collapse, which is where the pair can
+   * still be captured whole. */
   element_size = lsx_vulkan_resident_element_size(resident->format);
   for (frame = 0; frame < resident->valid_elements; ++frame)
     for (channel = 0; channel < resident->channels; ++channel) {
@@ -574,15 +541,11 @@ int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox
   calibrated_device =
       context->properties.vendorID == NVIDIA_VENDOR_ID &&
       !strcmp(context->properties.deviceName, "NVIDIA GeForce RTX 3080");
-  if (context->resident_batch_depth_overridden)
-    selection = "environment override";
-  else {
-    context->resident_batch_depth = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
-    if (calibrated_device)
-      selection = topology == lsx_vulkan_resident_topology_dft_only ?
-          "calibrated DFT throughput" :
-          "calibrated chained throughput";
-  }
+  context->resident_batch_depth = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  if (calibrated_device)
+    selection = topology == lsx_vulkan_resident_topology_dft_only ?
+        "calibrated DFT throughput" :
+        "calibrated chained throughput";
   lsx_report("Vulkan resident cost model: depth %u, topology %s, input %.0f Hz, output %.0f Hz, %u channel%s, duration %s%.6g s, output work %.0f samples, device %s, %s", context->resident_batch_depth, topology == lsx_vulkan_resident_topology_dft_only ? "DFT-only" : "chained", input_rate, output_rate, channels, channels == 1u ? "" : "s", duration > 0 ? "" : "unknown/", duration, output_samples, context->properties.deviceName, selection);
   return SOX_SUCCESS;
 }
@@ -676,6 +639,54 @@ static int choose_device(lsx_vulkan_context_t *context)
   return SOX_SUCCESS;
 }
 
+/* The device as it actually is, which is half of what makes one tester's
+ * report comparable with another's.  Everything here is read back from
+ * Vulkan rather than from an external tool, so it describes the device this
+ * run used and not the one the machine happens to have.
+ *
+ * Validation is reported as not observed rather than as clean: sox installs
+ * no debug messenger, so a layer's findings go to stderr and nothing here
+ * has seen them.  "No errors" and "nobody looked" are different facts. */
+static void write_device_diagnostics(lsx_vulkan_context_t const *context)
+{
+  VkPhysicalDeviceProperties const *properties = &context->properties;
+  VkDeviceSize device_memory = 0;
+  uint32_t heap;
+  char const *icd = getenv("VK_ICD_FILENAMES");
+  char const *layers = getenv("VK_INSTANCE_LAYERS");
+
+  for (heap = 0; heap < context->memory_properties.memoryHeapCount; ++heap)
+    if (context->memory_properties.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+      device_memory = max(device_memory, context->memory_properties.memoryHeaps[heap].size);
+  lsx_diagnostics_setf("device.gpu.name", "%s", properties->deviceName);
+  lsx_diagnostics_setf("device.gpu.vendor_id", "%u", properties->vendorID);
+  lsx_diagnostics_setf("device.gpu.device_id", "%u", properties->deviceID);
+  lsx_diagnostics_setf("device.gpu.memory", "%llu", (unsigned long long)device_memory);
+  lsx_diagnostics_setf("device.gpu.driver", "%u.%u.%u",
+      VK_VERSION_MAJOR(properties->driverVersion),
+      VK_VERSION_MINOR(properties->driverVersion),
+      VK_VERSION_PATCH(properties->driverVersion));
+  lsx_diagnostics_setf("device.vulkan.api", "%u.%u.%u",
+      VK_VERSION_MAJOR(properties->apiVersion),
+      VK_VERSION_MINOR(properties->apiVersion),
+      VK_VERSION_PATCH(properties->apiVersion));
+  lsx_diagnostics_setf("device.vulkan.icd", "%s", icd && *icd ? icd : "loader-default");
+  lsx_diagnostics_setf("device.vulkan.layers", "%s", layers && *layers ? layers : "");
+  lsx_diagnostics_setf("device.vulkan.shader_float64", "%d", context->shader_float64 ? 1 : 0);
+  lsx_diagnostics_setf("device.vulkan.max_workgroup_size", "%u",
+      properties->limits.maxComputeWorkGroupSize[0]);
+  lsx_diagnostics_setf("device.vulkan.max_workgroup_invocations", "%u",
+      properties->limits.maxComputeWorkGroupInvocations);
+  lsx_diagnostics_setf("device.vulkan.timestamp_bits", "%u", context->timestamp_valid_bits);
+  lsx_diagnostics_setf("validation.observed", "0");
+  lsx_diagnostics_setf("profile.requested", "%s", lsx_vulkan_profile_name(sox_globals.vulkan_profile));
+  lsx_diagnostics_setf("profile.effective", "%s", lsx_vulkan_profile_name(context->profile));
+  lsx_diagnostics_setf("profile.family", "%s",
+      lsx_vulkan_numerical_family_name(context->numerical_family));
+  lsx_diagnostics_setf("timing.context_startup_s", "%.6f", context->startup_seconds);
+  lsx_diagnostics_setf("resident.batch_depth", "%u", context->resident_batch_depth);
+}
+
 /* Build the shared context: instance, device, queue, command pool and
  * pipeline cache, plus whatever optional instrumentation is available.
  *
@@ -723,23 +734,9 @@ static lsx_vulkan_context_t *create_context(void)
   uint32_t device_extension_count = 0;
   uint32_t enabled_device_extension_count = 0;
   lsx_vulkan_context_t *context = lsx_calloc(1, sizeof(*context));
-  char const *graphics_capture = getenv("SOX_VULKAN_NSIGHT_GRAPHICS");
-  char const *depth_override = getenv("SOX_VULKAN_RESIDENT_DEPTH");
   double started = monotonic_seconds();
 
   context->resident_batch_depth = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
-  if (depth_override && depth_override[0]) {
-    char *end;
-    unsigned long depth = strtoul(depth_override, &end, 10);
-
-    if (*end || depth < 1u || depth > LSX_VULKAN_RESIDENT_BATCH_DEPTH) {
-      lsx_fail("SOX_VULKAN_RESIDENT_DEPTH must be between 1 and %u", LSX_VULKAN_RESIDENT_BATCH_DEPTH);
-      goto error;
-    }
-    context->resident_batch_depth = (uint32_t)depth;
-    context->resident_batch_depth_overridden = sox_true;
-  }
-  context->graphics_capture = graphics_capture && graphics_capture[0] && strcmp(graphics_capture, "0") ? sox_true : sox_false;
   if (lsx_vulkan_result(vkEnumerateInstanceExtensionProperties(NULL, &instance_extension_count, NULL), "vkEnumerateInstanceExtensionProperties") != SOX_SUCCESS)
     goto error;
   instance_extensions = lsx_calloc(instance_extension_count, sizeof(*instance_extensions));
@@ -840,6 +837,8 @@ static lsx_vulkan_context_t *create_context(void)
       &context->pipeline_cache), "vkCreatePipelineCache") != SOX_SUCCESS)
     goto error;
   context->startup_seconds = monotonic_seconds() - started;
+  if (lsx_diagnostics_on)
+    write_device_diagnostics(context);
   lsx_report(
       "Vulkan core: %s, API %u.%u.%u, compute queue %u, graphics queue %s, "
       "timestamps %s, debug labels %s, frame boundaries %s, startup %.6f seconds",

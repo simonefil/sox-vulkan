@@ -9,6 +9,9 @@
 #include "sox_i.h"
 #include "ffmpeg-codec.h"
 #include "latm-common.h"
+#ifdef HAVE_FFMPEG_FORMATS
+#include "ffmpeg-container.h"
+#endif
 
 #ifdef HAVE_FFMPEG_CODECS
 
@@ -417,5 +420,111 @@ LSX_FORMAT_HANDLER(usac)
 
   return &handler;
 }
+
+#ifdef HAVE_FFMPEG_FORMATS
+
+/* MP4 stores the USAC AudioSpecificConfig and access units in the container,
+ * so this path is the container counterpart of the LOAS/LATM handler above.
+ * It deliberately has its own format name: `m4a' remains ALAC, preserving the
+ * existing read/write contract and making the codec choice explicit. */
+typedef struct {
+  lsx_ffmpeg_codec_t * codec;
+  lsx_ffmpeg_container_t * container;
+} usac_m4a_priv_t;
+
+static int prepare_usac_m4a_decoder(sox_format_t * ft, AVCodecContext * context)
+{
+  usac_m4a_priv_t * p = (usac_m4a_priv_t *)ft->priv;
+
+  if ((avcodec_version() >> 16) < 62) {
+    lsx_fail_errno(ft, SOX_EFMT, "xHE-AAC decoding requires FFmpeg 8.0 or later");
+    return SOX_EOF;
+  }
+  return lsx_ffmpeg_container_startread(
+      ft, &p->container, "mov", AV_CODEC_ID_AAC, context);
+}
+
+static int read_usac_m4a_packet(sox_format_t * ft, AVPacket * packet)
+{
+  usac_m4a_priv_t * p = (usac_m4a_priv_t *)ft->priv;
+
+  return lsx_ffmpeg_container_read_packet(ft, p->container, packet);
+}
+
+static lsx_ffmpeg_codec_definition_t const usac_m4a_definition = {
+  AV_CODEC_ID_AAC,
+  SOX_ENCODING_USAC,
+  "xHE-AAC",
+  8,                            /* max_decode_channels */
+  sox_true,                     /* accept_unspecified_decode_layout */
+  0,                            /* max_encode_channels */
+  24,                           /* precision */
+  0, 0, 0,                     /* bit-rate fields: decode only */
+  AV_PROFILE_UNKNOWN,
+  NULL,
+  AV_PROFILE_AAC_USAC,
+  prepare_usac_m4a_decoder,
+  NULL,
+  read_usac_m4a_packet,
+  NULL,
+  sox_false,
+  0, 0, 0,
+  NULL
+};
+
+static int startread_usac_m4a(sox_format_t * ft)
+{
+  usac_m4a_priv_t * p = (usac_m4a_priv_t *)ft->priv;
+  int result = lsx_ffmpeg_codec_startread(ft, &p->codec, &usac_m4a_definition);
+
+  if (result != SOX_SUCCESS)
+    lsx_ffmpeg_container_stopread(&p->container);
+  else
+    lsx_warn("`%s': xHE-AAC loudness and dynamic-range metadata, if "
+        "present, will be ignored", ft->filename);
+  return result;
+}
+
+static size_t read_samples_usac_m4a(
+    sox_format_t * ft, sox_sample_t * samples, size_t length)
+{
+  usac_m4a_priv_t * p = (usac_m4a_priv_t *)ft->priv;
+
+  return lsx_ffmpeg_codec_read(ft, p->codec, samples, length);
+}
+
+static int stopread_usac_m4a(sox_format_t * ft)
+{
+  usac_m4a_priv_t * p = (usac_m4a_priv_t *)ft->priv;
+  int result = lsx_ffmpeg_codec_stopread(&p->codec);
+
+  lsx_ffmpeg_container_stopread(&p->container);
+  return result;
+}
+
+LSX_FORMAT_HANDLER(usac_m4a)
+{
+  static char const * const names[] = {
+    "xhe-m4a", "usac-m4a", NULL
+  };
+  static unsigned const encodings[] = {SOX_ENCODING_USAC, 0, 0};
+  static sox_format_handler_t const handler = {
+    SOX_LIB_VERSION_CODE,
+    "xHE-AAC/USAC in an M4A/MP4 container (decode only)",
+    names,
+    SOX_FILE_CODEC_OPTIONS,
+    startread_usac_m4a,
+    read_samples_usac_m4a,
+    stopread_usac_m4a,
+    NULL, NULL, NULL, NULL,
+    encodings,
+    NULL,
+    sizeof(usac_m4a_priv_t)
+  };
+
+  return &handler;
+}
+
+#endif
 
 #endif

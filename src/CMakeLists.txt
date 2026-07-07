@@ -16,6 +16,7 @@ set(LIBSOX_CORE_SOURCES
     g72x.c
     vox.c
     raw.c
+    diagnostics.c
     formats.c
     formats_i.c
     skelform.c
@@ -36,6 +37,7 @@ set(LIBSOX_CORE_HEADERS
     g72x.h
     vox.h
     raw.h
+    diagnostics.h
     formats.h
     sox_i.h
     xmalloc.h
@@ -1016,6 +1018,14 @@ endif()
 # OpenMP support
 if(HAVE_OPENMP AND OpenMP_C_FOUND)
     target_link_libraries(libsox PRIVATE OpenMP::OpenMP_C)
+    # Some MSVC CMake generators find OpenMP and define HAVE_OPENMP but leave
+    # the imported target's compile option out of a static-library vcxproj.
+    # In that state pragmas compile as comments and --multi-threaded is
+    # silently single-threaded.  Reapply the flag CMake itself detected to the
+    # target that contains the parallel effects loops.
+    if(MSVC AND OpenMP_C_FLAGS)
+        target_compile_options(libsox PRIVATE ${OpenMP_C_FLAGS})
+    endif()
 endif()
 
 # =====================================================================
@@ -1296,6 +1306,24 @@ if(IS_WINDOWS)
 endif()
 
 add_executable(sox_exe ${SOX_SOURCES})
+
+# The commit the binary was built from, for --diagnostics to record.  Resolved
+# at configure time, so a build from a tarball or with no git simply has no
+# sox.commit key -- an absent key means "not measured", which is exactly the
+# case here.
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --short=8 HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE SOX_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(SOX_GIT_COMMIT)
+        target_compile_definitions(sox_exe PRIVATE SOX_GIT_COMMIT="${SOX_GIT_COMMIT}")
+    endif()
+endif()
 
 set_target_properties(sox_exe PROPERTIES
     OUTPUT_NAME sox

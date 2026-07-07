@@ -58,12 +58,9 @@ typedef struct {
   uint8_t use_lut;
 } lsx_vulkan_fft_cache_key_t;
 
-/* Nonzero unless SOX_VULKAN_FFT_CACHE is set to 0, in which case every
- * context compiles its own kernels as before.  Two further variables affect
- * only the on-disk half: SOX_VULKAN_FFT_DISK_CACHE=0 keeps the cache in the
- * process, and SOX_VULKAN_FFT_CACHE_DIR replaces the default location
- * (%LOCALAPPDATA%\sox\vkfft-cache, ~/Library/Caches/sox/vkfft-cache, or
- * $XDG_CACHE_HOME/sox/vkfft-cache). */
+/* The cache is always active.  Its on-disk location follows the platform:
+ * %LOCALAPPDATA%\sox\vkfft-cache, ~/Library/Caches/sox/vkfft-cache, or
+ * $XDG_CACHE_HOME/sox/vkfft-cache. */
 int lsx_vulkan_fft_cache_enabled(void);
 
 /* Borrowed pointer into the cache, valid until lsx_vulkan_fft_cache_clear();

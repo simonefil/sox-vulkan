@@ -591,6 +591,63 @@ Unsupported options are rejected. Available passthrough options depend on the se
 
 Dolby Atmos and DTS:X object metadata is reported but not rendered; decoding returns the channel-based presentation. DTS-UHD Profile 2 is not supported.
 
+#### Diagnostics
+
+`--diagnostics DIR` writes a machine-readable description of the run into
+`DIR`, which is created if it does not exist. It is meant for qualification
+and benchmarking: everything it reports is a second emission of numbers the
+run already computes, so the audio produced with the option is byte-identical
+to the audio produced without it.
+
+```bash
+# Everything this run can say about itself, plus the samples it produced
+./output/sox in.wav out.wav --vulkan-strict --diagnostics ./diag fir room.txt
+```
+
+`DIR/run.txt` holds one `key=value` per line, with the hierarchy spelled out
+by dots:
+
+```text
+sox.version=15.0.0
+profile.requested=strict
+profile.effective=strict
+device.gpu.name=NVIDIA GeForce RTX 4090
+device.vulkan.shader_float64=1
+effect.1.name=fir
+effect.1.backend=vulkan
+effect.1.precision=FP64x2
+effect.1.strategy=FP64 double-double FFT + double-double memory/product/accumulation
+effect.1.taps=131072
+effect.1.latency_samples=65535
+capture.0.file=chain-out.f64
+result.status=ok
+```
+
+There is no schema version and there will not be one. Keys never change
+meaning and never disappear; new ones are only added. A reader therefore takes
+an absent key as *not measured* — never as an error and never as zero — so an
+older binary produces fewer keys rather than breaking a newer reader.
+
+Up to two sample captures are written beside it, both channel-interleaved,
+both without a header, and neither normalised or scaled; the layout, the
+counts, the sample domain and the capture point are in `run.txt`.
+
+- `chain-out.f64`, one double per sample, taken from the last effect before
+  the output while the samples are still doubles. This covers every backend
+  and profile, and measures at the output file's own floor of about −186 dB.
+- `chain-out.dd`, two doubles per sample — the high and low halves of a
+  double-double — taken where the paired formats collapse, which is the last
+  point at which both halves exist. It appears only for runs that produce
+  such pairs, and it is what makes the `reference` profile measurable from a
+  single run.
+
+Only the files SoX itself writes are replaced, and the rest of the directory
+is left alone, so a mistyped path costs those names rather than a folder. A
+metric that was requested and cannot be produced stops the run with a message
+recorded in `result.message`: a column is never left silently empty. Because
+the captures are written to disk, a run with `--diagnostics` is not a timing
+run; measure quality and speed in separate executions of the same case.
+
 ### 5. Verify Static Linking
 
 ```bash

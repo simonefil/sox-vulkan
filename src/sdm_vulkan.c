@@ -43,6 +43,8 @@
  * is one workgroup's worth of the replay that follows. */
 #define SDM_VULKAN_BLOCK_SAMPLES 256u
 #define SDM_VULKAN_INPUT_FRAMES 16384u
+#define SDM_VULKAN_RESIDENT_BATCH_SAMPLES \
+  (128u * SDM_VULKAN_INPUT_FRAMES)
 /* Reachable states of the one-bit reducer, and the size of the table mapping
  * its accumulator values onto them.  Both are properties of the modulator's
  * arithmetic and must match what the shader assumes. */
@@ -1004,7 +1006,9 @@ static int append_resident_input(
     return SOX_EOF;
   if (lsx_vulkan_enqueue(context->vulkan, command_buffer) != SOX_SUCCESS)
     return SOX_EOF;
-  context->resident_append_bank_index = (context->resident_append_bank_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
+  context->resident_append_bank_index =
+      (context->resident_append_bank_index + 1u) %
+      lsx_vulkan_resident_batch_depth(context->vulkan);
   ++context->resident_append_pending;
   return SOX_SUCCESS;
 }
@@ -1021,7 +1025,8 @@ static int retire_resident_appends(lsx_sdm_vulkan_t *context)
     VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
   };
 
-  if (context->resident_append_pending < lsx_vulkan_resident_batch_depth(context->vulkan))
+  if (context->resident_append_pending <
+      lsx_vulkan_resident_batch_depth(context->vulkan))
     return SOX_SUCCESS;
   if (vk_result(vkResetCommandBuffer(
       context->command_buffer, 0),
@@ -1293,10 +1298,22 @@ lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
     lsx_vulkan_context_t *vulkan, unsigned rate, unsigned channels,
     size_t batch_frames)
 {
-  if (batch_frames > UINT32_MAX)
+  size_t input_target_frames = batch_frames;
+
+  if (batch_frames && channels) {
+    size_t input_budget_frames =
+        SDM_VULKAN_RESIDENT_BATCH_SAMPLES / channels;
+    size_t blocks = max((size_t)1, input_budget_frames / batch_frames);
+
+    if (blocks > UINT32_MAX / batch_frames)
+      return NULL;
+    input_target_frames = blocks * batch_frames;
+  }
+  if (input_target_frames > UINT32_MAX)
     return NULL;
   return create_with_input_target(vulkan, rate, channels,
-      batch_frames ? (uint32_t)batch_frames : SDM_VULKAN_INPUT_FRAMES);
+      input_target_frames ? (uint32_t)input_target_frames :
+      SDM_VULKAN_INPUT_FRAMES);
 }
 
 void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
@@ -1328,7 +1345,10 @@ void lsx_sdm_vulkan_destroy(lsx_sdm_vulkan_t *context)
     if (context->command_buffer)
       vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, 1, &context->command_buffer);
     if (context->resident_append_commands[0])
-      vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, LSX_VULKAN_RESIDENT_BATCH_DEPTH, context->resident_append_commands);
+      vkFreeCommandBuffers(context->vulkan->device,
+          context->vulkan->command_pool,
+          LSX_VULKAN_RESIDENT_BATCH_DEPTH,
+          context->resident_append_commands);
     if (context->descriptor_pool)
       vkDestroyDescriptorPool(context->vulkan->device, context->descriptor_pool, NULL);
     if (context->resident_descriptor_pool)
@@ -1441,6 +1461,10 @@ int lsx_sdm_vulkan_consume_resident(
     size_t *bytes_per_channel, size_t *channel_stride)
 {
   sox_rate_t rate;
+  uint32_t input_frames;
+  uint32_t capacity;
+  uint32_t first;
+  uint32_t remaining;
   double started;
 
   if (!context || !input_consumed || !output_ready || !channel_bytes || !bytes_per_channel || !channel_stride)
@@ -1475,13 +1499,12 @@ int lsx_sdm_vulkan_consume_resident(
       lsx_fail("empty resident Vulkan DSD input is not final");
       return SOX_EOF;
     }
-    if (input->valid_elements > context->input_frames - context->resident_pending_frames) {
+    if (input->valid_elements > context->input_frames) {
       lsx_fail(
-          "resident Vulkan DSD input of %lu frames plus %u retained "
-          "frames exceeds the %lu-frame modulator batch",
-          (unsigned long)input->valid_elements,
-          context->resident_pending_frames,
-          (unsigned long)context->input_frames);
+          "resident Vulkan DSD input exceeds the modulator batch "
+          "(%u > %u frames)",
+          (unsigned)input->valid_elements,
+          context->input_frames);
       return SOX_EOF;
     }
     if (ensure_resident_pipeline(context, input->format, input->domain) != SOX_SUCCESS)
@@ -1491,35 +1514,48 @@ int lsx_sdm_vulkan_consume_resident(
         (unsigned)input->valid_elements,
         (unsigned)input->block_elements, (unsigned)input->state,
         context->resident_pending_frames);
-    if (append_resident_input(context, input, 0, (uint32_t)input->valid_elements) != SOX_SUCCESS)
+    input_frames = (uint32_t)input->valid_elements;
+    capacity = context->input_frames;
+    first = min(input_frames, capacity - context->resident_pending_frames);
+    if (append_resident_input(context, input, 0, first) != SOX_SUCCESS)
       return SOX_EOF;
-    context->resident_pending_frames += (uint32_t)input->valid_elements;
+    context->resident_pending_frames += first;
+    remaining = input_frames - first;
     *input_consumed = sox_true;
     if (input->state == lsx_vulkan_resident_final)
       context->resident_final = sox_true;
+    if (context->resident_pending_frames == capacity) {
+      if (process_resident_pending(
+          context, capacity, 0, channel_bytes,
+          bytes_per_channel, channel_stride) != SOX_SUCCESS)
+        return SOX_EOF;
+      context->resident_pending_frames = 0;
+      *output_ready = sox_true;
+      ++context->process_calls;
+    }
+    if (remaining) {
+      if (append_resident_input(context, input, first, remaining) != SOX_SUCCESS)
+        return SOX_EOF;
+      context->resident_pending_frames = remaining;
+    }
   }
-  /* Mid-stream only whole blocks are modulated, the remainder waiting for the
-   * next slice; at the end of the stream the tail goes through as well.  That
-   * is what confines the zero padding to one place, the true end, instead of
-   * putting it between every pair of slices where it would be audible. */
-  if (context->resident_pending_frames) {
-    uint32_t process_frames = context->resident_final ?
-        context->resident_pending_frames :
-        context->resident_pending_frames /
-        SDM_VULKAN_BLOCK_SAMPLES * SDM_VULKAN_BLOCK_SAMPLES;
-    uint32_t retained_frames = context->resident_pending_frames - process_frames;
+  /* Producer slices are deliberately accumulated into a large GPU batch.
+   * Processing every complete state-machine block as soon as it arrives
+   * turns a high-rate conversion into thousands of submit/wait/download
+   * cycles.  A partial final batch is the only mid-capacity dispatch. */
+  if (!*output_ready && context->resident_final &&
+      context->resident_pending_frames) {
+    uint32_t process_frames = context->resident_pending_frames;
 
-    if (!process_frames)
-      goto retire_appends;
     if (process_resident_pending(
-        context, process_frames, retained_frames, channel_bytes,
+        context, process_frames, 0, channel_bytes,
         bytes_per_channel, channel_stride) != SOX_SUCCESS)
       return SOX_EOF;
-    context->resident_pending_frames = retained_frames;
+    context->resident_pending_frames = 0;
     *output_ready = sox_true;
     ++context->process_calls;
   }
-retire_appends: if (retire_resident_appends(context) != SOX_SUCCESS)
+  if (retire_resident_appends(context) != SOX_SUCCESS)
     return SOX_EOF;
   context->process_seconds += monotonic_seconds() - started;
   return SOX_SUCCESS;

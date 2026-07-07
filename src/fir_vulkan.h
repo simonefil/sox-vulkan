@@ -89,6 +89,11 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
  * device, so any block still in flight has completed on return. */
 void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context);
 
+/* Write this backend's share of the effect's diagnostics keys: precision,
+ * strategy, and the shape it settled on.  A no-op unless --diagnostics is
+ * on. */
+void lsx_fir_vulkan_diagnostics(lsx_fir_vulkan_t const *context, sox_effect_t const *effp);
+
 /* Frames per call.  The first assumes the default transform size and exists
  * for callers with no context yet; the second is the authority, the fast
  * profile using a larger transform and therefore a larger block. */

@@ -302,15 +302,11 @@ int lsx_vulkan_download_resident_pcm(
     double *output, size_t output_samples);
 /* Every double-double resident sample has to become a single double before it
  * can leave the engine, and that collapse is itself the measurement floor of
- * the reference profile. The route is deterministic, so the pair is recovered
- * from two runs instead of being plumbed through the effect chain: the first
- * emits the rounded sum, the second the exact residual of that same sum, and
- * the two add back to the original pair with no error at all. Every f64x2
- * collapse in the engine must go through here, otherwise the two runs describe
- * different quantities. */
-/* Which half is emitted is read once from the environment inside the engine
- * and is constant for the process, so both runs of a measurement see a fixed
- * choice. */
+ * the reference profile.  Every f64x2 collapse in the engine must go through
+ * here: it is the one place where both halves of the pair still exist, and
+ * therefore the only place a measurement can see the profile's full
+ * precision.  Under --diagnostics it captures the pair on the way past; the
+ * value it returns is the same either way. */
 double lsx_vulkan_collapse_pair(double high, double low);
 
 /* Build a compute pipeline from embedded SPIR-V.  The shader module is

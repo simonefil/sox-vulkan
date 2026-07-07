@@ -23,6 +23,7 @@
 #endif
 
 #include "sox_i.h"
+#include "diagnostics.h"
 #include <assert.h>
 #include <string.h>
 
@@ -216,14 +217,37 @@ static void done_with_fft_cache(sox_bool is_writer)
 void lsx_safe_rdft(int len, int type, double * d)
 {
   sox_bool is_writer = update_fft_cache(len);
-  lsx_rdft(len, type, d, lsx_fft_br, lsx_fft_sc);
+  int *br = lsx_fft_br;
+
+  /* Ooura's ip array is scratch, not a read-only lookup table: bitrv2 writes
+   * its permutation into ip + 2 on every transform.  Readers may share the
+   * trigonometric table, but concurrent transforms need independent ip
+   * storage or they corrupt one another.  A writer remains exclusive and is
+   * also responsible for initialising the resized global tables. */
+  if (!is_writer) {
+    br = lsx_malloc(dft_br_len(len) * sizeof(*br));
+    br[0] = lsx_fft_br[0];
+    br[1] = lsx_fft_br[1];
+  }
+  lsx_rdft(len, type, d, br, lsx_fft_sc);
+  if (!is_writer)
+    free(br);
   done_with_fft_cache(is_writer);
 }
 
 void lsx_safe_cdft(int len, int type, double * d)
 {
   sox_bool is_writer = update_fft_cache(len);
-  lsx_cdft(len, type, d, lsx_fft_br, lsx_fft_sc);
+  int *br = lsx_fft_br;
+
+  if (!is_writer) {
+    br = lsx_malloc(dft_br_len(len) * sizeof(*br));
+    br[0] = lsx_fft_br[0];
+    br[1] = lsx_fft_br[1];
+  }
+  lsx_cdft(len, type, d, br, lsx_fft_sc);
+  if (!is_writer)
+    free(br);
   done_with_fft_cache(is_writer);
 }
 
@@ -602,6 +626,12 @@ void lsx_save_samples(sox_sample_t * const dest, double const * const src,
     size_t const n, sox_uint64_t * const clips)
 {
   size_t i;
+  /* The universal tap.  This is the last point at which the samples are still
+   * doubles, and the only one where the double and the integer it becomes
+   * exist together, so a capture taken anywhere later describes a number that
+   * has already been rounded to 32 bits. */
+  if (lsx_diagnostics_on)
+    lsx_diagnostics_capture_f64(src, n);
   feclearexcept(FE_INVALID);
   for (i = 0; i < (n & ~7);) {
     _ _ _ _ _ _ _ _ 0;
@@ -643,6 +673,10 @@ void lsx_save_samples(sox_sample_t * const dest, double const * const src,
 {
   SOX_SAMPLE_LOCALS;
   size_t i;
+  /* The same tap as in the lrint32 variant above, so that a capture does not
+   * depend on which rounding path the build took. */
+  if (lsx_diagnostics_on)
+    lsx_diagnostics_capture_f64(src, n);
   for (i = 0; i < n; ++i)
     dest[i] = SOX_FLOAT_64BIT_TO_SAMPLE(src[i], *clips);
 }

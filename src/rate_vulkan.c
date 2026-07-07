@@ -1009,20 +1009,37 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   sox_bool contiguous;
   uint32_t index;
 
-  if (!context || !input ||
-      lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS ||
+  if (!context || !input)
+    return SOX_EOF;
+  if (lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS ||
       input->format != resident_format(context) ||
       input->domain != lsx_vulkan_resident_domain_sox_sample ||
       input->frames_per_element != 1u ||
       input->channels != context->channels ||
       input->state == lsx_vulkan_resident_empty ||
       !input->valid_elements ||
-      input->offset % resident_sample_size(context))
+      input->offset % resident_sample_size(context)) {
+    lsx_fail(
+        "invalid resident Vulkan rate stream append: "
+        "frames=%lu format=%d/%d domain=%d channels=%u/%u state=%d "
+        "offset=%llu",
+        (unsigned long)input->valid_elements,
+        (int)input->format, (int)resident_format(context),
+        (int)input->domain, input->channels, context->channels,
+        (int)input->state, (unsigned long long)input->offset);
     return SOX_EOF;
+  }
   if (!context->resident_stream[0].buffer && create_resident_stream(context) != SOX_SUCCESS)
     return SOX_EOF;
-  if (context->resident_stream_occupancy + input->valid_elements > context->resident_stream_capacity)
+  if (context->resident_stream_occupancy + input->valid_elements > context->resident_stream_capacity) {
+    lsx_fail(
+        "resident Vulkan rate stream is full: "
+        "%lu occupied + %lu input > %lu capacity frames",
+        (unsigned long)context->resident_stream_occupancy,
+        (unsigned long)input->valid_elements,
+        (unsigned long)context->resident_stream_capacity);
     return SOX_EOF;
+  }
   command = context->resident_stream_commands[context->resident_stream_command_index];
   descriptor_set = context->stream_append_descriptor_sets[context->resident_stream_descriptor_index];
   frame_size = (VkDeviceSize)context->channels * resident_sample_size(context);

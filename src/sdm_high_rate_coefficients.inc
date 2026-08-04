@@ -8,7 +8,32 @@
  * filter's own trellis defaults, and zero means it has none of its own: the
  * effect then falls back to 13, 8 and 1024, and only searches at all if the
  * user asked for a trellis.  Every set here leaves them at zero, as does
- * every set in sdm.c. */
+ * every set in sdm.c.
+ *
+ * These values are checked-in design results; no generator runs as part of
+ * the build.  Keep each a[] and g[] in increasing coefficient index, keep
+ * order equal to the number of active a[] coefficients, and keep the rate
+ * beside the pair it was solved for.  The two rate families deliberately
+ * repeat the same public names: selection also matches freq, so `sdm-6' at
+ * DSD512 and DSD1024 denotes two different designs rather than a duplicate.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA. */
+
+  /* DSD1024: CLANS and conventional SDM designs, orders 4 through 8. */
   {
     {
       8.35924810311280e-01,
@@ -229,6 +254,9 @@
     "sdm-8",
     0, 0, 0
   },
+
+  /* DSD512: the corresponding independently solved order 4 through 8
+   * designs.  They are not scaled copies of the DSD1024 coefficients. */
   {
     {
       8.35924810311280e-01,

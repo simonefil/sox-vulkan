@@ -1,13 +1,29 @@
 /*
  * Select a decimated FP32 rate-stage output from the planar VkFFT working
  * buffer and write an interleaved resident stream for the next GPU node.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /* The FP32 member of the select family; rate_select_f64.comp carries the
  * family's rationale.  One float per sample and a plain multiply for the
  * normalisation.
  *
- * The fast and accurate profiles both land here.  The family has no accurate
+ * The fast profile lands here.  The family has no compensated
  * member because it does not accumulate -- see resident_kernel() in
  * rate_vulkan.c.
  *
@@ -16,9 +32,9 @@
  *   0 input_samples   -- in: the filtered block, planar.
  *   1 output_samples  -- out: the decimated block, interleaved.
  *
- * Push constants (select_parameters_t, 32 bytes): output_frames,
- * first_input_frame, input_step, input_channel_stride, channels, normalize,
- * padding1, padding2.  first_input_frame and input_step together carry the
+ * Push constants (select_parameters_t, 24 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride, channels and normalize.
+ * first_input_frame and input_step together carry the
  * decimation phase across block boundaries.
  *
  * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
@@ -44,8 +60,6 @@ layout(push_constant) uniform Parameters {
   uint input_channel_stride;
   uint channels;
   uint normalize;
-  uint padding1;
-  uint padding2;
 } parameters;
 
 const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;

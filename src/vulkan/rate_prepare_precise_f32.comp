@@ -1,8 +1,8 @@
 /* Prepare an overlap-save FIR block from resident double-single samples.
  *
- * The strict profile's member of the prepare family; rate_prepare_f64.comp
+ * The precise profile's member of the prepare family; rate_prepare_f64.comp
  * carries the family's rationale.  Two things set this one apart, both
- * because strict runs its own transform in fir_partition_strict_f32.comp
+ * because precise runs its own transform in fir_partition_precise_f32.comp
  * instead of calling VkFFT:
  *
  *   - the prepared block is complex, vec4 per element as (real_high,
@@ -13,7 +13,7 @@
  *     reverse_fft_index() on the non-resident path, done here so the block
  *     never leaves the device.
  *
- * The 15 of reverse_bits_15 is log2 of the only transform size strict uses,
+ * The 15 of reverse_bits_15 is log2 of the only transform size precise uses,
  * so block_frames is 16384 and the two halves of the block land at
  * reverse(frame) and reverse(frame + block_frames).
  *
@@ -26,9 +26,9 @@
  *   2 previous_samples  -- in/out: the overlap carried between blocks, still
  *                          real pairs and in natural order.
  *
- * Push constants (prepare_parameters_t, 32 bytes): block_frames,
+ * Push constants (prepare_parameters_t, 28 bytes): block_frames,
  * input_frames, input_frame_stride, input_channel_stride,
- * prepared_channel_stride, up_factor, channels, padding.  The strides count
+ * prepared_channel_stride, up_factor and channels.  The strides count
  * elements of their own buffer's type, so prepared_channel_stride is in vec4
  * where input_channel_stride is in vec2.
  *
@@ -36,6 +36,22 @@
  * y one invocation per channel, hence both bounds tests.  The bit reversal is
  * a permutation, so invocations still write disjoint elements and nothing
  * here synchronises.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #version 450
@@ -62,7 +78,6 @@ layout(push_constant) uniform Parameters {
   uint prepared_channel_stride;
   uint up_factor;
   uint channels;
-  uint padding;
 } parameters;
 
 /* 17 is 32 - 15, so this keeps the low fifteen bits reversed. */

@@ -1,4 +1,20 @@
-/* FP64 cubic interpolation for the SoX quick rate stage. */
+/* FP64 cubic interpolation for the SoX quick rate stage.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA. */
 
 /* The device-side cubic_stage_fn(): an arbitrary-ratio resampler that fits a
  * cubic through four neighbouring input samples and evaluates it at the
@@ -9,7 +25,7 @@
  *   0 input_samples   -- in: interleaved input frames.
  *   1 output_samples  -- out: interleaved output frames.
  *
- * Push constants (parameters_t, 32 bytes):
+ * Push constants (parameters_t, 20 bytes):
  *   output_frames             frames to produce, worked out by the host from
  *                             the input it has.
  *   step_integer              whole part of the resampling step.
@@ -21,7 +37,6 @@
  *                             host, which is what keeps the phase exact over
  *                             an arbitrarily long stream.
  *   channels                  channels, and the interleaved frame stride.
- *   padding0..2               to the host struct's size; unused.
  *
  * Position is accumulated in fixed point, not in floating point: an output
  * frame's position is phase_fraction + output_frame * step, and computing it
@@ -62,9 +77,6 @@ layout(push_constant) uniform Parameters {
   uint step_fraction;
   uint phase_fraction;
   uint channels;
-  uint padding0;
-  uint padding1;
-  uint padding2;
 } parameters;
 
 void main()

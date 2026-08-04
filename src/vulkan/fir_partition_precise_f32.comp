@@ -1,6 +1,6 @@
-/* Partitioned overlap-save convolution, strict FP32: the whole block.
+/* Partitioned overlap-save convolution, precise FP32: the whole block.
  *
- * This is the one profile that does not call VkFFT.  Strict asks for more
+ * This is the one profile that does not call VkFFT.  Precise asks for more
  * than FP32 while running on devices that report no shaderFloat64 -- Apple
  * Silicon through Metal, above all -- and VkFFT's precision ladder has no
  * FP32-pair mode, so the transform is implemented here on double-single
@@ -15,7 +15,7 @@
  *   1  accumulate_partitions() the spectrum multiply and partition sum.
  *   2  pack_output()           the overlap-save tail, narrowed to vec2.
  *
- * Bindings, in the order create_partition_pipeline() writes them; strict
+ * Bindings, in the order create_partition_pipeline() writes them; precise
  * binds six where the other profiles bind three or four:
  *   0 working_a       -- in/out: ping-pong half A, and where the uploaded
  *                        block lands.
@@ -30,7 +30,7 @@
  *                        for the forward direction.
  *   5 output_samples  -- out: block_frames per channel, high words only.
  *
- * Push constants (strict_fp32_parameters_t, 32 bytes):
+ * Push constants (precise_fp32_parameters_t, 28 bytes):
  *   operation     which of the three jobs above.
  *   stage         butterfly only: 0..14, the span doubling per stage.
  *   partitions    blocks the response was split into.
@@ -38,9 +38,8 @@
  *   current_slot  ring position of the newest input block.
  *   inverse       butterfly only: direction, and whether to halve.
  *   source_is_a   butterfly only: which half is the source this stage.
- *   reserved      padding to the host struct's size; unused.
  *
- * The sizes are compile-time constants rather than push constants: strict
+ * The sizes are compile-time constants rather than push constants: precise
  * uses only FIR_DEFAULT_FFT_SIZE, and fft_bits is its log2, which the bit
  * reversal below depends on.
  *
@@ -49,6 +48,22 @@
  * per stage, channels * fft_size bins for the accumulate, channels *
  * block_frames frames for the output pass.  The host separates every
  * dispatch with a barrier, so nothing here synchronises internally.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #version 450
@@ -87,7 +102,6 @@ layout(push_constant) uniform Parameters {
   uint current_slot;
   uint inverse;
   uint source_is_a;
-  uint reserved;
 } parameters;
 
 const uint fft_size = 32768u;

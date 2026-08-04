@@ -1,9 +1,20 @@
 /* Partitioned VkFFT FIR backend for SoX.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -24,8 +35,7 @@
 
 #include "fir_partition_f64_spv.inc"
 #include "fir_partition_f32_spv.inc"
-#include "fir_partition_accurate_f32_spv.inc"
-#include "fir_partition_strict_f32_spv.inc"
+#include "fir_partition_precise_f32_spv.inc"
 #include "fir_partition_precise_f64_spv.inc"
 #include "fir_partition_reference_dd_spv.inc"
 #include "fir_spectrum_multiply_reference_dd_spv.inc"
@@ -63,7 +73,7 @@ typedef struct {
   uint32_t current_slot;       /* Which history slot holds the newest block. */
 } partition_parameters_t;
 
-/* Push constants for the strict FP32 shader, which does more than accumulate:
+/* Push constants for the precise FP32 shader, which does more than accumulate:
  * it runs the transform too, hence operation and stage, and ping-pongs
  * between two buffers, hence source_is_a. */
 typedef struct {
@@ -74,15 +84,14 @@ typedef struct {
   uint32_t current_slot;
   uint32_t inverse;
   uint32_t source_is_a;
-  uint32_t reserved;           /* Pads to the shader's declared size. */
-} strict_fp32_parameters_t;
+} precise_fp32_parameters_t;
 
 lsx_static_assert(sizeof(partition_parameters_t) == 16, vulkan_fir_partition_push_layout);
-lsx_static_assert(sizeof(strict_fp32_parameters_t) == 32, vulkan_fir_strict_fp32_push_layout);
+lsx_static_assert(sizeof(precise_fp32_parameters_t) == 28, vulkan_fir_precise_fp32_push_layout);
 
 struct lsx_fir_vulkan {
   lsx_vulkan_context_t *vulkan;  /* Not owned; shared with the rest of the chain. */
-  lsx_vulkan_fft_t *fft;         /* NULL for strict FP32, which transforms itself. */
+  lsx_vulkan_fft_t *fft;         /* NULL for precise FP32, which transforms itself. */
   VkDescriptorSetLayout descriptor_layout;
   VkDescriptorPool descriptor_pool;
   VkDescriptorSet descriptor_set;
@@ -102,17 +111,16 @@ struct lsx_fir_vulkan {
   /* The spectrum of the current block, and the output the inverse transform
    * lands in.  Also what a resident consumer reads. */
   buffer_t working;
-  buffer_t working_scratch;      /* Strict FP32 only: the ping-pong partner. */
+  buffer_t working_scratch;      /* Precise FP32 only: the ping-pong partner. */
 
   /* Banks of `partitions` spectra each.  history is a ring of past input
    * blocks, kernels the transformed response.  Their layouts match, so the
    * accumulation walks both with one index. */
   buffer_t history;
   buffer_t kernels;
-  buffer_t kernels_low;          /* Accurate FP32: the low half of each coefficient. */
 
-  buffer_t twiddles;             /* Strict FP32: split-precision transform factors. */
-  buffer_t strict_output;        /* Strict FP32: output, kept apart from working. */
+  buffer_t twiddles;             /* Precise FP32: split-precision transform factors. */
+  buffer_t precise_output;        /* Precise FP32: output, kept apart from working. */
 
   buffer_t upload;               /* Staging for the synchronous path. */
   /* One staging buffer per block in flight, so preparing the next block does
@@ -130,8 +138,7 @@ struct lsx_fir_vulkan {
    * context's profile; several may be true at once, and strategy_name states
    * the order in which they override one another. */
   sox_bool double_precision;
-  sox_bool accurate_fp32;
-  sox_bool strict_fp32;
+  sox_bool precise_fp32;
   sox_bool authoritative_fp64_kernels;
   sox_bool precise_fp64;
   sox_bool reference_dd;
@@ -150,11 +157,11 @@ struct lsx_fir_vulkan {
 };
 
 /* Element format the resident output carries.  rate_vulkan.c and
- * rate_polyphase_vulkan.c name the same rule; the strict profile is checked
+ * rate_polyphase_vulkan.c name the same rule; the precise profile is checked
  * first here because it emits an FP32 pair while still being an FP32 build. */
 static lsx_vulkan_resident_format_t resident_format(lsx_fir_vulkan_t const *context)
 {
-  if (context->strict_fp32)
+  if (context->precise_fp32)
     return lsx_vulkan_resident_format_f32x2;
   if (context->reference_dd)
     return lsx_vulkan_resident_format_f64x2;
@@ -166,10 +173,8 @@ static lsx_vulkan_resident_format_t resident_format(lsx_fir_vulkan_t const *cont
  * flags override one another, so the first match is the strategy in force. */
 static char const *strategy_name(lsx_fir_vulkan_t const *context)
 {
-  if (context->strict_fp32)
+  if (context->precise_fp32)
     return "double-single FFT + split twiddles + double-single accumulation";
-  if (context->accurate_fp32)
-    return "FP32 FFT + split coefficients + compensated accumulation";
   if (context->reference_dd)
     return "FP64 double-double FFT + double-double memory/product/accumulation";
   if (context->authoritative_fp64_kernels)
@@ -285,6 +290,20 @@ static int create_commands(lsx_fir_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
+/* Collapse a cascade of reference-profile FIR responses into one response
+ * without first rounding it to FP64.
+ *
+ * The operation has five phases: derive the exact linear-convolution size;
+ * allocate a temporary double-double transform workspace; transform every
+ * response and multiply its spectrum into the accumulator; inverse-transform
+ * the product; then split the retained time-domain response into caller-owned
+ * high and low arrays.  All Vulkan objects in this function are temporary and
+ * are released through the single cleanup path, including partial setup.
+ *
+ * The frequency-domain product represents convolution only because the FFT
+ * is at least as long as the final m+n-1 response.  That size invariant is
+ * established before any allocation and is the reason no time-domain tail or
+ * circular wrap is copied back. */
 int lsx_fir_vulkan_fuse_reference_coefficients(
     lsx_vulkan_context_t *vulkan,
     double const *const *coefficient_sets,
@@ -343,6 +362,9 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   *result_highs = NULL;
   *result_lows = NULL;
   *result_count = 0;
+
+  /* Phase 1: establish the exact output length and the smallest power-of-two
+   * transform that can contain it without circular aliasing. */
   /* Convolving responses of m and n taps gives m + n - 1, so a cascade of
    * several starts from one and adds each length less one. */
   for (set_index = 0; set_index < set_count; ++set_index) {
@@ -378,6 +400,10 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   spectrum_bins = fft_size / 2u + 1u;
   working_size = (VkDeviceSize)(fft_size + 2u) * 2u * sizeof(double);
   output_size = (VkDeviceSize)combined_count * 2u * sizeof(double);
+
+  /* Phase 2: build a self-contained setup workspace.  working carries the
+   * response currently being transformed, accumulated carries the spectral
+   * product, and download receives only the valid time-domain response. */
   /* A stack context, zeroed, so the buffer and command helpers above can be
    * reused without building a whole FIR: this runs once at setup and has
    * nothing to do with the steady state. */
@@ -420,6 +446,10 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
     goto cleanup;
   memset(bindings, 0, sizeof(bindings));
   memset(writes, 0, sizeof(writes));
+
+  /* Phase 3a: create the two-buffer multiply pipeline.  Binding 0 is the
+   * newly transformed response and binding 1 is the product accumulated from
+   * all earlier responses. */
   bindings[0].binding = 0;
   bindings[1].binding = 1;
   bindings[0].descriptorType = bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -474,6 +504,9 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   full_copy.srcOffset = 0;
   full_copy.dstOffset = 0;
   full_copy.size = working_size;
+
+  /* Phase 3b: transform each response.  The first seeds accumulated through
+   * a copy; every later response is multiplied into it in double-double. */
   for (set_index = 0; set_index < set_count; ++set_index) {
     double *upload = scratch.upload.mapped;
     size_t tap_index;
@@ -521,6 +554,9 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   output_copy.srcOffset = 0;
   output_copy.dstOffset = 0;
   output_copy.size = output_size;
+
+  /* Phase 4: return the spectral product to working, inverse-transform it and
+   * download only combined_count values, excluding FFT padding. */
   if (begin_commands(&scratch) != SOX_SUCCESS)
     goto cleanup;
   memory_barrier(
@@ -546,6 +582,8 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
   vkCmdCopyBuffer(scratch.command_buffer, scratch.working.buffer, download.buffer, 1, &output_copy);
   if (submit_commands(&scratch, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS)
     goto cleanup;
+
+  /* Phase 5: transfer ownership through newly allocated high/low arrays. */
   *result_highs = lsx_malloc(
       combined_count * sizeof(**result_highs));
   *result_lows = lsx_malloc(
@@ -564,6 +602,8 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
       (unsigned long)set_count, (unsigned long)combined_count,
       fft_size);
 
+/* Every failure and the success path converge here.  Result arrays survive
+ * only success; Vulkan setup resources never escape this function. */
 cleanup: if (status != SOX_SUCCESS) {
     free(*result_highs);
     free(*result_lows);
@@ -597,14 +637,14 @@ cleanup: if (status != SOX_SUCCESS) {
  *
  * Each strategy needs a different set of buffers, so the binding count varies
  * and the buffers are assigned to bindings in a different order: the plain
- * routes bind working, history and kernels; accurate adds the low half of the
- * coefficients; strict binds six, its extra scratch, twiddles and separate
- * output reflecting that it runs the transform as well as the accumulation.
+ * routes bind working, history and kernels; precise binds six, its extra
+ * scratch, twiddles and separate output reflecting that it runs the transform
+ * as well as the accumulation.
  * The shaders declare matching binding numbers, which is what the buffer_info
  * ordering below has to agree with -- nothing checks it at compile time. */
 static int create_partition_pipeline(lsx_fir_vulkan_t *context)
 {
-  uint32_t binding_count = context->strict_fp32 ? 6u : context->accurate_fp32 ? 4u : 3u;
+  uint32_t binding_count = context->precise_fp32 ? 6u : 3u;
   uint32_t const *partition_spirv;
   size_t partition_size;
   VkDescriptorSetLayoutBinding bindings[6];
@@ -624,28 +664,28 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
   VkDescriptorBufferInfo buffer_info[6] = {
     {context->working.buffer, 0, context->working.size},
     {
-      context->strict_fp32 ? context->working_scratch.buffer : context->history.buffer,
+      context->precise_fp32 ? context->working_scratch.buffer : context->history.buffer,
       0,
-      context->strict_fp32 ? context->working_scratch.size : context->history.size
+      context->precise_fp32 ? context->working_scratch.size : context->history.size
     },
     {
-      context->strict_fp32 ? context->history.buffer : context->kernels.buffer,
+      context->precise_fp32 ? context->history.buffer : context->kernels.buffer,
       0,
-      context->strict_fp32 ? context->history.size : context->kernels.size
+      context->precise_fp32 ? context->history.size : context->kernels.size
     },
     {
-      context->strict_fp32 ? context->kernels.buffer : context->kernels_low.buffer,
+      context->kernels.buffer,
       0,
-      context->strict_fp32 ? context->kernels.size : context->kernels_low.size
+      context->kernels.size
     },
     {context->twiddles.buffer, 0, context->twiddles.size},
-    {context->strict_output.buffer, 0, context->strict_output.size}
+    {context->precise_output.buffer, 0, context->precise_output.size}
   };
   VkWriteDescriptorSet writes[6];
   VkPushConstantRange push_range = {
     VK_SHADER_STAGE_COMPUTE_BIT,
     0,
-    context->strict_fp32 ? sizeof(strict_fp32_parameters_t) : sizeof(partition_parameters_t)
+    context->precise_fp32 ? sizeof(precise_fp32_parameters_t) : sizeof(partition_parameters_t)
   };
   VkPipelineLayoutCreateInfo pipeline_layout_info = {
     VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -693,8 +733,7 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
   /* Pick the partition kernel once, so the SPIR-V blob and its size can never
    * disagree.  Selection order matters: reference_dd and precise_fp64 both
    * imply double_precision, and precise_fp64 is also set for reference, so the
-   * reference test has to come first.  On the FP32 side strict outranks
-   * accurate; both are fixed properties of their selected profile. */
+   * reference test has to come first. */
   if (context->double_precision) {
     if (context->reference_dd)
       partition_spirv = fir_partition_reference_dd_spv, partition_size = sizeof(fir_partition_reference_dd_spv);
@@ -703,10 +742,8 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
     else
       partition_spirv = fir_partition_f64_spv, partition_size = sizeof(fir_partition_f64_spv);
   } else {
-    if (context->strict_fp32)
-      partition_spirv = fir_partition_strict_f32_spv, partition_size = sizeof(fir_partition_strict_f32_spv);
-    else if (context->accurate_fp32)
-      partition_spirv = fir_partition_accurate_f32_spv, partition_size = sizeof(fir_partition_accurate_f32_spv);
+    if (context->precise_fp32)
+      partition_spirv = fir_partition_precise_f32_spv, partition_size = sizeof(fir_partition_precise_f32_spv);
     else
       partition_spirv = fir_partition_f32_spv, partition_size = sizeof(fir_partition_f32_spv);
   }
@@ -724,15 +761,15 @@ static int create_partition_pipeline(lsx_fir_vulkan_t *context)
 
 static int initialize_fft(lsx_fir_vulkan_t *context)
 {
-  /* strict on a device without shaderFloat64 is the one route that cannot
+  /* precise on a device without shaderFloat64 is the one route that cannot
    * use VkFFT: the library's precision ladder is half, float, double and
    * double-double, with no FP32x2 mode, and doublePrecisionFloatMemory still
    * needs FP64 in the shader.  On Apple Silicon, where Metal reports
    * shaderFloat64 = false, VkFFT can therefore only offer the FP32 that
-   * strict exists to beat, so the profile runs its own double-single
+   * precise exists to beat, so the profile runs its own double-single
    * transform with precomputed split twiddles instead.  Every other route,
-   * strict on an FP64 device included, goes through VkFFT. */
-  if (context->strict_fp32)
+   * precise on an FP64 device included, goes through VkFFT. */
+  if (context->precise_fp32)
     return SOX_SUCCESS;
   context->fft = lsx_vulkan_fft_create(
       context->vulkan, &context->working,
@@ -748,7 +785,7 @@ static int initialize_fft(lsx_fir_vulkan_t *context)
 /* Split a double into an unevaluated sum of two floats.  The high word is the
  * value rounded to single precision and the low word the remainder, which is
  * itself exactly representable: together they carry about 48 bits of
- * significand where one float carries 24.  This is what lets the strict
+ * significand where one float carries 24.  This is what lets the precise
  * profile exceed FP32 on a device with no double precision at all. */
 static void store_double_single(float *target, size_t index, double value)
 {
@@ -760,12 +797,12 @@ static void store_double_single(float *target, size_t index, double value)
 
 /* Precompute the transform's twiddle factors as split-precision pairs.
  *
- * The strict profile's shader has no double precision to compute them with,
+ * The precise profile's shader has no double precision to compute them with,
  * and recomputing a cosine in float would put an error into every butterfly
  * that no amount of careful accumulation afterwards could remove.  They are
  * therefore evaluated once here in host double precision and stored as pairs,
  * four floats per factor: high and low of the cosine, then of the sine. */
-static int initialize_strict_fp32_twiddles(lsx_fir_vulkan_t *context)
+static int initialize_precise_fp32_twiddles(lsx_fir_vulkan_t *context)
 {
   float *upload = context->upload.mapped;
   VkBufferCopy copy = {
@@ -807,7 +844,7 @@ static double const *channel_coefficients(
  * device's own FP32 transform over them would give.
  *
  * The kernels are stored over the full transform length rather than as a half
- * spectrum, because the strict shader's own transform works on the whole
+ * spectrum, because the precise shader's own transform works on the whole
  * range: the missing half is filled by conjugate symmetry, mirroring the bin
  * index and negating the imaginary part.  The sign of the imaginary part is
  * flipped once for the transform's own convention and again for the mirrored
@@ -815,7 +852,7 @@ static double const *channel_coefficients(
  *
  * One partition at a time, through the single staging buffer, since the whole
  * bank is far larger than staging and setup has no need to overlap. */
-static int initialize_strict_fp32_kernels(
+static int initialize_precise_fp32_kernels(
     lsx_fir_vulkan_t *context,
     double const *const *coefficients,
     uint32_t coefficient_channels, size_t taps)
@@ -823,7 +860,7 @@ static int initialize_strict_fp32_kernels(
   double *spectra = lsx_calloc((size_t)context->channels * FIR_FFT_SIZE, sizeof(*spectra));
   uint32_t partition;
 
-  if (initialize_strict_fp32_twiddles(context) != SOX_SUCCESS) {
+  if (initialize_precise_fp32_twiddles(context) != SOX_SUCCESS) {
     free(spectra);
     return SOX_EOF;
   }
@@ -876,92 +913,6 @@ static int initialize_strict_fp32_kernels(
     if (submit_commands(context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS) {
       free(spectra);
       return SOX_EOF;
-    }
-  }
-  free(spectra);
-  return SOX_SUCCESS;
-}
-
-/* Kernels for the accurate FP32 profile, stored as a split pair across two
- * banks: the high halves in kernels, the low remainders in kernels_low.
- *
- * The spectra are computed in host double precision as elsewhere.  Splitting
- * them means the shader multiplies against roughly 48 bits of coefficient
- * while still doing FP32 arithmetic, which is where most of this profile's
- * accuracy over the plain FP32 one comes from: the input block is single
- * precision either way, but the coefficients need not be.
- *
- * The two components go through the same code with the component loop
- * choosing the target bank, since only the value written differs.  The
- * imaginary part is negated for the transform's sign convention, and the two
- * end bins are real, the packing storing the Nyquist bin in slot 1. */
-static int initialize_accurate_kernels(
-    lsx_fir_vulkan_t *context,
-    double const *const *coefficients,
-    uint32_t coefficient_channels, size_t taps)
-{
-  double *spectra = lsx_calloc((size_t)context->channels * FIR_FFT_SIZE, sizeof(*spectra));
-  uint32_t partition;
-
-  for (partition = 0; partition < context->partitions; ++partition) {
-    size_t first = (size_t)partition * FIR_BLOCK_FRAMES;
-    size_t length = min((size_t)FIR_BLOCK_FRAMES, taps - first);
-    uint32_t component;
-
-    {
-      uint32_t channel;
-
-      for (channel = 0; channel < context->channels; ++channel) {
-        double const *source = channel_coefficients(coefficients, coefficient_channels, channel);
-        double *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
-
-        /* Channels sharing a response share a spectrum: copying the previous
-         * one avoids repeating the transform, which for a long response over
-         * eight channels is most of the setup cost. */
-        if (channel && source == channel_coefficients(coefficients, coefficient_channels, channel - 1u))
-          memcpy(spectrum, spectrum - FIR_FFT_SIZE, FIR_FFT_SIZE * sizeof(*spectrum));
-        else {
-          memset(spectrum, 0, FIR_FFT_SIZE * sizeof(*spectrum));
-          memcpy(spectrum, source + first, length * sizeof(*spectrum));
-          lsx_safe_rdft(FIR_FFT_SIZE, 1, spectrum);
-        }
-      }
-    }
-    for (component = 0; component < 2u; ++component) {
-      buffer_t *target = component ? &context->kernels_low : &context->kernels;
-      VkBufferCopy copy = {
-        0,
-        (VkDeviceSize)partition * context->working.size,
-        context->working.size
-      };
-      uint32_t channel;
-
-      memset(context->working_host, 0, (size_t)context->working.size);
-      for (channel = 0; channel < context->channels; ++channel) {
-        double const *spectrum = spectra + (size_t)channel * FIR_FFT_SIZE;
-        float *output = (float *)context->working_host + (size_t)channel * (FIR_FFT_SIZE + 2u);
-        uint32_t bin;
-
-        for (bin = 0; bin <= FIR_FFT_SIZE / 2u; ++bin) {
-          double real = bin == 0 ? spectrum[0] : bin == FIR_FFT_SIZE / 2u ? spectrum[1] : spectrum[2u * bin];
-          double imaginary = bin == 0 || bin == FIR_FFT_SIZE / 2u ? 0. : -spectrum[2u * bin + 1u];
-          float real_high = (float)real;
-          float imaginary_high = (float)imaginary;
-
-          output[2u * bin] = component ? (float)(real - (double)real_high) : real_high;
-          output[2u * bin + 1u] = component ? (float)(imaginary - (double)imaginary_high) : imaginary_high;
-        }
-      }
-      memcpy(context->upload.mapped, context->working_host, (size_t)context->working.size);
-      if (begin_commands(context) != SOX_SUCCESS) {
-        free(spectra);
-        return SOX_EOF;
-      }
-      vkCmdCopyBuffer(context->command_buffer, context->upload.buffer, target->buffer, 1, &copy);
-      if (submit_commands(context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS) {
-        free(spectra);
-        return SOX_EOF;
-      }
     }
   }
   free(spectra);
@@ -1048,73 +999,63 @@ static int initialize_kernels(
   };
   uint32_t partition;
   uint32_t channel;
-  uint32_t component;
 
-  if (context->strict_fp32)
-    return initialize_strict_fp32_kernels(context, coefficients, coefficient_channels, taps);
-  if (context->accurate_fp32)
-    return initialize_accurate_kernels(context, coefficients, coefficient_channels, taps);
+  if (context->precise_fp32)
+    return initialize_precise_fp32_kernels(context, coefficients, coefficient_channels, taps);
   if (context->authoritative_fp64_kernels)
     return initialize_precise_f64_kernels(context, coefficients, coefficient_channels, taps);
   for (partition = 0; partition < context->partitions; ++partition) {
     size_t first = (size_t)partition * FIR_BLOCK_FRAMES;
     size_t length = min((size_t)FIR_BLOCK_FRAMES, taps - first);
-    uint32_t component_count = context->accurate_fp32 ? 2u : 1u;
+    VkBufferCopy kernel_copy = {
+      0,
+      (VkDeviceSize)partition * context->working.size,
+      context->working.size
+    };
 
-    for (component = 0; component < component_count; ++component) {
-      VkBufferCopy kernel_copy = {
-        0,
-        (VkDeviceSize)partition * context->working.size,
-        context->working.size
-      };
-      buffer_t *target = component ? &context->kernels_low : &context->kernels;
+    memset(context->working_host, 0, (size_t)context->working.size);
+    for (channel = 0; channel < context->channels; ++channel) {
+      double const *channel_highs = channel_coefficients(coefficients, coefficient_channels, channel);
+      double const *channel_lows = coefficient_lows ?
+          channel_coefficients(
+              coefficient_lows, coefficient_channels, channel) : NULL;
+      size_t index;
 
-      memset(context->working_host, 0, (size_t)context->working.size);
-      for (channel = 0; channel < context->channels; ++channel) {
-        double const *channel_highs = channel_coefficients(coefficients, coefficient_channels, channel);
-        double const *channel_lows = coefficient_lows ?
-            channel_coefficients(
-                coefficient_lows, coefficient_channels, channel) : NULL;
-        size_t index;
+      for (index = 0; index < length; ++index) {
+        double coefficient = channel_highs[first + index];
+        size_t target_index = (size_t)channel * (FIR_FFT_SIZE + 2u) + index;
 
-        for (index = 0; index < length; ++index) {
-          double coefficient = channel_highs[first + index];
-          size_t target_index = (size_t)channel * (FIR_FFT_SIZE + 2u) + index;
-
-          if (context->reference_dd) {
-            ((double *)context->working_host)[2u * target_index] = coefficient;
-            ((double *)context->working_host)[2u * target_index + 1u] = channel_lows ? channel_lows[first + index] : 0.;
-          }
-          else if (context->double_precision)
-            ((double *)context->working_host)[target_index] = coefficient;
-          else if (!component)
-            ((float *)context->working_host)[target_index] = (float)coefficient;
-          else
-            ((float *)context->working_host)[target_index] = (float)(coefficient - (double)(float)coefficient);
+        if (context->reference_dd) {
+          ((double *)context->working_host)[2u * target_index] = coefficient;
+          ((double *)context->working_host)[2u * target_index + 1u] = channel_lows ? channel_lows[first + index] : 0.;
         }
+        else if (context->double_precision)
+          ((double *)context->working_host)[target_index] = coefficient;
+        else
+          ((float *)context->working_host)[target_index] = (float)coefficient;
       }
-      memcpy(context->upload.mapped, context->working_host, (size_t)context->working.size);
-      if (begin_commands(context) != SOX_SUCCESS)
-        return SOX_EOF;
-      vkCmdCopyBuffer(context->command_buffer, context->upload.buffer, context->working.buffer, 1, &upload_copy);
-      memory_barrier(
-          context->command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT,
-          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-          VK_PIPELINE_STAGE_TRANSFER_BIT,
-          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-      if (lsx_vulkan_fft_append(context->fft, context->command_buffer, sox_false) != SOX_SUCCESS) {
-        lsx_fail("VkFFT FIR kernel transform failed");
-        return SOX_EOF;
-      }
-      memory_barrier(
-          context->command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
-          VK_ACCESS_TRANSFER_READ_BIT,
-          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-          VK_PIPELINE_STAGE_TRANSFER_BIT);
-      vkCmdCopyBuffer(context->command_buffer, context->working.buffer, target->buffer, 1, &kernel_copy);
-      if (submit_commands(context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS)
-        return SOX_EOF;
     }
+    memcpy(context->upload.mapped, context->working_host, (size_t)context->working.size);
+    if (begin_commands(context) != SOX_SUCCESS)
+      return SOX_EOF;
+    vkCmdCopyBuffer(context->command_buffer, context->upload.buffer, context->working.buffer, 1, &upload_copy);
+    memory_barrier(
+        context->command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    if (lsx_vulkan_fft_append(context->fft, context->command_buffer, sox_false) != SOX_SUCCESS) {
+      lsx_fail("VkFFT FIR kernel transform failed");
+      return SOX_EOF;
+    }
+    memory_barrier(
+        context->command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT);
+    vkCmdCopyBuffer(context->command_buffer, context->working.buffer, context->kernels.buffer, 1, &kernel_copy);
+    if (submit_commands(context, lsx_vulkan_wait_fir_setup) != SOX_SUCCESS)
+      return SOX_EOF;
   }
   return SOX_SUCCESS;
 }
@@ -1159,14 +1100,14 @@ static void append_partition_accumulation(
   vkCmdDispatch(command_buffer, count / FIR_LOCAL_SIZE + (count % FIR_LOCAL_SIZE != 0), 1, 1);
 }
 
-/* One dispatch of the strict FP32 shader, which does several different jobs
+/* One dispatch of the precise FP32 shader, which does several different jobs
  * selected by its push constants: a transform stage, the spectrum multiply,
  * or the output pass.  count is the number of invocations the caller wants,
  * which differs between them. */
-static void append_strict_fp32_dispatch(
+static void append_precise_fp32_dispatch(
     lsx_fir_vulkan_t *context,
     VkCommandBuffer command_buffer,
-    strict_fp32_parameters_t const *parameters,
+    precise_fp32_parameters_t const *parameters,
     uint32_t count)
 {
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
@@ -1181,7 +1122,7 @@ static void append_strict_fp32_dispatch(
   vkCmdDispatch(command_buffer, count / FIR_LOCAL_SIZE + (count % FIR_LOCAL_SIZE != 0), 1, 1);
 }
 
-/* Record the whole steady-state command bank for the strict FP32 profile.
+/* Record the whole steady-state command bank for the precise FP32 profile.
  *
  * There is one command buffer per (history slot, staging buffer) pair, since
  * a recorded buffer names both, and each contains the entire block: upload,
@@ -1199,7 +1140,7 @@ static void append_strict_fp32_dispatch(
  * download_output selects the synchronous variant, which ends with a copy to
  * host-visible memory; the resident variant stops at the output buffer and
  * reads from the per-bank staging buffer instead of the shared one. */
-static int record_strict_fp32_command_bank(
+static int record_precise_fp32_command_bank(
     lsx_fir_vulkan_t *context, VkCommandBuffer **commands,
     sox_bool download_output, uint32_t bank_depth)
 {
@@ -1220,7 +1161,7 @@ static int record_strict_fp32_command_bank(
   if (vk_result(vkAllocateCommandBuffers(
       context->vulkan->device, &allocation,
       process_commands),
-      "vkAllocateCommandBuffers FIR strict FP32 process") !=
+      "vkAllocateCommandBuffers FIR precise FP32 process") !=
       SOX_SUCCESS) {
     free(process_commands);
     return SOX_EOF;
@@ -1233,37 +1174,37 @@ static int record_strict_fp32_command_bank(
     VkBufferCopy upload_copy = {
       0, 0, context->working.size
     };
-    strict_fp32_parameters_t parameters = {
+    precise_fp32_parameters_t parameters = {
       0u, 0u, context->partitions,
       context->channels, current_slot,
-      0u, 1u, 0u
+      0u, 1u
     };
     uint32_t stage;
     uint32_t channel;
 
     if (vk_result(vkBeginCommandBuffer(
         command_buffer, &begin),
-        "vkBeginCommandBuffer FIR strict FP32 process") !=
+        "vkBeginCommandBuffer FIR precise FP32 process") !=
         SOX_SUCCESS)
       goto error;
     lsx_vulkan_label_begin(
         context->vulkan, command_buffer,
         download_output ?
-        "FIR strict FP32 process and download" :
-        "FIR strict FP32 resident process");
+        "FIR precise FP32 process and download" :
+        "FIR precise FP32 resident process");
     vkCmdCopyBuffer(command_buffer, upload_buffer, context->working.buffer, 1, &upload_copy);
     memory_barrier(
         command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT,
         VK_ACCESS_SHADER_READ_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR strict FP32 forward double-single FFT");
+    lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR precise FP32 forward double-single FFT");
     for (stage = 0; stage < 15u; ++stage) {
       parameters.operation = 0u;
       parameters.stage = stage;
       parameters.inverse = 0u;
       parameters.source_is_a = stage % 2u == 0u;
-      append_strict_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_FFT_SIZE / 2u);
+      append_precise_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_FFT_SIZE / 2u);
       memory_barrier(
           command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
           VK_ACCESS_SHADER_READ_BIT,
@@ -1298,19 +1239,19 @@ static int record_strict_fp32_command_bank(
     parameters.operation = 1u;
     parameters.inverse = 0u;
     parameters.source_is_a = 0u;
-    append_strict_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_FFT_SIZE);
+    append_precise_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_FFT_SIZE);
     memory_barrier(
         command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
         VK_ACCESS_SHADER_READ_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR strict FP32 inverse double-single FFT");
+    lsx_vulkan_label_begin(context->vulkan, command_buffer, "FIR precise FP32 inverse double-single FFT");
     for (stage = 0; stage < 15u; ++stage) {
       parameters.operation = 0u;
       parameters.stage = stage;
       parameters.inverse = 1u;
       parameters.source_is_a = stage % 2u == 0u;
-      append_strict_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_FFT_SIZE / 2u);
+      append_precise_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_FFT_SIZE / 2u);
       memory_barrier(
           command_buffer, VK_ACCESS_SHADER_WRITE_BIT,
           VK_ACCESS_SHADER_READ_BIT,
@@ -1321,10 +1262,10 @@ static int record_strict_fp32_command_bank(
     parameters.operation = 2u;
     parameters.inverse = 0u;
     parameters.source_is_a = 0u;
-    append_strict_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_BLOCK_FRAMES);
+    append_precise_fp32_dispatch(context, command_buffer, &parameters, context->channels * FIR_BLOCK_FRAMES);
     if (download_output) {
       VkBufferCopy output_copy = {
-        0, 0, context->strict_output.size
+        0, 0, context->precise_output.size
       };
 
       memory_barrier(
@@ -1332,10 +1273,10 @@ static int record_strict_fp32_command_bank(
           VK_ACCESS_TRANSFER_READ_BIT,
           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT);
-      vkCmdCopyBuffer(command_buffer, context->strict_output.buffer, context->download.buffer, 1, &output_copy);
+      vkCmdCopyBuffer(command_buffer, context->precise_output.buffer, context->download.buffer, 1, &output_copy);
     }
     lsx_vulkan_label_end(context->vulkan, command_buffer);
-    if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer FIR strict FP32 process") != SOX_SUCCESS)
+    if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer FIR precise FP32 process") != SOX_SUCCESS)
       goto error;
   }
   *commands = process_commands;
@@ -1349,7 +1290,7 @@ error:
   return SOX_EOF;
 }
 
-/* Record the steady-state command bank for every profile but strict FP32.
+/* Record the steady-state command bank for every profile but precise FP32.
  *
  * Each command buffer is one whole block: upload, forward transform, file the
  * spectrum into the history ring, accumulate the products across all
@@ -1357,7 +1298,7 @@ error:
  * the second half of the result to host-visible memory.  Barriers separate
  * every pair of steps, since each reads what the last wrote.
  *
- * Recording is by (slot, bank) exactly as in the strict variant: the slot
+ * Recording is by (slot, bank) exactly as in the precise variant: the slot
  * decides which ring position this block occupies, the bank which staging
  * buffer it arrives through, and a command buffer names both. */
 static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffer **commands, sox_bool download_output, uint32_t bank_depth)
@@ -1379,8 +1320,8 @@ static int record_process_command_bank(lsx_fir_vulkan_t *context, VkCommandBuffe
   };
   uint32_t command_index;
 
-  if (context->strict_fp32)
-    return record_strict_fp32_command_bank(context, commands, download_output, bank_depth);
+  if (context->precise_fp32)
+    return record_precise_fp32_command_bank(context, commands, download_output, bank_depth);
   VkCommandBuffer *process_commands = lsx_calloc(context->partitions * bank_depth, sizeof(*process_commands));
 
   *commands = NULL;
@@ -1503,7 +1444,7 @@ static int record_process_commands(lsx_fir_vulkan_t *context)
  * at high channel counts is what actually runs out first -- a device limit
  * rather than an allocation failure, so it has to be tested explicitly.
  *
- * Strict FP32 departs from this: it keeps its own transform's data as four
+ * Precise FP32 departs from this: it keeps its own transform's data as four
  * floats per point over the full transform length, not a half-spectrum, and
  * its output is a pair per sample. */
 static int create_buffers(lsx_fir_vulkan_t *context)
@@ -1515,7 +1456,7 @@ static int create_buffers(lsx_fir_vulkan_t *context)
   VkDeviceSize download_size = (VkDeviceSize)context->channels * FIR_BLOCK_FRAMES * context->element_size;
   VkPhysicalDeviceLimits const *limits = &context->vulkan->properties.limits;
 
-  if (context->strict_fp32) {
+  if (context->precise_fp32) {
     working_size = (VkDeviceSize)context->channels * FIR_FFT_SIZE * 4u * sizeof(float);
     download_size = (VkDeviceSize)context->channels * FIR_BLOCK_FRAMES * 2u * sizeof(float);
   }
@@ -1564,7 +1505,7 @@ static int create_buffers(lsx_fir_vulkan_t *context)
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
       VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != SOX_SUCCESS)
     return SOX_EOF;
-  if (context->strict_fp32 &&
+  if (context->precise_fp32 &&
       (create_buffer(
        context, &context->working_scratch, working_size,
        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -1579,17 +1520,10 @@ static int create_buffers(lsx_fir_vulkan_t *context)
        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
        create_buffer(
-       context, &context->strict_output, download_size,
+       context, &context->precise_output, download_size,
        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS))
-    return SOX_EOF;
-  if (context->accurate_fp32 &&
-      create_buffer(
-      context, &context->kernels_low, bank_size,
-      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   {
     uint32_t index;
@@ -1640,8 +1574,7 @@ static lsx_fir_vulkan_t *create_fir(
   }
   if (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
-      vulkan->profile != sox_vulkan_profile_accurate &&
-      vulkan->profile != sox_vulkan_profile_strict) {
+      vulkan->profile != sox_vulkan_profile_precise) {
     lsx_fail(
         "Vulkan FIR profile %s is not implemented for the FP32 "
         "emulated numerical family",
@@ -1653,13 +1586,10 @@ static lsx_fir_vulkan_t *create_fir(
   context->fft_size = vulkan->profile == sox_vulkan_profile_fast ? FIR_FAST_FFT_SIZE : FIR_DEFAULT_FFT_SIZE;
   context->block_frames = context->fft_size / 2u;
   context->double_precision = vulkan->use_float64;
-  context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
-  context->accurate_fp32 =
-      !context->double_precision &&
-      vulkan->profile == sox_vulkan_profile_accurate;
+  context->precise_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_precise;
   context->precise_fp64 =
       context->double_precision &&
-      (vulkan->profile == sox_vulkan_profile_strict ||
+      (vulkan->profile == sox_vulkan_profile_precise ||
        vulkan->profile == sox_vulkan_profile_reference);
   context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
   /* Not for the reference profile: its coefficients are double-double, and a
@@ -1668,8 +1598,7 @@ static lsx_fir_vulkan_t *create_fir(
    * kernels on the device instead. */
   context->authoritative_fp64_kernels =
       context->double_precision &&
-      (vulkan->profile == sox_vulkan_profile_accurate ||
-       vulkan->profile == sox_vulkan_profile_strict);
+      vulkan->profile == sox_vulkan_profile_precise;
   context->taps = (uint32_t)taps;
   context->element_size = context->reference_dd ?
       2u * sizeof(double) :
@@ -1821,10 +1750,9 @@ void lsx_fir_vulkan_destroy(lsx_fir_vulkan_t *context)
     vkDestroyFence(context->vulkan->device, context->fence, NULL);
   destroy_buffer(context, &context->download);
   destroy_buffer(context, &context->upload);
-  destroy_buffer(context, &context->strict_output);
+  destroy_buffer(context, &context->precise_output);
   destroy_buffer(context, &context->twiddles);
   destroy_buffer(context, &context->kernels);
-  destroy_buffer(context, &context->kernels_low);
   destroy_buffer(context, &context->history);
   destroy_buffer(context, &context->working_scratch);
   destroy_buffer(context, &context->working);
@@ -1845,13 +1773,13 @@ size_t lsx_fir_vulkan_block_frames_for(lsx_vulkan_context_t const *context)
 }
 
 /* The stride is the transform length plus the two extra reals a half-spectrum
- * needs; strict FP32 has no such padding, its buffers holding the full
+ * needs; precise FP32 has no such padding, its buffers holding the full
  * transform length. */
 size_t lsx_fir_vulkan_prepared_stride(lsx_fir_vulkan_t const *context)
 {
   if (!context)
     return 0;
-  return context->strict_fp32 ? FIR_FFT_SIZE : FIR_FFT_SIZE + 2u;
+  return context->precise_fp32 ? FIR_FFT_SIZE : FIR_FFT_SIZE + 2u;
 }
 
 lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *context)
@@ -1860,10 +1788,10 @@ lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *cont
 }
 
 /* Reverse the low 15 bits of an index.  A decimation-in-time transform reads
- * its input in bit-reversed order, and the strict FP32 shader implements the
+ * its input in bit-reversed order, and the precise FP32 shader implements the
  * transform itself rather than calling VkFFT, so the host does the permutation
  * while it is laying the block out anyway.  Fifteen bits is log2 of the
- * default transform size, which is the only size the strict profile uses. */
+ * default transform size, which is the only size the precise profile uses. */
 static uint32_t reverse_fft_index(uint32_t value)
 {
   uint32_t reversed = 0u;
@@ -1886,7 +1814,7 @@ static uint32_t reverse_fft_index(uint32_t value)
  *
  * The layout is planar -- channels run consecutively, not interleaved -- so
  * the transform sees one contiguous signal per batch.  Each strategy stores
- * its own element form: a bit-reversed pair of floats for strict FP32,
+ * its own element form: a bit-reversed pair of floats for precise FP32,
  * because that shader does its own transform, an explicit pair with a zero
  * low word for the double-double formats, and a plain value otherwise.
  *
@@ -1905,7 +1833,7 @@ static void prepare_process_input(lsx_fir_vulkan_t *context, double const *input
       size_t first_index = (size_t)channel * (FIR_FFT_SIZE + 2u) + frame;
       size_t second_index = first_index + FIR_BLOCK_FRAMES;
 
-      if (context->strict_fp32) {
+      if (context->precise_fp32) {
         float *prepared = context->working_host;
         uint32_t first_reversed = reverse_fft_index((uint32_t)frame);
         uint32_t second_reversed = reverse_fft_index((uint32_t)frame + FIR_BLOCK_FRAMES);
@@ -1965,7 +1893,7 @@ int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, doubl
     for (channel = 0; channel < context->channels; ++channel) {
       size_t index = (size_t)channel * FIR_BLOCK_FRAMES + frame;
 
-      if (context->strict_fp32) {
+      if (context->precise_fp32) {
         float const *double_single = (float const *)download + index * 2u;
 
         context->output[frame * context->channels + channel] = (double)double_single[0] + (double)double_single[1];
@@ -2000,7 +1928,7 @@ int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, doubl
  *
  * The offset is what makes overlap-save visible in the description: the
  * inverse transform fills a whole transform's worth, of which only the second
- * half is the answer, so the region starts one block in.  Strict FP32 writes
+ * half is the answer, so the region starts one block in.  Precise FP32 writes
  * to a separate output buffer that already holds just that half, hence its
  * offset of zero and its different channel stride.
  *
@@ -2010,16 +1938,16 @@ int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, doubl
 static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   memset(resident, 0, sizeof(*resident));
-  resident->buffer = context->strict_fp32 ? &context->strict_output : &context->working;
+  resident->buffer = context->precise_fp32 ? &context->precise_output : &context->working;
   resident->owner = context;
-  resident->offset = context->strict_fp32 ? 0 : (VkDeviceSize)FIR_BLOCK_FRAMES * context->element_size;
+  resident->offset = context->precise_fp32 ? 0 : (VkDeviceSize)FIR_BLOCK_FRAMES * context->element_size;
   resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
   resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
   resident->capacity_elements = FIR_BLOCK_FRAMES;
   resident->valid_elements = FIR_BLOCK_FRAMES;
   resident->frame_stride_elements = 1u;
   resident->channel_stride_elements = FIR_FFT_SIZE + 2u;
-  if (context->strict_fp32)
+  if (context->precise_fp32)
     resident->channel_stride_elements = FIR_BLOCK_FRAMES;
   resident->frame_offset = frame_offset;
   resident->rate = rate;

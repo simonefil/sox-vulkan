@@ -2054,8 +2054,7 @@ static void usage(char const * message)
 #if HAVE_VULKAN
   static char const * const linesVulkan[] = {
 "--vulkan-fast            Enable Vulkan with the fast numerical profile",
-"--vulkan-accurate        Enable Vulkan with the accurate numerical profile",
-"--vulkan-strict          Enable Vulkan with the strict numerical profile",
+"--vulkan-precise          Enable Vulkan with the precise numerical profile",
 "--vulkan-reference       Enable Vulkan with the reference numerical profile"
   };
 #endif
@@ -2316,8 +2315,7 @@ static struct lsx_option_t const long_options[] = {
   {"ffmpeg-opts"     , lsx_option_arg_required, NULL, 0},
   {"channel-layout"  , lsx_option_arg_required, NULL, 0},
   {"vulkan-fast"     , lsx_option_arg_none    , NULL, 0},
-  {"vulkan-accurate" , lsx_option_arg_none    , NULL, 0},
-  {"vulkan-strict"   , lsx_option_arg_none    , NULL, 0},
+  {"vulkan-precise"   , lsx_option_arg_none    , NULL, 0},
   {"vulkan-reference", lsx_option_arg_none    , NULL, 0},
   {"diagnostics"     , lsx_option_arg_required, NULL, 0},
 
@@ -2557,10 +2555,9 @@ static char parse_gopts_and_fopts(file_t * f)
         f->channel_layout = lsx_strdup(optstate.arg);
         break;
       case 28: set_vulkan_profile(sox_vulkan_profile_fast); break;
-      case 29: set_vulkan_profile(sox_vulkan_profile_accurate); break;
-      case 30: set_vulkan_profile(sox_vulkan_profile_strict); break;
-      case 31: set_vulkan_profile(sox_vulkan_profile_reference); break;
-      case 32: start_diagnostics(optstate.arg); break;
+      case 29: set_vulkan_profile(sox_vulkan_profile_precise); break;
+      case 30: set_vulkan_profile(sox_vulkan_profile_reference); break;
+      case 31: start_diagnostics(optstate.arg); break;
       }
       break;
 

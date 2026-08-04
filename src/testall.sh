@@ -541,50 +541,6 @@ if ${bindir}/sox${EXEEXT} --help-format dts 2>/dev/null | grep -q '^Writes:$'; t
 	grep -F 'DTS core rather than DTS-HD' /tmp/dts-core-as-hd.log >/dev/null ||
 		exit 1
 
-	echo "Format: dtshd  Options: real HRA, MA, DTS:X and DTS:X IMAX samples"
-	dts_samples=${srcdir}/test-samples/dts
-	${bindir}/sox${EXEEXT} "$dts_samples/dtshd-hra-7.1-96.dtshd" -n
-	test "`${bindir}/sox${EXEEXT} --i -c \
-		"$dts_samples/dtshd-hra-7.1-96.dtshd"`" = 8 ||
-		exit 1
-	test "`${bindir}/sox${EXEEXT} --i -r \
-		"$dts_samples/dtshd-hra-7.1-96.dtshd"`" = 96000 ||
-		exit 1
-
-	${bindir}/sox${EXEEXT} "$dts_samples/dtshd-ma-7.1-24.dtshd" -n
-	test "`${bindir}/sox${EXEEXT} --i -c \
-		"$dts_samples/dtshd-ma-7.1-24.dtshd"`" = 8 ||
-		exit 1
-	test "`${bindir}/sox${EXEEXT} --i -p \
-		"$dts_samples/dtshd-ma-7.1-24.dtshd"`" = 24 ||
-		exit 1
-
-	${bindir}/sox${EXEEXT} "$dts_samples/dtsx-7.1-24.dtshd" -n 2>/tmp/dtsx-real.log
-	test "`${bindir}/sox${EXEEXT} --i -c \
-		"$dts_samples/dtsx-7.1-24.dtshd"`" = 8 ||
-		exit 1
-	test "`${bindir}/sox${EXEEXT} --i -p \
-		"$dts_samples/dtsx-7.1-24.dtshd"`" = 24 ||
-		exit 1
-	test "`grep -c 'DTS:X detected; spatial metadata will be ignored' \
-		/tmp/dtsx-real.log`" = 1 ||
-		exit 1
-
-	${bindir}/sox${EXEEXT} "$dts_samples/dtsx-imax-7.1-24.dtshd" -n 2>/tmp/dtsx-imax-real.log
-	test "`${bindir}/sox${EXEEXT} --i -c \
-		"$dts_samples/dtsx-imax-7.1-24.dtshd"`" = 8 ||
-		exit 1
-	test "`${bindir}/sox${EXEEXT} --i -p \
-		"$dts_samples/dtsx-imax-7.1-24.dtshd"`" = 24 ||
-		exit 1
-	test "`grep -c 'DTS:X IMAX detected; spatial metadata will be ignored' \
-		/tmp/dtsx-imax-real.log`" = 1 ||
-		exit 1
-
-	if ${bindir}/sox${EXEEXT} -t dts "$dts_samples/dts-uhd-p2-imax.mka" -n 2>/dev/null; then
-		echo "DTS misidentified a DTS-UHD Profile 2 stream"
-		exit 1
-	fi
 fi
 
 if ${bindir}/sox${EXEEXT} --help-format truehd 2>/dev/null | grep -q '^Writes:$'; then

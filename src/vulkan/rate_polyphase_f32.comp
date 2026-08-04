@@ -1,16 +1,27 @@
 /*
  * FP32 rational polyphase stage for Vulkan devices without shaderFloat64.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /* The fast profile's member of the polyphase family; rate_polyphase_f64.comp
  * carries the family's rationale.  Plain FP32 throughout, with the
  * accumulation rounding at every tap: that is what the profile buys speed
- * with, and it is why the accurate and strict variants exist for devices that
+ * with, and it is why the precise variant exists for devices that
  * cannot fall back to FP64.
  *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:

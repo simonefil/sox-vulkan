@@ -1,9 +1,20 @@
 /* VkFFT rate-stage backend for SoX.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -11,15 +22,15 @@
 
 #include "rate_select_f64_spv.inc"
 #include "rate_select_f32_spv.inc"
-#include "rate_select_strict_f32_spv.inc"
+#include "rate_select_precise_f32_spv.inc"
 #include "rate_select_reference_dd_spv.inc"
 #include "rate_prepare_f64_spv.inc"
 #include "rate_prepare_f32_spv.inc"
-#include "rate_prepare_strict_f32_spv.inc"
+#include "rate_prepare_precise_f32_spv.inc"
 #include "rate_prepare_reference_dd_spv.inc"
 #include "rate_stream_append_f64_spv.inc"
 #include "rate_stream_append_f32_spv.inc"
-#include "rate_stream_append_strict_f32_spv.inc"
+#include "rate_stream_append_precise_f32_spv.inc"
 #include "rate_stream_append_reference_dd_spv.inc"
 
 /* Three small helper shaders do the work either side of the FIR, so that a
@@ -49,10 +60,9 @@ typedef struct {
   uint32_t input_channel_stride;
   uint32_t channels;
   uint32_t normalize;
-  uint32_t padding[2];
 } select_parameters_t;
 
-lsx_static_assert(sizeof(select_parameters_t) == 32, vulkan_rate_select_push_layout);
+lsx_static_assert(sizeof(select_parameters_t) == 24, vulkan_rate_select_push_layout);
 
 typedef struct {
   uint32_t block_frames;
@@ -62,10 +72,9 @@ typedef struct {
   uint32_t prepared_channel_stride;
   uint32_t up_factor;
   uint32_t channels;
-  uint32_t padding;
 } prepare_parameters_t;
 
-lsx_static_assert(sizeof(prepare_parameters_t) == 32, vulkan_rate_prepare_push_layout);
+lsx_static_assert(sizeof(prepare_parameters_t) == 28, vulkan_rate_prepare_push_layout);
 
 typedef struct {
   uint32_t input_base_element;
@@ -124,9 +133,16 @@ struct lsx_rate_vulkan {
    * different times -- an append is not a block -- so each has its own. */
   uint32_t resident_select_bank_index;
   uint32_t resident_prepare_bank_index;
+  /* Shared by append, consume and padding commands.  Its ring is twice the
+   * batch depth because those operations can alternate while earlier work is
+   * still queued. */
   uint32_t resident_stream_command_index;
+  /* Advances only for shader appends: descriptor sets and clip-counter slots
+   * are paired, unlike command buffers used by copy-only stream operations. */
   uint32_t resident_stream_descriptor_index;
-  uint32_t resident_stream_clip_pending_mask; /* Counters written but not yet read. */
+  /* Bit n means clip counter/descriptor bank n has GPU writes not yet folded
+   * into the host total.  A wait precedes reading and clearing these bits. */
+  uint32_t resident_stream_clip_pending_mask;
 
   double *stage_input;           /* Host-side interpolated block for the plain path. */
   double *output;                /* Host-side decimated result of _process. */
@@ -146,7 +162,7 @@ struct lsx_rate_vulkan {
   uint32_t decimation_phase;
 
   sox_bool double_precision;
-  sox_bool strict_fp32;
+  sox_bool precise_fp32;
   sox_bool reference_dd;
 };
 
@@ -159,7 +175,7 @@ static size_t resident_sample_size(lsx_rate_vulkan_t const *context)
 {
   return context->reference_dd ?
       2u * sizeof(double) :
-      context->strict_fp32 ?
+      context->precise_fp32 ?
       2u * sizeof(float) :
       context->double_precision ? sizeof(double) : sizeof(float);
 }
@@ -168,7 +184,7 @@ static lsx_vulkan_resident_format_t resident_format(lsx_rate_vulkan_t const *con
 {
   return context->reference_dd ?
       lsx_vulkan_resident_format_f64x2 :
-      context->strict_fp32 ?
+      context->precise_fp32 ?
       lsx_vulkan_resident_format_f32x2 :
       context->double_precision ?
       lsx_vulkan_resident_format_f64 :
@@ -187,7 +203,7 @@ lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t c
 typedef enum {
   resident_kernel_reference_dd,
   resident_kernel_f64,
-  resident_kernel_strict_f32,
+  resident_kernel_precise_f32,
   resident_kernel_f32,
   resident_kernel_count
 } resident_kernel_t;
@@ -203,22 +219,20 @@ typedef struct {
 
 /* Only the first test is order-sensitive: reference_dd is set as
  * double_precision && profile == reference, so it has to be recognised before
- * the plain FP64 family.  strict_fp32 is set only when double_precision is
+ * the plain FP64 family.  precise_fp32 is set only when double_precision is
  * false, so the families below cannot overlap.
  *
- * Four kernels for five profiles: accurate has none of its own and falls to
- * the FP32 one alongside fast.  Unlike the polyphase, cubic and FIR partition
- * families, select, prepare and stream-append only move samples, with at most
- * the single multiply that normalisation costs, so there is no accumulation
- * for an accurate variant to order differently. */
+ * Four kernels cover the three profiles because precise selects native FP64
+ * when available and FP32x2 otherwise.  Select, prepare and stream-append only
+ * move samples, with at most the single multiply that normalisation costs. */
 static resident_kernel_t resident_kernel(lsx_rate_vulkan_t const *context)
 {
   if (context->reference_dd)
     return resident_kernel_reference_dd;
   if (context->double_precision)
     return resident_kernel_f64;
-  if (context->strict_fp32)
-    return resident_kernel_strict_f32;
+  if (context->precise_fp32)
+    return resident_kernel_precise_f32;
   return resident_kernel_f32;
 }
 
@@ -226,21 +240,21 @@ static resident_kernel_t resident_kernel(lsx_rate_vulkan_t const *context)
 static resident_kernel_blob_t const select_kernels[resident_kernel_count] = {
   RESIDENT_KERNEL(rate_select_reference_dd_spv),
   RESIDENT_KERNEL(rate_select_f64_spv),
-  RESIDENT_KERNEL(rate_select_strict_f32_spv),
+  RESIDENT_KERNEL(rate_select_precise_f32_spv),
   RESIDENT_KERNEL(rate_select_f32_spv)
 };
 
 static resident_kernel_blob_t const prepare_kernels[resident_kernel_count] = {
   RESIDENT_KERNEL(rate_prepare_reference_dd_spv),
   RESIDENT_KERNEL(rate_prepare_f64_spv),
-  RESIDENT_KERNEL(rate_prepare_strict_f32_spv),
+  RESIDENT_KERNEL(rate_prepare_precise_f32_spv),
   RESIDENT_KERNEL(rate_prepare_f32_spv)
 };
 
 static resident_kernel_blob_t const stream_append_kernels[resident_kernel_count] = {
   RESIDENT_KERNEL(rate_stream_append_reference_dd_spv),
   RESIDENT_KERNEL(rate_stream_append_f64_spv),
-  RESIDENT_KERNEL(rate_stream_append_strict_f32_spv),
+  RESIDENT_KERNEL(rate_stream_append_precise_f32_spv),
   RESIDENT_KERNEL(rate_stream_append_f32_spv)
 };
 
@@ -430,7 +444,7 @@ static lsx_rate_vulkan_t *create_rate(
   context->vulkan = vulkan;
   context->double_precision = vulkan->use_float64;
   context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
-  context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
+  context->precise_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_precise;
   context->input_frames = block_frames / up_factor;
   /* The skip is counted in output frames, so it carries post_peak exactly.
    * Rounding it down to a multiple of up_factor -- which mirrored the input
@@ -466,7 +480,7 @@ static lsx_rate_vulkan_t *create_rate(
       "(fixed-format sample movement)",
       context->reference_dd ? "FP64x2" :
       context->double_precision ? "FP64" :
-      context->strict_fp32 ? "FP32x2" : "FP32");
+      context->precise_fp32 ? "FP32x2" : "FP32");
   return context;
 
 error: lsx_rate_vulkan_destroy(context);
@@ -1040,6 +1054,10 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
         (unsigned long)context->resident_stream_capacity);
     return SOX_EOF;
   }
+
+  /* Select independently rotated resources.  The command ring is shared by
+   * every stream operation; the descriptor ring is consumed only below when
+   * the gather shader is needed. */
   command = context->resident_stream_commands[context->resident_stream_command_index];
   descriptor_set = context->stream_append_descriptor_sets[context->resident_stream_descriptor_index];
   frame_size = (VkDeviceSize)context->channels * resident_sample_size(context);
@@ -1058,9 +1076,15 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command, "Rate resident stream append");
   if (contiguous) {
+    /* Fast path: the producer already has the stream's element type and
+     * interleaving, so a transfer preserves every bit and needs no descriptor
+     * or clip-counter slot. */
     vkCmdPipelineBarrier(command, input->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &source_barrier, 0, NULL);
     vkCmdCopyBuffer(command, input->buffer->buffer, context->resident_stream[context->resident_stream_index].buffer, 1, &copy);
   } else {
+    /* Gather path: bind the producer whole because its slice begins at an
+     * element offset and may be strided.  Push constants describe that view;
+     * the shader writes a compact interleaved tail into the stream. */
     source_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     infos[0].buffer = input->buffer->buffer;
     infos[0].offset = 0;
@@ -1093,6 +1117,8 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     barriers[0] = source_barrier;
     barriers[1] = stream_barrier;
     if (quantize_sox_sample) {
+      /* The counter shares the descriptor bank so it cannot be cleared again
+       * before the dispatch using this set has retired. */
       vkCmdFillBuffer(command, context->stream_append_clips.buffer, (VkDeviceSize)parameters.clip_index * sizeof(uint32_t), sizeof(uint32_t), 0);
       clip_barrier.buffer = context->stream_append_clips.buffer;
       clip_barrier.offset = (VkDeviceSize)parameters.clip_index * sizeof(uint32_t);
@@ -1109,6 +1135,8 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   lsx_vulkan_label_end(context->vulkan, command);
   if (vk_result(vkEndCommandBuffer(command), "vkEndCommandBuffer rate stream append") != SOX_SUCCESS || lsx_vulkan_enqueue(context->vulkan, command) != SOX_SUCCESS)
     return SOX_EOF;
+  /* Publication is bookkeeping only: queue order makes the newly appended
+   * frames visible to the later consume command before it reads the stream. */
   context->resident_stream_command_index = (context->resident_stream_command_index + 1u) % (lsx_vulkan_resident_batch_depth(context->vulkan) * 2u);
   context->resident_stream_descriptor_index = (context->resident_stream_descriptor_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
   context->resident_stream_occupancy += input->valid_elements;

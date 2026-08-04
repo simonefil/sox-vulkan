@@ -1117,6 +1117,7 @@ function Build-Ffmpeg {
     $env:SOX_FFMPEG_BUILD = $ffmpegBuild
     $env:SOX_STATIC_PREFIX = $StaticLibsDir
     $env:SOX_BUILD_JOBS = $Jobs
+    $env:SOX_FFMPEG_TARGET_ARCH = $env:VSCMD_ARG_TGT_ARCH
     $previousMsys2PathType = $env:MSYS2_PATH_TYPE
     $env:MSYS2_PATH_TYPE = "inherit"
 
@@ -1136,6 +1137,11 @@ command -v pkg-config >/dev/null ||
 src="$(cygpath -u "$SOX_FFMPEG_SRC")"
 build="$(cygpath -u "$SOX_FFMPEG_BUILD")"
 prefix="$(cygpath -u "$SOX_STATIC_PREFIX")"
+
+set --
+if [ "$SOX_FFMPEG_TARGET_ARCH" = "arm64" ]; then
+  set -- --arch=aarch64 --disable-asm
+fi
 
 cd "$build"
 "$src/configure" \
@@ -1161,7 +1167,8 @@ cd "$build"
   --enable-parser=aac,aac_latm,ac3,dca,mlp \
   --enable-demuxer=mov \
   --enable-muxer=ipod \
-  --enable-protocol=file
+  --enable-protocol=file \
+  "$@"
 make -j"$SOX_BUILD_JOBS"
 make install
 '@
@@ -1177,6 +1184,7 @@ make install
         Remove-Item Env:SOX_FFMPEG_BUILD -ErrorAction SilentlyContinue
         Remove-Item Env:SOX_STATIC_PREFIX -ErrorAction SilentlyContinue
         Remove-Item Env:SOX_BUILD_JOBS -ErrorAction SilentlyContinue
+        Remove-Item Env:SOX_FFMPEG_TARGET_ARCH -ErrorAction SilentlyContinue
         if ($null -eq $previousMsys2PathType) {
             Remove-Item Env:MSYS2_PATH_TYPE -ErrorAction SilentlyContinue
         }

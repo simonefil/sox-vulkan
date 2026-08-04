@@ -5,18 +5,30 @@
  * with pfcos()/pfsin() and then merely splits the result into a hi/lo pair.
  * With a plain double that split recovers nothing, so the transform is
  * limited to FP64 twiddle accuracy no matter how precise the device
- * arithmetic is. GCC supplies __float128 through libquadmath; MSVC has no
- * 128-bit floating type at all, so this header supplies one built from two
- * doubles, which is what VkFFT ultimately stores anyway.
+ * arithmetic is. Some compilers expose a native __float128 type without the
+ * quadmath library and headers that VkFFT also needs, while MSVC has no
+ * 128-bit floating type at all. This header supplies the same interface from
+ * two doubles in both cases, which is what VkFFT ultimately stores anyway.
  *
  * Only the six entry points VkFFT actually uses are provided. This header is
  * placed on the include path of the double-double translation unit alone, so
  * no other VkFFT instantiation is affected.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef LSX_VULKAN_DD_QUADMATH_H
@@ -24,10 +36,6 @@
 
 #ifndef __cplusplus
 #error "the double-double quadmath shim requires C++"
-#endif
-
-#ifdef __SIZEOF_FLOAT128__
-#error "this target has a native __float128; use the real quadmath instead"
 #endif
 
 #include <cmath>
@@ -82,7 +90,12 @@ struct lsx_dd_float {
   }
   explicit operator float() const { return (float)hi; }
   explicit operator int() const { return (int)(hi + lo); }
+  explicit operator long() const { return (long)(hi + lo); }
   explicit operator long long() const { return (long long)(hi + lo); }
+  explicit operator unsigned long() const
+  {
+    return (unsigned long)(hi + lo);
+  }
   explicit operator unsigned long long() const
   {
     return (unsigned long long)(hi + lo);
@@ -122,6 +135,11 @@ static inline lsx_dd_float operator*(lsx_dd_float a, lsx_dd_float b)
   return lsx_dd_float(p1, p2);
 }
 
+/* Long division by quotient extraction.  q1 removes the FP64-sized leading
+ * part, q2 removes the leading part of its double-double residual, and q3 is
+ * the final correction retained by the pair.  VkFFT calls this only with
+ * finite, non-zero sizing and angle constants; matching libquadmath's NaN or
+ * divide-by-zero signalling is intentionally outside this narrow shim. */
 static inline lsx_dd_float operator/(lsx_dd_float a, lsx_dd_float b)
 {
   double q1 = a.hi / b.hi;
@@ -211,6 +229,12 @@ static inline double ceilq(lsx_dd_float a)
   return integral == a.hi ? integral + std::ceil(a.lo) : integral;
 }
 
+/* One Newton correction around the hardware square root.  If x is the FP64
+ * approximation, (a - x*x)/(2*x) restores the residual carried by the low
+ * word without iterating in ordinary precision.  VkFFT requests square roots
+ * only of non-negative transform constants; zero and any invalid negative
+ * input therefore collapse to zero instead of emulating libquadmath errno,
+ * exceptions or NaN payloads that its caller never observes. */
 static inline lsx_dd_float sqrtq(lsx_dd_float a)
 {
   double inverse;

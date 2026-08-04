@@ -1,9 +1,20 @@
 /* FP64 Vulkan cubic stage for the SoX rate planner.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -14,8 +25,7 @@
 
 #include "rate_cubic_f64_spv.inc"
 #include "rate_cubic_f32_spv.inc"
-#include "rate_cubic_accurate_f32_spv.inc"
-#include "rate_cubic_strict_f32_spv.inc"
+#include "rate_cubic_precise_f32_spv.inc"
 #include "rate_cubic_reference_dd_spv.inc"
 
 #define RATE_CUBIC_BLOCK_FRAMES 16384u
@@ -32,10 +42,9 @@ typedef struct {
   uint32_t step_fraction;
   uint32_t phase_fraction;
   uint32_t channels;
-  uint32_t padding[3];
 } parameters_t;
 
-lsx_static_assert(sizeof(parameters_t) == 32, vulkan_rate_cubic_push_layout);
+lsx_static_assert(sizeof(parameters_t) == 20, vulkan_rate_cubic_push_layout);
 
 struct lsx_rate_cubic_vulkan {
   lsx_vulkan_context_t *vulkan;
@@ -58,8 +67,7 @@ struct lsx_rate_cubic_vulkan {
   uint32_t pre_post;
   uint32_t max_output_frames;
   sox_bool double_precision;
-  sox_bool accurate_fp32;
-  sox_bool strict_fp32;
+  sox_bool precise_fp32;
   sox_bool reference_dd;
 };
 
@@ -72,12 +80,12 @@ static int vk_result(VkResult result, char const *operation)
  * profiles carry a high and a low component per sample, so they need twice the
  * room of the plain type they are built from.  reference_dd is set as
  * double_precision && profile == reference, so it has to be tested first;
- * strict_fp32 is set only when double_precision is false. */
+ * precise_fp32 is set only when double_precision is false. */
 static size_t sample_size(lsx_rate_cubic_vulkan_t const *context)
 {
   if (context->reference_dd)
     return 2u * sizeof(double);
-  if (context->strict_fp32)
+  if (context->precise_fp32)
     return 2u * sizeof(float);
   return context->double_precision ? sizeof(double) : sizeof(float);
 }
@@ -165,20 +173,17 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
     return SOX_EOF;
   /* Pick the kernel once, so its SPIR-V blob and the size passed with it can
    * never disagree.  Only the first test is order-sensitive: reference_dd
-   * implies double_precision, while strict_fp32 and accurate_fp32 are set only
-   * when double_precision is false and exclude each other. */
+   * implies double_precision, while precise_fp32 is set only when double
+   * precision is unavailable. */
   if (context->reference_dd) {
     kernel_spirv = rate_cubic_reference_dd_spv;
     kernel_size = sizeof(rate_cubic_reference_dd_spv);
   } else if (context->double_precision) {
     kernel_spirv = rate_cubic_f64_spv;
     kernel_size = sizeof(rate_cubic_f64_spv);
-  } else if (context->strict_fp32) {
-    kernel_spirv = rate_cubic_strict_f32_spv;
-    kernel_size = sizeof(rate_cubic_strict_f32_spv);
-  } else if (context->accurate_fp32) {
-    kernel_spirv = rate_cubic_accurate_f32_spv;
-    kernel_size = sizeof(rate_cubic_accurate_f32_spv);
+  } else if (context->precise_fp32) {
+    kernel_spirv = rate_cubic_precise_f32_spv;
+    kernel_size = sizeof(rate_cubic_precise_f32_spv);
   } else {
     kernel_spirv = rate_cubic_f32_spv;
     kernel_size = sizeof(rate_cubic_f32_spv);
@@ -256,8 +261,7 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
 
   if (!vulkan || (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
-      vulkan->profile != sox_vulkan_profile_accurate &&
-      vulkan->profile != sox_vulkan_profile_strict) || !step ||
+      vulkan->profile != sox_vulkan_profile_precise) || !step ||
       pre_post < 3u || !channels)
     return NULL;
   limit = (uint64_t)RATE_CUBIC_BLOCK_FRAMES << 32;
@@ -268,8 +272,7 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
   context->vulkan = vulkan;
   context->double_precision = vulkan->use_float64;
   context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
-  context->accurate_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_accurate;
-  context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
+  context->precise_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_precise;
   context->step = step;
   context->pre_post = pre_post;
   context->max_output_frames = (uint32_t)maximum;
@@ -291,8 +294,7 @@ lsx_rate_cubic_vulkan_t *lsx_rate_cubic_vulkan_create(
       "Vulkan rate cubic precision: %s",
       context->reference_dd ? "FP64x2" :
       context->double_precision ? "FP64" :
-      context->strict_fp32 ? "FP32x2" :
-      context->accurate_fp32 ? "compensated FP32" : "FP32");
+      context->precise_fp32 ? "FP32x2" : "FP32");
   return context;
 
 error: lsx_rate_cubic_vulkan_destroy(context);
@@ -374,7 +376,7 @@ int lsx_rate_cubic_vulkan_process(
    * output is produced from them.
    *
    * Each profile stores its own element form on the way in -- a pair with a
-   * zero low word for double-double, a split pair for the strict profile,
+   * zero low word for double-double, a split pair for the precise profile,
    * or a plain value.  The conversion is done here rather than in the shader
    * so that the buffer's layout is fixed by the profile alone. */
   copied_frames = processable_frames + context->pre_post;
@@ -388,7 +390,7 @@ int lsx_rate_cubic_vulkan_process(
     }
   else if (context->double_precision)
     memcpy(context->input.mapped, input, sample_count * sizeof(*input));
-  else if (context->strict_fp32)
+  else if (context->precise_fp32)
     for (index = 0; index < sample_count; ++index) {
       float high = (float)input[index];
       float *target = (float *)context->input.mapped + 2u * index;
@@ -453,7 +455,7 @@ int lsx_rate_cubic_vulkan_process(
   }
   else if (context->double_precision)
     *output = context->output.mapped;
-  else if (context->strict_fp32) {
+  else if (context->precise_fp32) {
     for (index = 0; index < sample_count; ++index) {
       float const *value = (float const *)context->output.mapped + 2u * index;
 

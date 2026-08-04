@@ -1,24 +1,3 @@
-# Autotools artifacts
-Makefile
-Makefile.in
-autom4te.cache
-mingw32-config.cache
-configure
-config.log
-config.status
-confdefs.h
-configure.lineno
-config.status.lineno
-config.guess
-config.sub
-depcomp
-compile
-install-sh
-missing
-aclocal.m4
-libtool
-ltmain.sh
-
 # CMake build directories
 build/
 build_deps/
@@ -30,15 +9,12 @@ cmake_install.cmake
 
 # Generated files
 sox*.tar.gz
-*.txt
-!CMakeLists.txt
-!**/CMakeLists.txt
 *.pdf
 *.html
 sox.pc
-README
-Docs.Features
 *.a
+*.o
+*.obj
 tags
 __pycache__/
 
@@ -46,4 +22,4 @@ __pycache__/
 /tools/
 
 # Finder metadata
-/.DS_Store
+.DS_Store

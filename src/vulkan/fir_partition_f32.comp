@@ -29,6 +29,22 @@
  * bin): the two banks have the same extent but transpose their outer axes,
  * because history rotates per channel while kernels are uploaded partition
  * by partition.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #version 450
@@ -72,7 +88,7 @@ void main()
       const vec2 coefficient = kernels.values[(part * parameters.channels + channel) * parameters.spectrum_bins + bin];
 
       /* Complex multiply-accumulate, straight FP32: this profile buys speed
-       * with rounding, and the accurate and precise variants differ from it
+       * with rounding, and the precise variant differs from it
        * only in how they compensate here. */
       sum += vec2(value.x * coefficient.x - value.y * coefficient.y, value.x * coefficient.y + value.y * coefficient.x);
     }

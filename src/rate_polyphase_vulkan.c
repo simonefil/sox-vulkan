@@ -1,9 +1,20 @@
 /* FP64 Vulkan polyphase stage for the SoX rate planner.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -14,8 +25,7 @@
 
 #include "rate_polyphase_f64_spv.inc"
 #include "rate_polyphase_f32_spv.inc"
-#include "rate_polyphase_accurate_f32_spv.inc"
-#include "rate_polyphase_strict_f32_spv.inc"
+#include "rate_polyphase_precise_f32_spv.inc"
 #include "rate_polyphase_reference_dd_spv.inc"
 #include "rate_polyphase_reference_dd_normalized_f32_spv.inc"
 #include "rate_polyphase_normalized_f32_spv.inc"
@@ -76,8 +86,7 @@ struct lsx_rate_polyphase_vulkan {
   uint32_t resident_occupancy_frames;
   sox_bool resident_initialized;
   sox_bool double_precision;
-  sox_bool accurate_fp32;
-  sox_bool strict_fp32;
+  sox_bool precise_fp32;
   sox_bool reference_dd;
 };
 
@@ -96,7 +105,7 @@ static size_t sample_size(lsx_rate_polyphase_vulkan_t const *context)
 {
   return context->reference_dd ?
       2u * sizeof(double) :
-      context->strict_fp32 ?
+      context->precise_fp32 ?
       2u * sizeof(float) :
       context->double_precision ? sizeof(double) : sizeof(float);
 }
@@ -105,7 +114,7 @@ static lsx_vulkan_resident_format_t sample_format(lsx_rate_polyphase_vulkan_t co
 {
   return context->reference_dd ?
       lsx_vulkan_resident_format_f64x2 :
-      context->strict_fp32 ?
+      context->precise_fp32 ?
       lsx_vulkan_resident_format_f32x2 :
       context->double_precision ?
       lsx_vulkan_resident_format_f64 :
@@ -132,7 +141,7 @@ static void upload_samples(lsx_rate_polyphase_vulkan_t const *context, void *tar
     memcpy(target, source, count * sizeof(*source));
     return;
   }
-  if (context->strict_fp32) {
+  if (context->precise_fp32) {
     for (index = 0; index < count; ++index) {
       float high = (float)source[index];
 
@@ -163,7 +172,7 @@ static double const *host_samples(lsx_rate_polyphase_vulkan_t *context, size_t c
   }
   if (context->double_precision)
     return context->output.mapped;
-  if (context->strict_fp32) {
+  if (context->precise_fp32) {
     for (index = 0; index < count; ++index) {
       float const *value = (float const *)context->output.mapped + 2u * index;
 
@@ -186,7 +195,7 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
   VkDeviceSize normalized_output_size =
       (VkDeviceSize)context->max_output_frames *
       context->parameters.channels *
-      (context->strict_fp32 ?
+      (context->precise_fp32 ?
        2u * sizeof(float) : sizeof(float));
   VkDeviceSize resident_input_size = input_size;
   uint32_t phase;
@@ -214,7 +223,7 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
         target_values[0] = value;
         target_values[1] = 0.;
       }
-      else if (context->strict_fp32) {
+      else if (context->precise_fp32) {
         float high = (float)value;
         float *target_values = (float *)context->coefficients.mapped + 2u * target;
 
@@ -267,14 +276,14 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   /* Pick each kernel once, so its SPIR-V blob and the size passed with it can
    * never disagree.  Only the first test is order-sensitive: reference_dd is
    * set as double_precision && profile == reference, so it has to come before
-   * the plain FP64 family; strict_fp32 and accurate_fp32 are set only when
-   * double_precision is false and exclude each other.
+   * the plain FP64 family; precise_fp32 is set only when double precision is
+   * unavailable.
    *
    * The two selections are deliberately not the same mapping.  The normalized
    * kernel writes host-scaled FP32 samples, so above FP32 it uses a dedicated
    * shader -- reference_dd_normalized_f32 for the reference profile and
-   * normalized_f32 for plain FP64 -- while the strict and accurate profiles
-   * share the kernel they already use for the resident path. */
+   * normalized_f32 for plain FP64 -- while precise shares the kernel it
+   * already uses for the resident path. */
   if (context->reference_dd) {
     kernel_spirv = rate_polyphase_reference_dd_spv;
     kernel_size = sizeof(rate_polyphase_reference_dd_spv);
@@ -285,12 +294,9 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
     kernel_size = sizeof(rate_polyphase_f64_spv);
     normalized_spirv = rate_polyphase_normalized_f32_spv;
     normalized_size = sizeof(rate_polyphase_normalized_f32_spv);
-  } else if (context->strict_fp32) {
-    kernel_spirv = normalized_spirv = rate_polyphase_strict_f32_spv;
-    kernel_size = normalized_size = sizeof(rate_polyphase_strict_f32_spv);
-  } else if (context->accurate_fp32) {
-    kernel_spirv = normalized_spirv = rate_polyphase_accurate_f32_spv;
-    kernel_size = normalized_size = sizeof(rate_polyphase_accurate_f32_spv);
+  } else if (context->precise_fp32) {
+    kernel_spirv = normalized_spirv = rate_polyphase_precise_f32_spv;
+    kernel_size = normalized_size = sizeof(rate_polyphase_precise_f32_spv);
   } else {
     kernel_spirv = normalized_spirv = rate_polyphase_f32_spv;
     kernel_size = normalized_size = sizeof(rate_polyphase_f32_spv);
@@ -350,8 +356,7 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
 
   if (!vulkan || (!vulkan->shader_float64 &&
       vulkan->profile != sox_vulkan_profile_fast &&
-      vulkan->profile != sox_vulkan_profile_accurate &&
-      vulkan->profile != sox_vulkan_profile_strict) ||
+      vulkan->profile != sox_vulkan_profile_precise) ||
       !coefficients || !taps || !phase_count || !phase_step ||
       phase_start >= phase_count || !channels ||
       resident_preload_frames > taps - 1u ||
@@ -365,8 +370,7 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
   context->vulkan = vulkan;
   context->double_precision = vulkan->use_float64;
   context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
-  context->accurate_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_accurate;
-  context->strict_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_strict;
+  context->precise_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_precise;
   context->parameters.phase_count = phase_count;
   context->parameters.phase_step = phase_step;
   context->parameters.taps = taps;
@@ -384,8 +388,7 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
       channels == 1u ? "" : "s",
       context->reference_dd ? "FP64x2" :
       context->double_precision ? "FP64" :
-      context->strict_fp32 ? "FP32x2" :
-      context->accurate_fp32 ? "compensated FP32" : "FP32",
+      context->precise_fp32 ? "FP32x2" : "FP32",
       symmetric_presum ? ", symmetric presumming" : "");
   return context;
 
@@ -556,6 +559,15 @@ int lsx_rate_polyphase_vulkan_process_resident(lsx_rate_polyphase_vulkan_t *cont
   return lsx_rate_polyphase_vulkan_process_resident_normalized(context, input, processable_frames, output_frames, consumed_frames, rate, state, sox_false, resident);
 }
 
+/* Append one producer slice to the device-side window and run every output
+ * whose complete tap window is now available.
+ *
+ * The function deliberately combines five operations in one command buffer:
+ * append the producer slice, dispatch the polyphase kernel, make its output
+ * visible, retain the unconsumed window tail in the alternate input buffer,
+ * and either publish the output resident or wait and expose it to the host.
+ * Keeping that order in one submission is what lets the two input buffers
+ * alternate without copying samples through host memory. */
 int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
 {
   VkCommandBuffer command_buffer;
@@ -581,6 +593,8 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   size_t available_frames;
   uint32_t index;
 
+  /* Phase 1: validate the complete cross-effect contract before interpreting
+   * the producer buffer with this stage's element type and strides. */
   if (!context || !input || !output_frames ||
       (!output && !resident) || (resident && rate <= 0) ||
       lsx_vulkan_resident_buffer_validate(input) != SOX_SUCCESS ||
@@ -618,6 +632,10 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   end_position = context->phase_start + count * context->parameters.phase_step;
   consumed_frames = (size_t)(end_position / context->parameters.phase_count);
   remaining_frames = available_frames - consumed_frames;
+
+  /* Phase 2: describe both transfers.  append extends the current window;
+   * retain moves its still-needed suffix to the alternate buffer after the
+   * dispatch, avoiding overlap with data the queued shader is reading. */
   append.srcOffset = input->offset;
   append.dstOffset = (VkDeviceSize)context->resident_occupancy_frames * frame_size;
   append.size = (VkDeviceSize)input->valid_elements * frame_size;
@@ -632,6 +650,9 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   context->parameters.phase_start = context->phase_start;
   context->parameters.normalize = normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   output_buffer = normalize ? &context->normalized_output : &context->output;
+
+  /* Phase 3: bind coefficients, the completed input window and the selected
+   * output representation to this in-flight bank. */
   buffer_info[0].buffer = context->coefficients.buffer;
   buffer_info[0].offset = 0;
   buffer_info[0].range = context->coefficients.size;
@@ -654,6 +675,8 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences resident rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer resident rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer resident rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate resident polyphase");
+  /* Phase 4: initialise history if needed, append, filter, then preserve the
+   * suffix.  Barriers make each step visible to the next within this queue. */
   /* Zero the preload on the first block only: those frames stand in for the
    * history the first output has none of, so they must be silence.  Done
    * inside the first recorded block rather than at creation, since it must
@@ -687,6 +710,10 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   context->resident_input_index ^= 1u;
   context->valid_output_frames = (uint32_t)count;
   *output_frames = (size_t)count;
+
+  /* Phase 5: resident publication queues the command without waiting and
+   * transfers its dependency metadata to the next effect.  The host form
+   * waits on the same command and converts the mapped output to doubles. */
   if (resident) {
     memset(resident, 0, sizeof(*resident));
     resident->buffer = output_buffer;
@@ -703,7 +730,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
     resident->frames_per_element = 1u;
     resident->format = context->reference_dd && !normalize ?
         lsx_vulkan_resident_format_f64x2 :
-        context->strict_fp32 ?
+        context->precise_fp32 ?
         lsx_vulkan_resident_format_f32x2 :
         normalize || !context->double_precision ?
         lsx_vulkan_resident_format_f32 :

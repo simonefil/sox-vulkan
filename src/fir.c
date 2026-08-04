@@ -242,9 +242,8 @@ int lsx_fir_vulkan_try_fuse(sox_effect_t *first, sox_effect_t const *second)
    * -113 dBFS over the first 1000 samples and -45 dBFS over the last 300.
    * It used to be enabled only for reference, and for fast on devices
    * without shaderFloat64 -- which is why the same --vulkan-fast command
-   * behaved differently on an RTX 3080 and on an M5 Pro, and why accurate
-   * scored below fast on Apple Silicon: the two were not running the same
-   * computation. */
+   * behaved differently on an RTX 3080 and on an M5 Pro: the two were not
+   * running the same computation. */
   if ((!first_base->vulkan_source_taps &&
        !first_base->vulkan_channels) ||
       (!second_base->vulkan_source_taps &&

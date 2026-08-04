@@ -257,8 +257,8 @@ endif()
 # is an ordinary library and gets linked.  NO_DEFAULT_PATH keeps the search on
 # the SDK, since any other glslang.dll on the machine is the wrong build.
 if(WITH_VULKAN)
-    if(NOT IS_WINDOWS AND NOT IS_MACOS)
-        message(FATAL_ERROR "The Vulkan FIR and DSD backends support Windows and macOS")
+    if(NOT IS_WINDOWS AND NOT IS_MACOS AND NOT IS_LINUX AND NOT IS_FREEBSD)
+        message(FATAL_ERROR "The Vulkan FIR and DSD backends support Windows, macOS, Linux, and FreeBSD")
     endif()
     find_package(Vulkan REQUIRED)
     find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
@@ -266,7 +266,13 @@ if(WITH_VULKAN)
         find_file(GLSLANG_RUNTIME_DLL NAMES glslang.dll PATHS "$ENV{VULKAN_SDK}/Bin" NO_DEFAULT_PATH REQUIRED)
     else()
         find_path(GLSLANG_INCLUDE_DIR NAMES glslang/Include/glslang_c_interface.h REQUIRED)
-        find_library(GLSLANG_LIBRARY NAMES glslang REQUIRED)
+        if(IS_LINUX)
+            find_package(Threads REQUIRED)
+            find_package(glslang CONFIG REQUIRED)
+            set(GLSLANG_LIBRARY glslang::glslang glslang::SPIRV)
+        else()
+            find_library(GLSLANG_LIBRARY NAMES glslang REQUIRED)
+        endif()
     endif()
     find_path(VKFFT_INCLUDE_DIR NAMES vkFFT.h
         HINTS "${STATIC_LIBS_DIR}"
@@ -1000,8 +1006,3 @@ configure_file(
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/sox.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-
-# Install man pages
-install(FILES sox.1 soxi.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
-install(FILES soxformat.7 DESTINATION ${CMAKE_INSTALL_MANDIR}/man7)
-install(FILES libsox.3 DESTINATION ${CMAKE_INSTALL_MANDIR}/man3)

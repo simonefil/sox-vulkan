@@ -1,9 +1,20 @@
 /* Machine-readable diagnostics for one run of SoX.  See the header.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -24,6 +35,14 @@
 #define diagnostics_mkdir(path) mkdir((path), 0777)
 #define DIAGNOSTICS_PATH_SEPARATOR '/'
 #endif
+
+/* One process-wide diagnostics session is open at a time.  _open establishes
+ * the directory and capture definitions, chain callbacks accumulate metadata
+ * and per-flow part files, and _close assembles them before writing run.txt.
+ * _fail is the terminal alternative: it disables every tap first and writes
+ * only the error metadata, because partially assembled captures are not a
+ * valid result.  The metadata tables are scheduler-owned; only capture file
+ * writes occur on effect-flow threads. */
 
 /* Each flow of a tapped effect writes its own part file and the parts are
  * interleaved when the run ends.  The alternative -- one file written by
@@ -342,6 +361,17 @@ static uint8_t reverse_byte(uint8_t value)
   return (uint8_t)(((value & 0xaa) >> 1) | ((value & 0x55) << 1));
 }
 
+/* Canonicalise either packed representation as channel-interleaved bytes with
+ * the earliest DSD sample in the byte's least-significant bit.
+ *
+ * The byte form arrives frame-major: one sox_sample_t per channel for each
+ * group of up to eight DSD frames.  Its payload is MSB-first and carries a
+ * shared valid-bit count, hence reverse_byte and the per-channel consistency
+ * check.  The word form arrives channel-major with 32 valid samples per word;
+ * the Vulkan modulator already packs its earliest sample in bit zero, so each
+ * word is split low byte first and transposed to byte-major channel order.
+ * dsd_frames counts frames per channel, not bytes and not interleaved sample
+ * slots, which is why it advances once per group rather than per channel. */
 void lsx_diagnostics_capture_dsd(sox_sample_t const *samples, size_t n,
     unsigned channels, unsigned packing)
 {

@@ -1,5 +1,21 @@
 /*
  * Prepare an overlap-save FIR block directly from resident FP32 input.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /* The FP32 member of the prepare family; rate_prepare_f64.comp carries the
@@ -7,7 +23,7 @@
  * float per sample, no compensation anywhere: a profile that chooses this has
  * already accepted FP32 rounding through the whole chain.
  *
- * The fast and accurate profiles both land here.  The family has no accurate
+ * The fast profile lands here.  The family has no compensated
  * member because it does not accumulate -- see resident_kernel() in
  * rate_vulkan.c.
  *
@@ -19,9 +35,9 @@
  *                          per channel.
  *   2 previous_samples  -- in/out: the overlap carried between blocks.
  *
- * Push constants (prepare_parameters_t, 32 bytes): block_frames,
+ * Push constants (prepare_parameters_t, 28 bytes): block_frames,
  * input_frames, input_frame_stride, input_channel_stride,
- * prepared_channel_stride, up_factor, channels, padding.
+ * prepared_channel_stride, up_factor and channels.
  *
  * Dispatch is two-dimensional, x over block_frames in workgroups of 128 and
  * y one invocation per channel, hence both bounds tests; an invocation owns
@@ -52,7 +68,6 @@ layout(push_constant) uniform Parameters {
   uint prepared_channel_stride;
   uint up_factor;
   uint channels;
-  uint padding;
 } parameters;
 
 void main()

@@ -1,9 +1,20 @@
 /* Shared Vulkan execution core for SoX effects.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -30,8 +41,7 @@ char const *lsx_vulkan_profile_name(sox_vulkan_profile_t profile)
   switch (profile) {
     case sox_vulkan_profile_none: return "none";
     case sox_vulkan_profile_fast: return "fast";
-    case sox_vulkan_profile_accurate: return "accurate";
-    case sox_vulkan_profile_strict: return "strict";
+    case sox_vulkan_profile_precise: return "precise";
     case sox_vulkan_profile_reference: return "reference";
   }
   return "unknown";
@@ -800,12 +810,11 @@ static lsx_vulkan_context_t *create_context(void)
   enabled_features.shaderFloat64 = available_features.shaderFloat64;
   context->shader_float64 = available_features.shaderFloat64 ? sox_true : sox_false;
   context->profile = sox_globals.vulkan_profile;
-  /* Only the two high-precision profiles use native doubles, and only where
-   * the device has them; fast and accurate stay in single precision by
-   * design, since that is what they trade away for speed. */
+  /* The two high-precision profiles use native doubles where the device has
+   * them; fast stays in single precision by design. */
   context->use_float64 =
       context->shader_float64 &&
-      (context->profile == sox_vulkan_profile_strict ||
+      (context->profile == sox_vulkan_profile_precise ||
        context->profile == sox_vulkan_profile_reference);
   context->numerical_family = context->use_float64 ?
       lsx_vulkan_numerical_family_fp64 :

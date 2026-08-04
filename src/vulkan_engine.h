@@ -1,9 +1,20 @@
 /* Shared Vulkan execution core for SoX effects.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /*
@@ -44,7 +55,7 @@ typedef struct {
 /* How one element of a resident buffer is stored.  The x2 forms are
  * unevaluated sums of two floats: the high part and a correction, which
  * together carry roughly twice the precision of the underlying type.  They
- * exist because a GPU has no wider float than double, so the strict and
+ * exist because a GPU has no wider float than double, so the precise and
  * reference profiles reach beyond it by pairing.  dsd_u32 is 32 one-bit DSD
  * frames packed into a word, not a number. */
 typedef enum {

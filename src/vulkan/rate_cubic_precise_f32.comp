@@ -1,8 +1,8 @@
-/* Double-single cubic interpolation for the strict profile.
+/* Double-single cubic interpolation for the precise profile.
  *
- * The strict profile's member of the cubic family; rate_cubic_f64.comp
+ * The precise profile's member of the cubic family; rate_cubic_f64.comp
  * carries the family's rationale.  The arithmetic is the same compensated
- * float-float evaluation the accurate profile uses, but the pairs are the
+ * float-float evaluation used by the compensated path, but the pairs are the
  * interface rather than an internal detail: samples arrive as pairs from the
  * stage before and leave as pairs for the stage after, so nothing is narrowed
  * at either end and the low word survives the whole chain.
@@ -11,14 +11,30 @@
  *   0 input_samples   -- in: interleaved input frames, double-single pairs.
  *   1 output_samples  -- out: interleaved output frames, pairs.
  *
- * Push constants (parameters_t, 32 bytes): output_frames, step_integer,
- * step_fraction, phase_fraction, channels, padding0..2.  The step and phase
+ * Push constants (parameters_t, 20 bytes): output_frames, step_integer,
+ * step_fraction, phase_fraction and channels.  The step and phase
  * are 32.32 and 0.32 fixed point.  The frame strides count vec2 elements.
  *
  * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
  * y one invocation per channel, hence both bounds tests.  The +1 on
  * input_frame is the history the cubic window needs, reserved by the host as
  * pre_post along with the two frames after it.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #version 450
@@ -39,9 +55,6 @@ layout(push_constant) uniform Parameters {
   uint step_fraction;
   uint phase_fraction;
   uint channels;
-  uint padding0;
-  uint padding1;
-  uint padding2;
 } parameters;
 
 /* Double-single primitives, the FP32 counterpart of double_double.glsl and

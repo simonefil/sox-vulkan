@@ -1,9 +1,20 @@
 /* Vulkan FIR and DSD modulation backend for SoX.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sox_i.h"
@@ -76,7 +87,7 @@
 
 #include "sdm_mash2_fsm_spv.inc"
 #include "sdm_resident_f32_spv.inc"
-#include "sdm_resident_strict_f32_spv.inc"
+#include "sdm_resident_precise_f32_spv.inc"
 #include "sdm_resident_f64_spv.inc"
 #include "sdm_resident_reference_dd_spv.inc"
 
@@ -106,33 +117,31 @@ typedef struct {
 } state_t;
 
 typedef struct {
-  uint32_t mode;
-  uint32_t sample_count;
-  uint32_t block_count;
-  uint32_t state_count;
-  uint32_t source_offset;
-  uint32_t target_offset;
-  uint32_t parent_offset;
-  uint32_t element_count;
-  uint32_t compose_offset;
-  uint32_t table_source;
-  uint32_t block_samples;
-  uint32_t initial_state;
-  float input_gain;
-  uint32_t stage_index;
-  uint32_t scan_storage_count;
-  uint32_t padding;
+  uint32_t mode;               /* MODE_* operation selected for this dispatch. */
+  uint32_t sample_count;       /* Per-channel MASH samples in this batch. */
+  uint32_t block_count;        /* Fixed-size reducer blocks covering the batch. */
+  uint32_t state_count;        /* Reachable reducer states, currently 69. */
+  uint32_t source_offset;      /* Current scan level within BUFFER_SCAN. */
+  uint32_t target_offset;      /* Next level, where workgroup totals are written. */
+  uint32_t parent_offset;      /* Parent level used during the scan down-sweep. */
+  uint32_t element_count;      /* Active values in the current scan level. */
+  uint32_t compose_offset;     /* Block distance of this prefix-composition pass. */
+  uint32_t table_source;       /* Zero reads A/writes B; one reads B/writes A. */
+  uint32_t block_samples;      /* Samples represented by one transition table. */
+  float input_gain;            /* Headroom applied before fixed-point conversion. */
+  uint32_t stage_index;        /* Selects the first or second persistent MASH phase. */
+  uint32_t scan_storage_count; /* Per-channel stride of the scan hierarchy. */
 } mash_parameters_t;
 
 typedef struct {
-  uint32_t input_frames;
-  uint32_t output_frames;
+  uint32_t input_frames;       /* PCM frames available to the ingest shader. */
+  uint32_t output_frames;      /* DSD-rate samples generated per channel. */
   uint32_t channels;
-  float scale;
+  float scale;                 /* Producer domain to normalized PCM conversion. */
 } resident_parameters_t;
 
 lsx_static_assert(sizeof(state_t) == 8, vulkan_state_layout);
-lsx_static_assert(sizeof(mash_parameters_t) == 64, vulkan_mash_push_layout);
+lsx_static_assert(sizeof(mash_parameters_t) == 56, vulkan_mash_push_layout);
 lsx_static_assert(sizeof(resident_parameters_t) == 16, vulkan_resident_push_layout);
 
 typedef lsx_vulkan_buffer_t buffer_t;
@@ -170,14 +179,20 @@ struct lsx_sdm_vulkan {
   uint32_t output_frames;
   uint32_t valid_output_words;
   uint32_t resident_pending_frames; /* Appended but not yet modulated. */
-  uint32_t resident_append_bank_index;
+  uint32_t resident_append_bank_index; /* Command buffer used by the next append. */
+  /* Appends queued since the last wait.  Reaching the batch depth forces a
+   * retirement before the command-buffer rotation can wrap and overwrite
+   * work the device may still be executing. */
   uint32_t resident_append_pending;
   /* The producer's element format, latched from its first slice: the ingest
    * pipeline is built for one format, so a chain that changed it mid-stream
    * would need a different shader. */
   lsx_vulkan_resident_format_t resident_input_format;
   sox_bool resident_input_format_known;
-  sox_bool resident_final;       /* The final slice has been seen. */
+  /* Latched when the final producer slice is accepted.  It does not mean the
+   * modulator is drained: resident_pending_frames may still owe a padded
+   * terminal batch, which _resident_active exposes to the scheduler. */
+  sox_bool resident_final;
   float resident_scale;          /* Domain conversion folded into the ingest. */
 
   /* Prefix-scan geometry, computed once from the batch size.  The scan is
@@ -500,8 +515,8 @@ static int create_resident_pipeline(lsx_sdm_vulkan_t *context, lsx_vulkan_reside
   if (context->resident_pipeline)
     return context->resident_input_format == input_format ? SOX_SUCCESS : SOX_EOF;
   switch (input_format) {
-    case lsx_vulkan_resident_format_f32x2: shader = sdm_vulkan_resident_strict_f32_spv;
-      shader_size = sdm_vulkan_resident_strict_f32_spv_size;
+    case lsx_vulkan_resident_format_f32x2: shader = sdm_vulkan_resident_precise_f32_spv;
+      shader_size = sdm_vulkan_resident_precise_f32_spv_size;
       break;
     case lsx_vulkan_resident_format_f64: shader = sdm_vulkan_resident_f64_spv;
       shader_size = sdm_vulkan_resident_f64_spv_size;
@@ -1281,7 +1296,6 @@ static lsx_sdm_vulkan_t *create_with_input_target(
   context->mash_parameters.block_count = context->block_count;
   context->mash_parameters.state_count = state_count;
   context->mash_parameters.block_samples = SDM_VULKAN_BLOCK_SAMPLES;
-  context->mash_parameters.initial_state = initial_state;
   context->mash_parameters.input_gain = SDM_VULKAN_INPUT_GAIN;
   context->mash_parameters.scan_storage_count = context->scan_count;
   lsx_report(

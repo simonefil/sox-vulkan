@@ -1,10 +1,12 @@
 # SoX - Sound eXchange
 
-SoX is a command-line audio processing tool that can convert, apply effects, and play audio files in various formats.
+SoX is a command-line audio processing tool for converting, processing, recording, and playing audio. This repository extends classic SoX with:
 
-This repository includes build scripts for compiling SoX with statically
-linked codec libraries. Windows Vulkan builds additionally distribute the
-official dynamic `glslang.dll`.
+- Functional OpenMP-backed `--multi-threaded` processing across independent effect channels and CPU SDM channels; `--single-threaded` forces single-thread execution.
+- Optional Vulkan acceleration for resampling, FIR filtering, and PCM-to-DSD conversion, with `fast`, `precise`, and `reference` numerical profiles and device-resident effect chains.
+- Extended PCM-to-DSD conversion from DSD64 through DSD1024, with selectable high-order CPU modulators and an experimental parallel Vulkan MASH-2/FSM backend.
+- FFmpeg-backed AC-3, E-AC-3, AAC, ALAC, TrueHD, MLP, DTS, DTS-HD, and xHE-AAC/USAC support.
+- Reproducible static release builds for Windows, macOS, Linux, and FreeBSD; bundled codec libraries are linked statically.
 
 ---
 
@@ -13,8 +15,9 @@ official dynamic `glslang.dll`.
 1. [Dependencies](#dependencies)
 2. [Build Instructions](#build-instructions)
 3. [Default Options](#default-options)
-4. [Available Arguments](#available-arguments)
-5. [Verification](#verification)
+4. [Build Options](#build-options)
+5. [Vulkan Profiles](#vulkan-profiles)
+6. [Verification](#verification)
 
 ---
 
@@ -23,21 +26,21 @@ official dynamic `glslang.dll`.
 ### Windows
 
 **Required:**
+
 - Visual Studio 2019 or later (with C++ workload)
-- PowerShell 7 (`pwsh`) for the FFmpeg build; the script refuses to start on
-  Windows PowerShell 5.1 unless `-NoFfmpeg` is given
+- PowerShell 7 (`pwsh`) for the FFmpeg build; the script refuses to start on Windows PowerShell 5.1 unless `-NoFfmpeg` is given
 - CMake 3.15 or later
 - Vulkan SDK with `glslc`, glslang C headers, and `glslang.dll` (required by default for the Vulkan FIR and DSD backends; use `-NoVulkan` to disable them)
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
 
-Run `pwsh` from a Visual Studio developer environment: FFmpeg is built under
-MSYS2 with `--toolchain=msvc`, which needs `cl.exe` on `PATH`, and `dumpbin.exe`
-verifies the result. These are separate requirements — installing PowerShell 7
-does not supply the environment, and a developer shell is usually 5.1.
+**Environment:**
 
-CMake is usually included with Visual Studio. If not, install it from https://cmake.org/download/
+- Run from a Visual Studio developer environment.
+- Invoke PowerShell 7 explicitly with `pwsh`.
+- Required on `PATH`: `cl.exe`, `dumpbin.exe`.
+- CMake download: <https://cmake.org/download/>
 
 **Installation:**
 ```powershell
@@ -116,17 +119,14 @@ brew install cmake pkgconf
 brew install autoconf automake libtool libomp
 ```
 
-`libomp` is required, not optional: the script builds with
-`SOX_REQUIRE_OPENMP=ON` and links Homebrew's `libomp.a`.
+`libomp` is required, not optional: the script builds with `SOX_REQUIRE_OPENMP=ON` and links Homebrew's `libomp.a`.
 
-**Required by `--vulkan`:**
+**Required by the `--vulkan` build option:**
 ```bash
 brew install vulkan-loader vulkan-headers glslang shaderc
 ```
 
-`find_package(Vulkan)` needs the loader and headers, `glslc` compiles this
-tree's shaders, and glslang builds VkFFT's shaders at run time. The Vulkan
-backends exist on macOS and Windows only.
+The Vulkan loader and headers are needed at compile time, `glslc` compiles the embedded shaders, and glslang compiles VkFFT shaders at run time.
 
 **Optional:**
 ```bash
@@ -154,9 +154,7 @@ cd C:\path\to\sox-repo
 pwsh -File .\build_static_libs.ps1
 ```
 
-Without one, load the environment first with `VsDevCmd.bat -arch=x64
--host_arch=x64` from the Visual Studio `Common7\Tools` directory. Call `pwsh`
-explicitly: the developer shell is usually Windows PowerShell 5.1.
+Without one, load the environment first with `VsDevCmd.bat -arch=x64 -host_arch=x64` from the Visual Studio `Common7\Tools` directory. Call `pwsh` explicitly: the developer shell is usually Windows PowerShell 5.1. For a native Windows ARM64 build, use `VsDevCmd.bat -arch=arm64 -host_arch=arm64` instead.
 
 **Linux/macOS/BSD (Bash):**
 ```bash
@@ -165,28 +163,10 @@ chmod +x build_static_libs.sh
 ./build_static_libs.sh
 ```
 
-### Step-by-Step Process
+Output:
 
-1. **Clone or download the repository:**
-   ```bash
-   git clone <repository-url>
-   cd sox-repo
-   ```
-
-2. **Run the build script:**
-
-   The script will automatically:
-   - Download all required codec libraries
-   - Compile each library as a static library
-   - Compile the required FFmpeg libraries from source as static archives
-   - Configure and build SoX with all codecs
-   - Reject a final executable that dynamically imports codec libraries
-   - Copy the final binary to the `output/` directory
-   - Clean up temporary build files
-
-3. **Find the output:**
-   - Windows: `output\sox.exe`
-   - Linux/macOS/BSD: `output/sox`
+- Windows: `output\sox.exe`
+- Linux/macOS/BSD: `output/sox`
 
 ### Build with Custom Options
 
@@ -218,6 +198,9 @@ chmod +x build_static_libs.sh
 
 # Build without FFmpeg-backed formats
 ./build_static_libs.sh --no-ffmpeg
+
+# Build with Vulkan support
+./build_static_libs.sh --vulkan
 
 # Build with 4 parallel jobs
 ./build_static_libs.sh --jobs 4
@@ -275,7 +258,7 @@ chmod +x build_static_libs.sh
 
 ---
 
-## Available Arguments
+## Build Options
 
 ### Windows (PowerShell)
 
@@ -298,7 +281,7 @@ chmod +x build_static_libs.sh
 | `-NoWavpack` | Exclude WavPack support |
 | `-NoSndfile` | Exclude libsndfile support |
 | `-NoFfmpeg` | Exclude FFmpeg-backed format support |
-| `-NoVulkan` | Exclude the Windows/NVIDIA Vulkan FIR and DSD backends |
+| `-NoVulkan` | Exclude the Vulkan FIR and DSD backends |
 | `-NoId3tag` | Exclude ID3 tag support |
 | `-NoPng` | Exclude PNG spectrogram support |
 
@@ -360,11 +343,111 @@ chmod +x build_static_libs.sh
 
 ---
 
+## Vulkan Profiles
+
+- Linux/macOS/BSD build: `./build_static_libs.sh --vulkan`
+- Windows build: enabled by default; disable with `-NoVulkan`
+- Runtime: select one profile
+- No runtime `--vulkan` option
+
+| Runtime option | Numerical family | Device requirement | Intended use |
+|----------------|------------------|--------------------|--------------|
+| omitted | CPU implementation | None | CPU execution |
+| `--vulkan-fast` | FP32 FFT and accumulation | Vulkan compute | Highest GPU throughput and lowest memory use |
+| `--vulkan-precise` | FP64 when available; double-single FP32 otherwise | Vulkan compute | High numerical accuracy with an FP32-device fallback |
+| `--vulkan-reference` | FP64 double-double | Hardware `shaderFloat64` | Numerical reference and qualification |
+
+FIR and rate depend on the selected execution profile:
+
+| Backend/profile | Performance | FIR SNR, pre-quantization |
+|-----------------|-------------|---------------------------|
+| CPU | Lowest startup cost | 309–313 dB |
+| Vulkan fast | Highest GPU throughput; lowest GPU memory | 139–140 dB |
+| Vulkan precise | Between fast and reference | 288–311 dB |
+| Vulkan reference | Highest setup and arithmetic cost | 624.77 dB in the qualified double-double case |
+
+### DSD modulation
+
+- CPU: selectable `sdm-*` and `clans-*` modulators; options `-f`, `-t`, `-n`, and `-l` apply.
+- Vulkan: DSD64 through DSD1024, one to six channels, fixed MASH-2/FSM, −3 dB gain.
+- Vulkan ignores CPU-only `sdm` options `-f`, `-t`, `-n`, and `-l`.
+- DSD decoding uses CPU.
+
+The Vulkan SDM backend is experimental. It is much faster than the CPU modulators, but its second-order noise shaping provides lower quality. Use it only at DSD256 or higher.
+
+| Backend | Modulator | Performance | Quality |
+|---------|-----------|-------------|---------|
+| CPU | Selectable high-order `sdm-*` and `clans-*` | Lower throughput; OpenMP across channels | Recommended for maximum quality |
+| Vulkan, all profiles | Fixed MASH-2/FSM | Highly parallel GPU backend | Experimental; use at DSD256 or higher |
+
+PCM-to-DSD throughput on M5 Pro, stereo, 10-second input:
+
+| Rate | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
+|------|-----------|-------------|----------------|------------------|
+| DSD64 | 17.32× | 96.41× | 42.53× | Not available |
+| DSD128 | 8.32× | 49.95× | 22.99× | Not available |
+| DSD256 | 4.03× | 29.32× | 13.54× | Not available |
+| DSD512 | 2.36× | 16.75× | 7.43× | Not available |
+| DSD1024 | 1.16× | 8.24× | 3.76× | Not available |
+
+PCM-to-DSD throughput on Ryzen 7 5700X3D and RTX 3080, stereo, 10-second input:
+
+| Rate | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
+|------|-----------|-------------|----------------|------------------|
+| DSD64 | 8.38× | 24.45× | 27.17× | 12.41× |
+| DSD128 | 4.28× | 20.04× | 21.46× | 8.06× |
+| DSD256 | 2.21× | 14.99× | 15.46× | 4.74× |
+| DSD512 | 1.14× | 10.80× | 10.07× | 2.68× |
+| DSD1024 | 0.56× | 5.99× | 6.60× | 1.41× |
+
+| Rate | Vulkan SDM SNR, 20 Hz–20 kHz | Use |
+|------|-------------------------------|-----|
+| DSD64 | ~70 dB | Not recommended |
+| DSD128 | ~85 dB | Not recommended |
+| DSD256 | ~100 dB | Minimum useful rate |
+| DSD512 | ~115 dB | Supported use |
+| DSD1024 | ~130 dB | Supported use |
+
+- The Vulkan SDM modulator is identical for `fast`, `precise`, and `reference`; the profile affects the preceding rate/FIR processing only.
+- Vulkan reference was unavailable on the measured M5 Pro because it requires hardware `shaderFloat64`.
+- Noise shaping is stable only at second order. Higher-order FSM variants were rejected because their state space explodes and truncation destroys quality.
+
+### FIR
+
+- Channel maps use 1-based numbers, comma-separated lists, and inclusive ranges.
+
+```text
+fir 1,2=front.txt 3=center.txt 4=sub.txt
+fir 1-6=room-correction.txt
+```
+
+- Unmapped channels pass through with matched delay.
+- Repeated channel assignments cascade in command-line order.
+- Different coefficient lengths retain their relative alignment.
+
+### Rate
+
+- CPU planner remains authoritative for coefficients, topology, quality, phase, bandwidth, aliasing, length, latency, and drain.
+- Vulkan executes supported DFT, polyphase, and half-band stages.
+- Supported plans include `medium`, `high`, `very-high`, exact ratios, 44.1/48 kHz family conversion, and DSD rates.
+- Unsupported stages fall back to CPU.
+- Use `-V3` to inspect the selected route.
+
+### Runtime examples
+
+```bash
+# PCM to DSD512
+./output/sox --vulkan-precise --multi-threaded --buffer 524288 input.wav -r 22579200 output.dsf rate -v 22579200 sdm
+
+# Long FIR
+./output/sox --vulkan-fast input.wav output.wav fir impulse.txt
+```
+
+---
+
 ## Verification
 
-After the build completes, verify the installation. The build scripts reject
-executables that dynamically import bundled codec libraries. Platform,
-OpenMP, and Vulkan infrastructure dependencies are allowed to remain dynamic.
+After the build completes, verify the installation. The build scripts reject executables that dynamically import bundled codec libraries. Platform, OpenMP, and Vulkan infrastructure dependencies are allowed to remain dynamic.
 
 ### 1. Check Version
 
@@ -456,105 +539,6 @@ This lists all formats enabled in the current build. Look for:
 ./output/sox -n test.wav synth 5 sine 440
 ```
 
-On Windows, enable the NVIDIA Vulkan encode path explicitly:
-
-```powershell
-.\output\sox.exe --multi-threaded --vulkan --buffer 524288 input.wav `
-  -r 22579200 output.dsf `
-  rate -v 22579200 sdm
-```
-
-Use the Vulkan FIR backend for long coefficient files:
-
-```powershell
-.\output\sox.exe --vulkan input.wav output.wav fir impulse.txt
-```
-
-#### Codec Summary
-
-| Format | Encoding | Decoding and limits |
-|--------|----------|---------------------|
-| Opus | 1-8 channels; mapping family 0 for mono/stereo and family 1 for multichannel audio | 1-8 standard channels; SoX converts between canonical WAVE order and Vorbis order |
-| AAC/ADTS | AAC-LC through `aac` or `adts` | AAC-LC, HE-AAC, and HE-AACv2 |
-| AAC/LOAS-LATM | AAC-LC through `latm` or `loas` | AAC-LC, HE-AAC, HE-AACv2, and xHE-AAC/USAC through `usac`, `xheaac`, or `xhe-aac` |
-| ALAC/M4A | 1-8 channels, 16- or 24-bit lossless audio | 1-8 channels; output must be seekable |
-| AC-3 | Mono through 5.1 at 32, 44.1, or 48 kHz | Mono through 5.1 |
-| E-AC-3 | Up to 5.1 at 32, 44.1, or 48 kHz | Up to 7.1 |
-| TrueHD | 16- or 24-bit PCM up to 5.1 at 44.1-192 kHz | Channel-based presentations up to 7.1 |
-| MLP | 16- or 24-bit PCM up to 5.1 at 44.1-192 kHz | Preserves valid 20-bit source precision; the encoder pads an incomplete final frame |
-| DTS | DTS core up to 5.1(side), 32-3840 kbit/s | DTS core, DTS-ES, DTS 96/24, DTS-HD HRA/MA, DTS Express/LBR, and channel-based DTS:X presentations |
-| DTS-HD | Not supported | Use `dtshd` for extended DTS-HD streams and `dts` for core or mixed inputs |
-| DSD | DSF and DSDIFF/DFF at DSD64, DSD128, DSD256, DSD512 and DSD1024 | WSD is read-only; `sdm-4` through `sdm-8` and `clans-4` through `clans-8` are available |
-
-Run `sox --help-format FORMAT` for the sample rates, channel layouts, compression values, and read/write capabilities available for a specific format.
-
-#### DSD modulation
-
-The `sdm` effect performs PCM-to-DSD sigma-delta modulation; it does not
-resample. Put a separate `rate` effect before it, as in
-`rate -v 22579200 sdm`, and use the normal `rate` options to choose quality,
-bandwidth, phase, rejection, and aliasing behavior. DSF and DSDIFF writers
-only pack the resulting one-bit stream. On CPU, channels are processed with
-the OpenMP runtime limit and `sdm` retains the upstream `-f`, `-t`, `-n`, and
-`-l` options. Each channel retains the full-rate causal SDM recurrence.
-
-On builds compiled with Vulkan support, a global Vulkan profile joins an
-adjacent `rate -> sdm` pair into a resident device segment. `rate` keeps its
-CPU planner and all of its normal options, while the selected Vulkan profile
-controls the numerical executor. The SDM consumes the resulting stream at
-DSD64 through DSD1024 without another interpolation filter or a host PCM
-round-trip. It accepts one through six channels, uses the conservative
-MASH-2 finite-state modulator at a fixed −3 dB input gain, and reports
-`-f`, `-t`, `-n`, and `-l` as ignored because those CPU modulator controls do
-not alter the GPU implementation. DSF and DSDIFF output use a channel-major
-packed-word path; padding is applied only once at the logical end, so the
-duration is rounded up by at most 31 DSD samples. DSD decoding remains on the
-normal CPU path.
-
-Vulkan shaders are compiled to SPIR-V and embedded in the executable at build time, so no shader or data files are installed beside `sox.exe`. The system `vulkan-1.dll` loader is supplied with the Vulkan-capable display driver. VkFFT runtime shader compilation uses the official dynamic `glslang.dll` copied from the Vulkan SDK and distributed beside `sox.exe`; it is not compiled or linked statically. The Microsoft Visual C++ Redistributable is required by glslang and by the OpenMP runtime. The release gate was validated on Windows with an NVIDIA RTX 3080 using 30-second mono, stereo, and 5.1 inputs across DSD64 through DSD1024; the integrated DSF output was bit-identical to the standalone reference for signed 32-bit PCM input.
-
-#### Vulkan FIR
-
-On builds compiled with Vulkan support, the `--vulkan-fast`,
-`--vulkan-accurate`, `--vulkan-strict`, and `--vulkan-reference` profiles
-select the partitioned VkFFT backend for the classic `fir` effect. It accepts
-one through six channels and preserves the coefficient file, output length,
-drain, and signed 32-bit SoX boundary used by the CPU implementation. A
-channel map uses 1-based channel numbers, comma-separated lists, and inclusive
-ranges:
-
-```text
-fir 1,2=front.txt 3=center.txt 4=sub.txt
-fir 1-6=room-correction.txt
-```
-
-Channels omitted from the map pass through and are delayed with the mapped
-channels so the stream remains synchronized. SoX reports each omitted channel
-as a warning. Repeated or overlapping assignments cascade in command-line
-order; for example, `fir 1,2=a.txt 2=b.txt` applies `a` to channel 1 and
-`a * b` to channel 2. Adjacent mapped `fir` effects remain eligible for Vulkan
-fusion even when their maps differ.
-
-Coefficient arrays with different lengths are padded to a shared pre-peak and
-post-peak reference before execution. This preserves the relative delay
-encoded by each filter while giving the CPU flows and batched Vulkan executor
-the same tap count and alignment. At verbosity level 3, SoX reports each
-resolved channel, source file, original tap count and normalized alignment.
-
-The backend uses FP64, a 32768-point R2C/C2R transform, and 16384-tap uniform
-partitions. Qualification covers the supplied 1,048,576-tap filter at 384 kHz
-on 5.1 input and a generated 2,000,000-tap filter. `glslang.dll` is loaded only
-when VkFFT needs runtime compilation, so non-Vulkan SoX commands do not require
-initializing the Vulkan FIR path.
-
-#### Vulkan rate
-
-On Windows builds compiled with Vulkan support, `--vulkan` executes qualified `rate` plans containing arbitrary sequences of frequency-domain FIR, exact rational polyphase, and half-band FIR stages. The CPU planner remains authoritative for coefficients, topology, quality, phase, bandwidth, aliasing, sample count, latency, and drain. The GPU policy covers `medium`, `high`, and `very-high` exact-ratio plans, 44.1/48 kHz family crossings, common PCM multiples, and conversions to and from DSD64, DSD128, DSD256, DSD512, and DSD1024 rates. `quick`, `low`, interpolated polyphase clocks, block-incompatible interpolation factors, and unsupported plans continue through the unchanged CPU executor.
-
-The backend uses the shared FP64 partitioned VkFFT FIR engine, performs the planner-selected integer interpolation and decimation around it, and uses a dedicated FP64 shader for rational polyphase and sparse half-band convolution. It batches interleaved mono, stereo, and 5.1 channels. A downstream upsampling DFT stage whose `post_peak` is not divisible by its interpolation factor remains on CPU because its interstage subphase is not yet represented by the Vulkan executor. Verbose output reports each Vulkan stage and the total stage count when a composite executor is selected.
-
-Windows qualification on an RTX 3080 passed 127/127 cases, with 121 plans routed through Vulkan, a maximum signed-32-bit error of 2 LSB, maximum RMS error of 0.601106 LSB, minimum SNR of 174.122 dB, and no Vulkan validation errors. The unchanged CPU contract passed 690/690 cases. Standalone DSD-rate benchmarks remain slower than CPU: the measured Vulkan/CPU-single speed ratio ranged from 0.01x to 0.40x and from 0.01x to 0.26x against CPU multi-thread execution. Multiple pipeline startups, host-side staging, synchronous submissions, and transfers dominate, so this route is qualified for equivalence but is not a standalone performance recommendation; it is groundwork for the future GPU-resident chain.
-
 #### Channel Layouts
 
 Place `--channel-layout LAYOUT` immediately before an FFmpeg-backed output file when the input channels have already been prepared in that order. The option labels the existing channels; it does not remix them. The selected layout must match the channel count and be supported by the encoder.
@@ -590,147 +574,6 @@ Use `--ffmpeg-opts key=value:key=value` immediately before an FFmpeg-backed inpu
 Unsupported options are rejected. Available passthrough options depend on the selected FFmpeg codec.
 
 Dolby Atmos and DTS:X object metadata is reported but not rendered; decoding returns the channel-based presentation. DTS-UHD Profile 2 is not supported.
-
-#### Diagnostics
-
-`--diagnostics DIR` writes a machine-readable description of the run into
-`DIR`, which is created if it does not exist. It is meant for qualification
-and benchmarking: everything it reports is a second emission of numbers the
-run already computes, so the audio produced with the option is byte-identical
-to the audio produced without it.
-
-```bash
-# Everything this run can say about itself, plus the samples it produced
-./output/sox in.wav out.wav --vulkan-strict --diagnostics ./diag fir room.txt
-```
-
-`DIR/run.txt` holds one `key=value` per line, with the hierarchy spelled out
-by dots:
-
-```text
-sox.version=15.0.0
-profile.requested=strict
-profile.effective=strict
-device.gpu.name=NVIDIA GeForce RTX 4090
-device.vulkan.shader_float64=1
-effect.1.name=fir
-effect.1.backend=vulkan
-effect.1.precision=FP64x2
-effect.1.strategy=FP64 double-double FFT + double-double memory/product/accumulation
-effect.1.taps=131072
-effect.1.latency_samples=65535
-capture.0.file=chain-out.f64
-result.status=ok
-```
-
-There is no schema version and there will not be one. Keys never change
-meaning and never disappear; new ones are only added. A reader therefore takes
-an absent key as *not measured* — never as an error and never as zero — so an
-older binary produces fewer keys rather than breaking a newer reader.
-
-Up to two sample captures are written beside it, both channel-interleaved,
-both without a header, and neither normalised or scaled; the layout, the
-counts, the sample domain and the capture point are in `run.txt`.
-
-- `chain-out.f64`, one double per sample, taken from the last effect before
-  the output while the samples are still doubles. This covers every backend
-  and profile, and measures at the output file's own floor of about −186 dB.
-- `chain-out.dd`, two doubles per sample — the high and low halves of a
-  double-double — taken where the paired formats collapse, which is the last
-  point at which both halves exist. It appears only for runs that produce
-  such pairs, and it is what makes the `reference` profile measurable from a
-  single run.
-
-Only the files SoX itself writes are replaced, and the rest of the directory
-is left alone, so a mistyped path costs those names rather than a folder. A
-metric that was requested and cannot be produced stops the run with a message
-recorded in `result.message`: a column is never left silently empty. Because
-the captures are written to disk, a run with `--diagnostics` is not a timing
-run; measure quality and speed in separate executions of the same case.
-
-### 5. Verify Static Linking
-
-```bash
-# Linux/FreeBSD: inspect direct dynamic dependencies
-readelf -d ./output/sox | grep NEEDED
-ldd ./output/sox
-
-# macOS: Check for dynamic dependencies
-otool -L ./output/sox
-
-# Windows (Visual Studio Developer PowerShell)
-dumpbin /DEPENDENTS .\output\sox.exe
-```
-
-On Linux, operating-system libraries such as glibc, ALSA, and explicitly enabled PulseAudio libraries may be dynamic. FFmpeg, FLAC, Ogg/Vorbis, Opus, libsndfile, MP3/MP2, WavPack, AMR, PNG, libmagic, and libao must not appear as direct `DT_NEEDED` entries.
-
-On FreeBSD, base-system and compiler runtime libraries such as `libc`, `libm`, `libthr`, and `libomp` may be dynamic. Codec libraries and libao must not appear, and the executable must not contain an `RPATH` or `RUNPATH` pointing to `/usr/local/lib`.
-
-On macOS, every dependency must come from `/usr/lib` or `/System/Library`, for example:
-
-- `libSystem.B.dylib`
-- `CoreAudio.framework`
-- `CoreFoundation.framework`
-
-FFmpeg and the bundled codec libraries must not appear as `.dylib` dependencies.
-
-A `--vulkan` build also shows `libvulkan` and `libglslang`. Neither can be
-static: the loader belongs to the display driver, and glslang compiles VkFFT's
-shaders at run time.
-
-On Windows, operating-system DLLs such as `KERNEL32.dll`, `WINMM.dll`, and
-`bcrypt.dll` may appear, together with `VCOMP140.dll` from the Microsoft Visual
-C++ Redistributable for OpenMP support and `vulkan-1.dll` when Vulkan is
-enabled. The Vulkan package also contains the dynamic `glslang.dll`, whose own
-dependencies can include the Microsoft C/C++ runtime. Codec DLLs and MSYS
-runtime DLLs must not appear: codec dependencies are linked statically, while
-Vulkan, glslang, OpenMP, and their platform runtimes remain dynamic.
-
-### 6. Test Audio Playback
-
-```bash
-# Generate and play a test tone
-./output/sox -n -d synth 3 sine 440
-
-# Play an audio file
-./output/sox input.wav -d
-```
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**CMake not found (Windows):**
-- Ensure Visual Studio is installed with C++ workload
-- Or install CMake separately and add to PATH
-
-**Build fails with missing headers (Linux):**
-- Install development packages: `sudo apt-get install libasound2-dev`
-
-**Permission denied (Linux/macOS):**
-- Make script executable: `chmod +x build_static_libs.sh`
-
-**Homebrew not found (macOS):**
-- Install Homebrew first (see macOS dependencies section)
-
-**autoreconf not found (macOS):**
-- Install autotools: `brew install autoconf automake libtool`
-
-### Clean Build
-
-If you encounter issues, try a clean build:
-
-```bash
-# Windows
-.\build_static_libs.ps1 -Clean
-.\build_static_libs.ps1
-
-# Linux/macOS/BSD
-./build_static_libs.sh --clean
-./build_static_libs.sh
-```
 
 ---
 

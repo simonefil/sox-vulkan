@@ -508,8 +508,7 @@ Numerical quality requested for Vulkan FFT/FIR offload.
 typedef enum sox_vulkan_profile_t {
     sox_vulkan_profile_none,
     sox_vulkan_profile_fast,
-    sox_vulkan_profile_accurate,
-    sox_vulkan_profile_strict,
+    sox_vulkan_profile_precise,
     sox_vulkan_profile_reference
 } sox_vulkan_profile_t;
 

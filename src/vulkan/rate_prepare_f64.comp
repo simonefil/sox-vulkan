@@ -1,10 +1,21 @@
 /*
  * Prepare an overlap-save FIR block directly from resident interleaved FP64.
  *
- * This library is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or (at
- * your option) any later version.
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /* The device-side counterpart of prepare_stage_input() in rate.c: the
@@ -23,7 +34,7 @@
  *                          as this block's first half, then overwritten for
  *                          the next.
  *
- * Push constants (prepare_parameters_t, 32 bytes):
+ * Push constants (prepare_parameters_t, 28 bytes):
  *   block_frames             frames per block, and the per-channel stride of
  *                            previous_samples.
  *   input_frames             valid frames in the input; past it, zero.
@@ -33,7 +44,6 @@
  *   up_factor                interpolation factor; frames off a multiple of
  *                            it are the inserted zeros.
  *   channels                 channels in the block.
- *   padding                  to the host struct's size; unused.
  *
  * Dispatch is two-dimensional: x covers block_frames rounded up to whole
  * workgroups of 128, y is one invocation per channel, hence both bounds
@@ -73,7 +83,6 @@ layout(push_constant) uniform Parameters {
   uint prepared_channel_stride;
   uint up_factor;
   uint channels;
-  uint padding;
 } parameters;
 
 void main()

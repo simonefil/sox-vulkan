@@ -1,6 +1,6 @@
 /* Select a decimated double-single rate-stage output.
  *
- * The strict profile's member of the select family; rate_select_f64.comp
+ * The precise profile's member of the select family; rate_select_f64.comp
  * carries the family's rationale.  Samples are double-single pairs, so the
  * normalisation goes through multiply_double_single rather than a plain
  * multiply: 1/2147483647 is not representable in FP32 either, and the pair
@@ -9,15 +9,31 @@
  * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
  * them:
  *   0 input_samples   -- in: the filtered block, planar, double-single pairs
- *                        as fir_partition_strict_f32.comp emitted them.
+ *                        as fir_partition_precise_f32.comp emitted them.
  *   1 output_samples  -- out: the decimated block, interleaved, still pairs.
  *
- * Push constants (select_parameters_t, 32 bytes): output_frames,
- * first_input_frame, input_step, input_channel_stride, channels, normalize,
- * padding1, padding2.  The strides count vec2 elements, not floats.
+ * Push constants (select_parameters_t, 24 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride, channels and normalize.
+ * The strides count vec2 elements, not floats.
  *
  * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
  * y one invocation per channel, hence both bounds tests.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #version 450
@@ -39,8 +55,6 @@ layout(push_constant) uniform Parameters {
   uint input_channel_stride;
   uint channels;
   uint normalize;
-  uint padding1;
-  uint padding2;
 } parameters;
 
 const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;

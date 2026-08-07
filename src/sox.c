@@ -560,6 +560,22 @@ static size_t sox_read_wide(sox_format_t * ft, sox_sample_t * buf, size_t max)
   return len;
 }
 
+/* The packed counterpart of the above, for a chain that decodes DSD on the
+ * device.  A wide sample is one 32-frame word per channel here, so every
+ * count downstream still means "one per channel"; only its scale changes, and
+ * the places that need frames rather than words say so. */
+static size_t sox_read_wide_packed(sox_format_t * ft, sox_sample_t * buf, size_t max)
+{
+  size_t len = max / combiner_signal.channels;
+
+  len = sox_read_packed_dsd_words(ft, buf, len * ft->signal.channels) /
+      ft->signal.channels;
+  if (!len && ft->sox_errno)
+    lsx_fail("`%s' %s: %s",
+        ft->filename, ft->sox_errstr, sox_strerror(ft->sox_errno));
+  return len;
+}
+
 static void balance_input(sox_sample_t * buf, size_t ws, file_t * f)
 {
   size_t s = ws * f->ft->signal.channels;
@@ -596,6 +612,11 @@ static int combiner_start(sox_effect_t *effp)
     input_wide_samples = ws; /* Output length is that of longest input file. */
   }
   z->ilen = lsx_malloc(input_count * sizeof(*z->ilen));
+  /* Packing is not one of the fields sox_add_effect carries across, so the
+   * combiner has to say that what it produces is what it was asked to read;
+   * otherwise the words would arrive at the next effect described as
+   * samples. */
+  effp->out_signal.packing = effp->in_signal.packing;
   return SOX_SUCCESS;
 }
 
@@ -615,7 +636,9 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
   if (is_serial(combine_method)) {
     while (sox_true) {
       if (!user_skip)
-        olen = sox_read_wide(files[current_input]->ft, obuf, *osamp);
+        olen = combiner_signal.packing ?
+            sox_read_wide_packed(files[current_input]->ft, obuf, *osamp) :
+            sox_read_wide(files[current_input]->ft, obuf, *osamp);
       if (olen == 0) {   /* If EOF, go to the next input file. */
         if (++current_input < input_count) {
           if (combine_method == sox_sequence && !can_segue(current_input))
@@ -624,7 +647,10 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
           continue;
         }
       }
-      balance_input(obuf, olen, files[current_input]);
+      /* Packed words are bits, not amplitudes: there is nothing to balance,
+       * and the packed path is only offered where the balance is unity. */
+      if (!combiner_signal.packing)
+        balance_input(obuf, olen, files[current_input]);
       break;
     } /* while */
   } /* is_serial */ else { /* else is_parallel() */
@@ -662,7 +688,8 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
       } /* sox_merge */
     } /* wide samples */
   } /* is_parallel */
-  read_wide_samples += olen;
+  /* Progress is counted in input frames, and a packed word carries 32. */
+  read_wide_samples += combiner_signal.packing ? olen * 32 : olen;
   olen *= effp->in_signal.channels;
   *osamp = olen;
 
@@ -1146,6 +1173,51 @@ static void create_user_effects(void)
   }
 }
 
+/* In a chain that converts DSD to PCM, the conversion comes first.
+ *
+ * Everything else -- vol, gain, trim, all of it -- applies to the PCM, after.
+ * An effect in front of the conversion would have to work on single bits,
+ * which is not a thing any of them do, so this is an error rather than a
+ * fallback: the command line is not one that can be made to mean anything.
+ * The rule does not depend on the Vulkan flag, because a rule that did would
+ * make the same command line work with it and fail without.
+ *
+ * DSD to DSD is untouched: there is no conversion in it to come first, and
+ * cutting an album into tracks goes on working exactly as before. */
+static void validate_dsd_effects_chain(void)
+{
+  size_t effects = nuser_effects[current_eff_chain];
+
+  if (input_count != 1 ||
+      files[0]->ft->encoding.encoding != SOX_ENCODING_DSD ||
+      ofile->ft->encoding.encoding == SOX_ENCODING_DSD ||
+      !effects || !strcmp(user_efftab[0]->handler.name, "rate"))
+    return;
+  lsx_fail("`%s' cannot precede the DSD conversion; put it after `rate'",
+      user_efftab[0]->handler.name);
+  exit(1);
+}
+
+/* Whether the input can be read as packed words rather than expanded a bit at
+ * a time.  It is a question about this run, not about the format: the words
+ * have no consumer unless the conversion runs on the device, and the reader
+ * would only be handing an effect something it cannot use.
+ *
+ * One input file, because words from several would have to be mixed, and mixing
+ * bits is not mixing; and unit balance, because a packed word carries no
+ * amplitude to scale. */
+static sox_bool packed_dsd_input_wanted(void)
+{
+  return sox_globals.vulkan_profile != sox_vulkan_profile_none &&
+      input_count == 1 &&
+      files[0]->ft->read_packed_dsd_words &&
+      files[0]->ft->encoding.encoding == SOX_ENCODING_DSD &&
+      ofile->ft->encoding.encoding != SOX_ENCODING_DSD &&
+      (files[0]->volume == 1 || files[0]->volume == HUGE_VAL) &&
+      files[0]->replay_gain == HUGE_VAL &&
+      combiner_signal.rate != ofile->ft->signal.rate;
+}
+
 /* Add all user effects to the chain.  If the output effect's rate or
  * channel count do not match the end of the effects chain then
  * insert effects to correct this.
@@ -1156,11 +1228,15 @@ static void create_user_effects(void)
  */
 static void add_effects(sox_effects_chain_t *chain)
 {
-  sox_signalinfo_t signal = combiner_signal;
+  sox_signalinfo_t signal;
   int guard = is_guarded - 1;
   size_t i;
   sox_effect_t * effp;
   char * rate_arg = is_player ? (play_rate_arg ? play_rate_arg : "-l") : NULL;
+
+  validate_dsd_effects_chain();
+  combiner_signal.packing = packed_dsd_input_wanted() ? SOX_DSD_PACKING_WORD : 0;
+  signal = combiner_signal;
 
   /* 1st `effect' in the chain is the input combiner_signal.
    * add it only if its not there from a previous run.  */

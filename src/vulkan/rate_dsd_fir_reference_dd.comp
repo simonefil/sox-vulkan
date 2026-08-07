@@ -1,0 +1,171 @@
+/* Double-double fused DSD decimation stage for the reference profile.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA. */
+
+/* The reference profile's member of the fused DSD family;
+ * rate_dsd_fir_f64.comp carries the family's rationale.  Coefficients and the
+ * accumulator are double-double pairs and every step goes through
+ * double_double.glsl, which states the rules that keep the compiler from
+ * folding the low words away.  Nothing here rounds until the caller decides
+ * to narrow.
+ *
+ * The accumulation is where this profile earns its name.  A reference DSD64
+ * response runs to some hundred and twenty thousand taps, all of them added
+ * at unit magnitude, so a plain double accumulator would be spending its last
+ * bits on the sum's own rounding rather than on the response.  Negation of a
+ * pair is exact in both words, so a DSD frame costs one addition and no
+ * multiply at all.
+ *
+ * Bindings, in the order rate_dsd_vulkan.c writes them:
+ *   0 coefficients   -- in: the response, one pair per tap.
+ *   1 packed         -- in: DSD words, channel major, 32 frames per word.
+ *   2 output_samples -- out: interleaved output frames, pairs.
+ *
+ * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
+ * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
+ * normalize, reserved.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+#include "double_double.glsl"
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer Coefficients {
+  dvec2 values[];
+} coefficients;
+
+layout(std430, binding = 1) readonly buffer PackedWords {
+  uint packed_words[];
+};
+
+layout(std430, binding = 2) writeonly buffer OutputSamples {
+  dvec2 values[];
+} output_samples;
+
+layout(push_constant) uniform Parameters {
+  uint output_frames;
+  uint decimation;
+  uint taps;
+  uint channels;
+  uint words_per_channel;
+  uint frame_offset;
+  uint lead_frames;
+  uint valid_frames;
+  uint normalize;
+  uint reserved;
+  double scale_high;
+  double scale_low;
+} parameters;
+
+const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+
+
+/* Accumulation for this stage, which is not the general pair addition.
+ *
+ * add_dd() renormalises both words against both words -- four two_sums, some
+ * twenty-eight FP64 operations -- because in general neither operand
+ * dominates.  Here one always does: the accumulator holds a partial sum of
+ * thousands of taps and the term is one coefficient.  Dekker's form is then
+ * enough, and it is half the operations.
+ *
+ * That halving is the whole margin of the reference profile on a consumer
+ * card, where FP64 issues at a sixty-fourth of FP32: measured on an RTX 3080
+ * the loop runs at about 88% of the device's FP64 issue rate, so the only way
+ * to go faster is to ask for fewer FP64 operations.  It is worth 1.68x, which
+ * is what takes DSD64 past real time.
+ *
+ * It costs nothing, and that was checked rather than hoped.  Where the exact
+ * sum fits in a pair the accumulation reaches it: a response spanning s binary
+ * orders of magnitude, of n coefficients of 53 bits each, needs s + 53 + log2 n
+ * bits, and a double-double holds 106.  Every default-quality plan measured
+ * stays inside that -- DSD64 through DSD512, to 44.1, 88.2 and 192 kHz -- and
+ * the captured pairs match the exact rational sum in every bit.
+ *
+ * Where it does not fit the figure is still enormous and still identical to
+ * the careful form: `rate -v` on DSD64 designs 66157 taps spanning 66 orders,
+ * which needs 136 bits and so cannot be exact, and both accumulations then
+ * read 640.6699955104903 dB against the exact sum -- the same number to the
+ * last digit.  The cheaper form has no regime, in this stage's arithmetic,
+ * where it is the worse one.
+ *
+ * The check that says so is the DSD family in sox-benchmark, which scores the
+ * pairs this stage writes to its own diagnostic capture.  Run it before
+ * widening the response or the quality range. */
+dvec2 accumulate_dd(dvec2 total, dvec2 term)
+{
+  const dvec2 high = two_sum(total.x, term.x);
+  precise double low = (high.y + total.y) + term.y;
+
+  return normalize_dd(high.x, low);
+}
+
+void main()
+{
+  const uint output_frame = gl_GlobalInvocationID.x;
+  const uint channel = gl_GlobalInvocationID.y;
+
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
+    return;
+
+  const uint start = parameters.frame_offset + output_frame * parameters.decimation;
+  const uint base = channel * parameters.words_per_channel;
+  dvec2 sum = dvec2(0.0);
+  /* The taps that land on a frame the stream really has.  Outside that range
+   * the frame is zero -- not a bit, a zero sample -- which is what the head
+   * and the tail of a stream are: the response's own delay at the start, and
+   * whatever it still holds after the input has ended.  Both are ranges, so
+   * they cost a clamp here rather than a test per tap. */
+  const uint last = parameters.valid_frames > start ?
+      min(parameters.valid_frames - start, parameters.taps) : 0u;
+  uint tap = parameters.lead_frames > start ?
+      min(parameters.lead_frames - start, parameters.taps) : 0u;
+  uint frame = start + tap;
+
+  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
+   * multiply degenerates to the coefficient's sign: the whole inner loop is
+   * an addition of a pair or of its negation, and the input word never
+   * becomes a number. */
+  while (tap < last) {
+    const uint word = packed_words[base + (frame >> 5u)];
+    const uint bit = frame & 31u;
+    const uint run = min(32u - bit, last - tap);
+    uint index;
+
+    for (index = 0u; index < run; ++index) {
+      const dvec2 coefficient = coefficients.values[tap + index];
+
+      sum = accumulate_dd(
+          sum,
+          ((word >> (bit + index)) & 1u) != 0u ? coefficient : -coefficient);
+    }
+    tap += run;
+    frame += run;
+  }
+  if (parameters.normalize != 0u)
+    sum = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
+  /* The domain factor, applied to the pair rather than to a collapsed double:
+   * one rounding instead of two, which is the difference between this profile
+   * keeping its claim on a scaled-sample build and losing it. */
+  sum = multiply_dd(sum, dvec2(parameters.scale_high, parameters.scale_low));
+  output_samples.values[output_frame * parameters.channels + channel] = sum;
+}

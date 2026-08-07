@@ -33,6 +33,13 @@ struct dsdiff {
 
 static size_t dff_write_packed(sox_format_t *, const sox_sample_t *, size_t);
 static size_t dff_write_packed_words(sox_format_t *, const sox_sample_t *, size_t);
+static size_t dff_read_packed_words(sox_format_t *, sox_sample_t *, size_t);
+static uint8_t dff_reverse_byte(uint8_t);
+
+/* Words staged per read, so the packed path makes one buffered read per 256
+ * words instead of one per word.  Four bytes per channel make a word, so the
+ * staging buffer is this many times the frame size. */
+#define DFF_READ_GROUPS 256
 
 #define ID(a, b, c, d) ((a) << 24 | (b) << 16 | (c) << 8 | (d))
 
@@ -142,9 +149,12 @@ static int dff_startread(sox_format_t *ft)
 		return SOX_EHDR;
 	}
 
-	dff->buf = lsx_malloc(num_channels);
+	/* Sized for the packed reader's batch; dff_read uses only the first
+	 * frame of it. */
+	dff->buf = lsx_malloc((size_t)num_channels * 4 * DFF_READ_GROUPS);
 
 	ft->data_start = lsx_tell(ft);
+	ft->read_packed_dsd_words = dff_read_packed_words;
 
 	ft->signal.rate = sample_rate;
 	ft->signal.channels = num_channels;
@@ -189,6 +199,81 @@ static size_t dff_read(sox_format_t *ft, sox_sample_t *buf, size_t len)
 	}
 
 	return rsamp * nc;
+}
+
+/* Whole 32-frame words, transposed into the layout the device kernels want.
+ *
+ * DSDIFF is the awkward one of the two DSD containers here.  It stores one
+ * byte per channel per eight frames, interleaved, and its earliest bit is the
+ * most significant, where the packed word convention is channel-major with the
+ * earliest bit at bit zero.  Both differences are settled on the host, once,
+ * over bytes rather than over bits: the byte reversal is a table-free swap and
+ * the transpose moves a byte per four frames.  That is still some three orders
+ * of magnitude less host work than expanding every bit into a sox_sample_t.
+ *
+ * The read is bounded by the sound data chunk rather than by end of file, so
+ * the words can never run into whatever chunk follows it.  A position that is
+ * not word-aligned -- which a seek can leave behind -- produces nothing, and
+ * the caller falls back to dff_read; that reader advances a frame's worth of
+ * bytes at a time, so alignment returns within three of its iterations. */
+static size_t dff_read_packed_words(sox_format_t *ft, sox_sample_t *buf, size_t len)
+{
+	struct dsdiff *dff = ft->priv;
+	size_t channels = ft->signal.channels;
+	size_t frame_bytes = channels * 4;
+	uint64_t consumed;
+	uint64_t remaining;
+	size_t total_groups;
+	size_t produced = 0;
+	size_t channel;
+
+	if (dff->bit_pos || !channels || len % channels)
+		return 0;
+
+	consumed = (uint64_t)lsx_tell(ft) - ft->data_start;
+	if (consumed % frame_bytes)
+		return 0;
+	remaining = consumed < dff->data_size ? dff->data_size - consumed : 0;
+
+	total_groups = min(len / channels, (size_t)(remaining / frame_bytes));
+
+	while (produced < total_groups) {
+		size_t groups = min(total_groups - produced, (size_t)DFF_READ_GROUPS);
+		size_t want = groups * frame_bytes;
+		size_t group;
+
+		if (lsx_read_b_buf(ft, dff->buf, want) < want)
+			break;
+
+		for (group = 0; group < groups; ++group) {
+			const uint8_t *source = dff->buf + group * frame_bytes;
+
+			for (channel = 0; channel < channels; ++channel) {
+				uint32_t word = 0;
+				size_t byte;
+
+				for (byte = 0; byte < 4; ++byte)
+					word |= (uint32_t)dff_reverse_byte(
+						source[byte * channels + channel]) <<
+						(byte * 8);
+				buf[channel * total_groups + produced + group] =
+					(sox_sample_t)word;
+			}
+		}
+
+		produced += groups;
+	}
+
+	/* As in dsf_read_packed_words: the runs were laid out for the count this
+	 * call set out to produce, so a short answer has to close the gaps
+	 * between them. */
+	if (produced && produced < total_groups)
+		for (channel = 1; channel < channels; ++channel)
+			memmove(buf + channel * produced,
+				buf + channel * total_groups,
+				produced * sizeof(*buf));
+
+	return produced * channels;
 }
 
 static int dff_seek(sox_format_t * ft, sox_uint64_t offset)

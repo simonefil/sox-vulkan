@@ -96,10 +96,11 @@ static size_t *frames_in;
 static size_t *frames_out;
 static size_t frame_counts;
 
-/* Both taps, in the order they are numbered in run.txt. */
-static capture_t captures[2];
+/* The taps, in the order they are numbered in run.txt. */
+static capture_t captures[3];
 #define CAPTURE_F64 0
 #define CAPTURE_DD  1
+#define CAPTURE_DSD_DD 2
 
 static int tap_armed;
 static unsigned tap_channels;
@@ -308,6 +309,10 @@ void lsx_diagnostics_open(char const *dir)
   captures[CAPTURE_DD].point = "pair-collapse";
   captures[CAPTURE_DD].element = "dd";
   captures[CAPTURE_DD].doubles = 2;
+  captures[CAPTURE_DSD_DD].name = "dsd-stage-out.dd";
+  captures[CAPTURE_DSD_DD].point = "dsd-fused-stage-output";
+  captures[CAPTURE_DSD_DD].element = "dd";
+  captures[CAPTURE_DSD_DD].doubles = 2;
   lsx_diagnostics_on = 1;
 }
 
@@ -341,6 +346,16 @@ void lsx_diagnostics_capture_f64(double const *samples, size_t n)
   if (!lsx_diagnostics_on || !tap_armed)
     return;
   capture_write(&captures[CAPTURE_F64], samples, n);
+}
+
+/* The fused DSD stage's output pairs, already interleaved by channel.  Only
+ * the stage that produced them calls this, so the file holds one stream and
+ * nothing has to be separated out of it afterwards. */
+void lsx_diagnostics_capture_dsd_dd(double const *pairs, size_t samples)
+{
+  if (!lsx_diagnostics_on || !tap_armed)
+    return;
+  capture_write(&captures[CAPTURE_DSD_DD], pairs, samples);
 }
 
 void lsx_diagnostics_capture_dd(double high, double low)
@@ -478,6 +493,7 @@ void lsx_diagnostics_tap_begin(sox_effect_t const *effp, size_t flows)
   tap_channels = effp->out_signal.channels;
   slots_reserve(&captures[CAPTURE_F64], flows);
   slots_reserve(&captures[CAPTURE_DD], flows);
+  slots_reserve(&captures[CAPTURE_DSD_DD], flows);
   tap_armed = 1;
 }
 
@@ -568,7 +584,7 @@ static void write_captures(void)
   unsigned index = 0;
   size_t which;
 
-  for (which = 0; which < 2; ++which) {
+  for (which = 0; which < array_length(captures); ++which) {
     capture_t *capture = &captures[which];
     char key[64];
     uint64_t frames;

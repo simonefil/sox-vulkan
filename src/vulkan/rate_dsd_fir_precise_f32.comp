@@ -1,0 +1,148 @@
+/* Double-single fused DSD decimation stage for the precise profile.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* The precise profile's member of the fused DSD family, for devices without
+ * shaderFloat64; rate_dsd_fir_f64.comp carries the family's rationale.
+ * Coefficients and the accumulator are unevaluated pairs of floats, and the
+ * primitives follow the rules stated in double_double.glsl for the same
+ * reason: every compensation term is algebraically zero, so each result lands
+ * in a `precise` local and no primitive takes an out parameter.
+ *
+ * A hundred thousand taps is exactly where a single float gives out: the
+ * accumulator would lose the low end of the response long before the sum was
+ * complete, which is the whole reason this variant exists.  Negation of a
+ * pair is exact in both words, so a DSD frame still costs one addition and no
+ * multiply.
+ *
+ * Bindings, in the order rate_dsd_vulkan.c writes them:
+ *   0 coefficients   -- in: the response, one pair per tap.
+ *   1 packed         -- in: DSD words, channel major, 32 frames per word.
+ *   2 output_samples -- out: interleaved output frames, pairs.
+ *
+ * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
+ * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
+ * normalize, reserved.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
+#version 450
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer Coefficients {
+  vec2 values[];
+} coefficients;
+
+layout(std430, binding = 1) readonly buffer PackedWords {
+  uint packed_words[];
+};
+
+layout(std430, binding = 2) writeonly buffer OutputSamples {
+  vec2 values[];
+} output_samples;
+
+layout(push_constant) uniform Parameters {
+  uint output_frames;
+  uint decimation;
+  uint taps;
+  uint channels;
+  uint words_per_channel;
+  uint frame_offset;
+  uint lead_frames;
+  uint valid_frames;
+  uint normalize;
+  uint reserved;
+} parameters;
+
+const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+
+/* Knuth: the error term is exactly representable, for any two operands. */
+vec2 two_sum(float left, float right)
+{
+  precise float high = left + right;
+  precise float right_virtual = high - left;
+  precise float low = (left - (high - right_virtual)) + (right - right_virtual);
+
+  return vec2(high, low);
+}
+
+vec2 add_double_single(vec2 left, vec2 right)
+{
+  precise vec2 high_sum = two_sum(left.x, right.x);
+  precise float low = left.y + right.y + high_sum.y;
+
+  return two_sum(high_sum.x, low);
+}
+
+vec2 multiply_double_single(vec2 left, vec2 right)
+{
+  precise float product = left.x * right.x;
+  precise float residual = fma(left.x, right.x, -product) + left.x * right.y + left.y * right.x;
+
+  return two_sum(product, residual);
+}
+
+void main()
+{
+  const uint output_frame = gl_GlobalInvocationID.x;
+  const uint channel = gl_GlobalInvocationID.y;
+
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
+    return;
+
+  const uint start = parameters.frame_offset + output_frame * parameters.decimation;
+  const uint base = channel * parameters.words_per_channel;
+  precise vec2 sum = vec2(0.0);
+  /* The taps that land on a frame the stream really has.  Outside that range
+   * the frame is zero -- not a bit, a zero sample -- which is what the head
+   * and the tail of a stream are: the response's own delay at the start, and
+   * whatever it still holds after the input has ended.  Both are ranges, so
+   * they cost a clamp here rather than a test per tap. */
+  const uint last = parameters.valid_frames > start ?
+      min(parameters.valid_frames - start, parameters.taps) : 0u;
+  uint tap = parameters.lead_frames > start ?
+      min(parameters.lead_frames - start, parameters.taps) : 0u;
+  uint frame = start + tap;
+
+  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
+   * multiply degenerates to the coefficient's sign: the whole inner loop is
+   * an addition of a pair or of its negation, and the input word never
+   * becomes a number. */
+  while (tap < last) {
+    const uint word = packed_words[base + (frame >> 5u)];
+    const uint bit = frame & 31u;
+    const uint run = min(32u - bit, last - tap);
+    uint index;
+
+    for (index = 0u; index < run; ++index) {
+      const vec2 coefficient = coefficients.values[tap + index];
+
+      sum = add_double_single(
+          sum,
+          ((word >> (bit + index)) & 1u) != 0u ? coefficient : -coefficient);
+    }
+    tap += run;
+    frame += run;
+  }
+  if (parameters.normalize != 0u)
+    sum = multiply_double_single(sum, vec2(SOX_SAMPLE_SCALE, 0.0));
+  output_samples.values[output_frame * parameters.channels + channel] = sum;
+}

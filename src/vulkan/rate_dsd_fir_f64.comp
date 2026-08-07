@@ -1,0 +1,129 @@
+/* FP64 fused DSD decimation stage for the SoX rate planner.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* The family that turns packed DSD straight into PCM, in one filter.
+ *
+ * The rate planner would decimate a DSD stream by a cascade of half-band
+ * stages, each halving the rate.  On a device that is the wrong shape: the
+ * cost of a direct-form stage scales with its *output* rate, so a single
+ * response that decimates the whole way at once is both cheaper than the
+ * cascade and shorter to reason about.  This family is that single stage, and
+ * it reads the file's own bits rather than samples expanded on the host: a
+ * DSD frame stays one bit until the moment it picks the sign of a
+ * coefficient.
+ *
+ * An invocation produces one output frame of one channel and reads the taps
+ * beginning at its own decimated position, so neighbouring outputs overlap by
+ * all but `decimation` frames.  Nothing is shared between invocations here:
+ * the coefficient run is identical for every one of them and therefore
+ * broadcast out of cache, and the packed words are read once per thirty-two
+ * taps.
+ *
+ * Bindings, in the order rate_dsd_vulkan.c writes them:
+ *   0 coefficients   -- in: the response, one value per tap.
+ *   1 packed         -- in: DSD words, channel major, 32 frames per word,
+ *                       bit zero the earliest frame.
+ *   2 output_samples -- out: interleaved output frames.
+ *
+ * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
+ * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
+ * normalize, reserved.  frame_offset is where output frame zero's window
+ * starts within the uploaded words, which is what lets the host retain a tail
+ * at word granularity while the stream's position stays exact to the frame;
+ * lead_frames and valid_frames bound the frames the stream really has, the
+ * rest being zero samples rather than bits.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer Coefficients {
+  double coefficients[];
+};
+
+layout(std430, binding = 1) readonly buffer PackedWords {
+  uint packed_words[];
+};
+
+layout(std430, binding = 2) writeonly buffer OutputSamples {
+  double output_samples[];
+};
+
+layout(push_constant) uniform Parameters {
+  uint output_frames;
+  uint decimation;
+  uint taps;
+  uint channels;
+  uint words_per_channel;
+  uint frame_offset;
+  uint lead_frames;
+  uint valid_frames;
+  uint normalize;
+  uint reserved;
+} parameters;
+
+const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+
+void main()
+{
+  uint output_frame = gl_GlobalInvocationID.x;
+  uint channel = gl_GlobalInvocationID.y;
+
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
+    return;
+
+  uint start = parameters.frame_offset + output_frame * parameters.decimation;
+  uint base = channel * parameters.words_per_channel;
+  double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
+  double sum = 0.0;
+  /* The taps that land on a frame the stream really has.  Outside that range
+   * the frame is zero -- not a bit, a zero sample -- which is what the head
+   * and the tail of a stream are: the response's own delay at the start, and
+   * whatever it still holds after the input has ended.  Both are ranges, so
+   * they cost a clamp here rather than a test per tap. */
+  uint tap = parameters.lead_frames > start ?
+      min(parameters.lead_frames - start, parameters.taps) : 0u;
+  uint last = parameters.valid_frames > start ?
+      min(parameters.valid_frames - start, parameters.taps) : 0u;
+  uint frame = start + tap;
+
+  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
+   * multiply degenerates to the coefficient's sign: the whole inner loop is
+   * an add or a subtract, and the input word never becomes a number. */
+  while (tap < last) {
+    uint word = packed_words[base + (frame >> 5u)];
+    uint bit = frame & 31u;
+    uint run = min(32u - bit, last - tap);
+    uint index;
+
+    for (index = 0u; index < run; ++index) {
+      double coefficient = coefficients[tap + index];
+
+      sum += ((word >> (bit + index)) & 1u) != 0u ? coefficient : -coefficient;
+    }
+    tap += run;
+    frame += run;
+  }
+  output_samples[output_frame * parameters.channels + channel] = sum * scale;
+}

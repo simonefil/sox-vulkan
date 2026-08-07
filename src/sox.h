@@ -466,6 +466,12 @@ low 8 bits are the data and the next 4 a count of how many of them are
 valid, most significant bit first.  The word form has no such count -- every
 word is full -- and is the faster path, so it is what the resident DSD chain
 uses until its final flush.
+
+The same forms carry DSD the other way.  A reader that offers
+read_packed_dsd_words hands whole words to an effect that has opted into
+packing, so decoding never expands a bit into a sample on the host; the
+partial group at the end of a file has no word form and is left to the
+handler's ordinary reader.
 */
 #define SOX_DSD_PACKING_BYTE 8
 #define SOX_DSD_PACKING_WORD 32
@@ -1247,6 +1253,25 @@ typedef size_t (LSX_API * sox_format_handler_write_packed_dsd_words)(
 
 /**
 Client API:
+Callback to read complete 32-bit DSD words directly into sox_sample_t values,
+without expanding each bit to a sample. Bit zero is the earliest bit in each
+word and words are grouped by channel, which is the layout the packed writers
+consume and the device kernels expect.
+
+A call reads whole words only. Any tail of fewer than 32 frames is left in the
+stream for the handler's ordinary reader, so a caller that wants every last
+frame finishes with sox_read.
+@returns number of packed words produced, a multiple of the channel count;
+the per-channel stride is that number divided by the channel count.
+*/
+typedef size_t (LSX_API * sox_format_handler_read_packed_dsd_words)(
+    LSX_PARAM_INOUT sox_format_t * ft,
+    LSX_PARAM_OUT_CAP_POST_COUNT(len,return) sox_sample_t * buf,
+    size_t len
+    );
+
+/**
+Client API:
 Callback to close writer (decoder),
 used by sox_format_handler.stopwrite.
 @returns SOX_SUCCESS if successful.
@@ -1619,6 +1644,8 @@ struct sox_format_t {
   sox_format_handler_write_packed_dsd write_packed_dsd; /**< Optional packed DSD writer. */
   /** Optional writer for complete, channel-major 32-bit DSD words. */
   sox_format_handler_write_packed_dsd_words write_packed_dsd_words;
+  /** Optional reader for complete, channel-major 32-bit DSD words. */
+  sox_format_handler_read_packed_dsd_words read_packed_dsd_words;
   unsigned char    * read_replay_buffer; /**< Internal bytes consumed while probing a non-seekable input. */
   size_t             read_replay_size; /**< Internal size of the input probe replay buffer. */
   size_t             read_replay_pos; /**< Internal current position in the input probe replay buffer. */
@@ -2117,6 +2144,30 @@ LSX_API
 sox_write_packed_dsd_words(
     LSX_PARAM_INOUT sox_format_t * ft,
     LSX_PARAM_IN_COUNT(len) sox_sample_t const * buf,
+    size_t len
+    );
+
+/**
+Client API:
+Reads complete 32-bit DSD words, bypassing the PCM sample path.
+
+The mirror of sox_write_packed_dsd_words: each value produced is a full word
+of 32 DSD frames with bit zero the earliest, and the words are grouped by
+channel rather than interleaved.  len must be a whole number of frames.  Only
+a handler that has installed a packed DSD reader offers this; anything else
+returns 0 without reading, and the caller falls back to sox_read.
+
+Whole words only.  A file whose length is not a multiple of 32 frames leaves
+its tail behind for sox_read, which is also what happens once the words run
+out at the end of the stream.
+@returns number of packed words read, a multiple of the channel count; the
+per-channel stride is that number divided by the channel count.
+*/
+size_t
+LSX_API
+sox_read_packed_dsd_words(
+    LSX_PARAM_INOUT sox_format_t * ft,
+    LSX_PARAM_OUT_CAP_POST_COUNT(len,return) sox_sample_t * buf,
     size_t len
     );
 

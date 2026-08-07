@@ -816,6 +816,106 @@ typedef struct {
 #endif
 } priv_t;
 
+/* Expand a half-band stage's coefficients into a full response the FIR
+ * backend can take.
+ *
+ * A half-band filter stores only its odd-indexed taps, every even one but the
+ * centre being zero and the response being symmetric.  The backend has no
+ * such special case, so the full response is reconstructed: the centre is
+ * one half, and each stored coefficient is placed at an odd offset either
+ * side of it.
+ *
+ * Not Vulkan-specific despite the name: half-band stages occur in CPU-only
+ * plans too, and rate_dsd_dump_plan below needs this expansion regardless of
+ * which backend runs the plan. */
+static double *rate_vulkan_half_taps(stage_t const *stage)
+{
+  size_t taps = (size_t)stage->pre_post + 1u;
+  size_t coefficients = (size_t)stage->pre / 2u;
+  double *result = lsx_calloc(taps, sizeof(*result));
+  size_t index;
+
+  result[stage->pre] = .5;
+  for (index = 0; index < coefficients; ++index) {
+    size_t offset = 2u * index + 1u;
+
+    result[stage->pre - offset] = stage->static_coefs[index];
+    result[stage->pre + offset] = stage->static_coefs[index];
+  }
+  return result;
+}
+
+/* Write the plan's responses where a qualification oracle can read them.
+ *
+ * sox-benchmark measures the fused DSD stage in exact rational arithmetic, and
+ * for that it has to convolve the coefficients sox actually built -- not a
+ * Python restatement of the design.  A reimplementation that drifts measures
+ * itself and reports the difference as a backend error.
+ *
+ * Every stage of the plan is written, not just the fused one: a DSD plan always
+ * keeps one half-band behind the fused filter, so the response the file shows
+ * is the composition of the two.  The oracle needs each stage's decimation to
+ * compose them, which is why M and the peak position travel with the taps.
+ *
+ * Off unless SOX_DSD_COEFFICIENTS names a file; %.17g so every value arrives as
+ * the same double; and a failure to write is silent, because a qualification
+ * hook that can change the outcome of a decode is worse than no hook.
+ *
+ * Called from both the CPU and Vulkan paths, so it lives outside the
+ * HAVE_VULKAN guard along with rate_vulkan_half_taps above. */
+static void rate_dsd_dump_plan(priv_t const *p)
+{
+  char const *path = getenv("SOX_DSD_COEFFICIENTS");
+  FILE *file;
+  int index;
+
+  if (!path || !*path || !(file = fopen(path, "w")))
+    return;
+  for (index = 0; index < (int)p->rate.plan.num_stages; ++index) {
+    stage_t const *stage = &p->rate.plan.stages[index];
+    double const *taps = NULL;
+    double *owned = NULL;
+    int count = 0, post_peak = 0, L = 1, M = 1;
+
+    if (stage->kind == rate_stage_dsd_fir) {
+      taps = stage->shared->dsd_taps;
+      count = stage->shared->dsd_num_taps;
+      post_peak = stage->shared->dsd_post_peak;
+      M = stage->M;
+    }
+    else if (stage->kind == rate_stage_dft) {
+      dft_filter_t const *filter =
+          &stage->shared->dft_filter[stage->dft_filter_num];
+
+      taps = filter->taps;
+      count = filter->num_taps;
+      post_peak = filter->post_peak;
+      L = stage->L;
+      M = stage->M;
+    }
+    else if (stage->kind == rate_stage_half_fir) {
+      owned = rate_vulkan_half_taps(stage);
+      taps = owned;
+      count = stage->pre_post + 1;
+      post_peak = stage->pre_post / 2;
+      M = 2;
+    }
+    if (!taps)
+      continue;
+    fprintf(file, "# stage %i %s\n# taps %i\n# interpolation %i\n"
+        "# decimation %i\n# post_peak %i\n",
+        index, rate_stage_name(stage->kind), count, L, M, post_peak);
+    {
+      int tap;
+
+      for (tap = 0; tap < count; ++tap)
+        fprintf(file, "%.17g\n", taps[tap]);
+    }
+    free(owned);
+  }
+  fclose(file);
+}
+
 #if HAVE_VULKAN
 /*
  * The Vulkan side of the rate effect mirrors the CPU plan stage for stage:
@@ -1203,31 +1303,6 @@ static sox_bool rate_vulkan_plan_supported(rate_plan_t const *plan)
   return sox_true;
 }
 
-/* Expand a half-band stage's coefficients into a full response the FIR
- * backend can take.
- *
- * A half-band filter stores only its odd-indexed taps, every even one but the
- * centre being zero and the response being symmetric.  The backend has no
- * such special case, so the full response is reconstructed: the centre is
- * one half, and each stored coefficient is placed at an odd offset either
- * side of it. */
-static double *rate_vulkan_half_taps(stage_t const *stage)
-{
-  size_t taps = (size_t)stage->pre_post + 1u;
-  size_t coefficients = (size_t)stage->pre / 2u;
-  double *result = lsx_calloc(taps, sizeof(*result));
-  size_t index;
-
-  result[stage->pre] = .5;
-  for (index = 0; index < coefficients; ++index) {
-    size_t offset = 2u * index + 1u;
-
-    result[stage->pre - offset] = stage->static_coefs[index];
-    result[stage->pre + offset] = stage->static_coefs[index];
-  }
-  return result;
-}
-
 /* Split a response into the phase_count sub-filters a polyphase stage needs.
  *
  * Phase p takes every phase_count'th tap starting at p, which is what
@@ -1256,74 +1331,6 @@ static double *rate_vulkan_dft_polyphase_taps(
         result[(size_t)phase * *taps_per_phase + tap] = filter->taps[source] * phase_count;
     }
   return result;
-}
-
-/* Write the plan's responses where a qualification oracle can read them.
- *
- * sox-benchmark measures the fused DSD stage in exact rational arithmetic, and
- * for that it has to convolve the coefficients sox actually built -- not a
- * Python restatement of the design.  A reimplementation that drifts measures
- * itself and reports the difference as a backend error.
- *
- * Every stage of the plan is written, not just the fused one: a DSD plan always
- * keeps one half-band behind the fused filter, so the response the file shows
- * is the composition of the two.  The oracle needs each stage's decimation to
- * compose them, which is why M and the peak position travel with the taps.
- *
- * Off unless SOX_DSD_COEFFICIENTS names a file; %.17g so every value arrives as
- * the same double; and a failure to write is silent, because a qualification
- * hook that can change the outcome of a decode is worse than no hook. */
-static void rate_dsd_dump_plan(priv_t const *p)
-{
-  char const *path = getenv("SOX_DSD_COEFFICIENTS");
-  FILE *file;
-  int index;
-
-  if (!path || !*path || !(file = fopen(path, "w")))
-    return;
-  for (index = 0; index < (int)p->rate.plan.num_stages; ++index) {
-    stage_t const *stage = &p->rate.plan.stages[index];
-    double const *taps = NULL;
-    double *owned = NULL;
-    int count = 0, post_peak = 0, L = 1, M = 1;
-
-    if (stage->kind == rate_stage_dsd_fir) {
-      taps = stage->shared->dsd_taps;
-      count = stage->shared->dsd_num_taps;
-      post_peak = stage->shared->dsd_post_peak;
-      M = stage->M;
-    }
-    else if (stage->kind == rate_stage_dft) {
-      dft_filter_t const *filter =
-          &stage->shared->dft_filter[stage->dft_filter_num];
-
-      taps = filter->taps;
-      count = filter->num_taps;
-      post_peak = filter->post_peak;
-      L = stage->L;
-      M = stage->M;
-    }
-    else if (stage->kind == rate_stage_half_fir) {
-      owned = rate_vulkan_half_taps(stage);
-      taps = owned;
-      count = stage->pre_post + 1;
-      post_peak = stage->pre_post / 2;
-      M = 2;
-    }
-    if (!taps)
-      continue;
-    fprintf(file, "# stage %i %s\n# taps %i\n# interpolation %i\n"
-        "# decimation %i\n# post_peak %i\n",
-        index, rate_stage_name(stage->kind), count, L, M, post_peak);
-    {
-      int tap;
-
-      for (tap = 0; tap < count; ++tap)
-        fprintf(file, "%.17g\n", taps[tap]);
-    }
-    free(owned);
-  }
-  fclose(file);
 }
 
 /* Build a Vulkan executor for each stage of the plan the CPU path already

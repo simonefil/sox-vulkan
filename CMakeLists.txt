@@ -175,6 +175,14 @@ endif()
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# The Vulkan build compiles one C++ translation unit (vulkan_fft_dd.cpp) that
+# vendors vkFFT.h. That header relies on C++11 empty-brace pointer
+# initialization ("PfContainer* x = {};"), which is invalid before C++11 --
+# without an explicit standard here, some toolchains default a bare .cpp file
+# to a pre-C++11 dialect and fail with "scalar initializer cannot be empty".
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -W -Wmissing-prototypes -Wstrict-prototypes -pedantic)
 

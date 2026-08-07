@@ -1,0 +1,109 @@
+/* FP32 fused DSD decimation stage for Vulkan devices without shaderFloat64.
+ *
+ * (c) Simone Filippini <info@simonefilippini.it> 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* The fast profile's member of the fused DSD family; rate_dsd_fir_f64.comp
+ * carries the family's rationale.  Plain FP32 throughout, with the
+ * accumulation rounding at every tap.
+ *
+ * Bindings, in the order rate_dsd_vulkan.c writes them:
+ *   0 coefficients   -- in: the response, one value per tap.
+ *   1 packed         -- in: DSD words, channel major, 32 frames per word.
+ *   2 output_samples -- out: interleaved output frames.
+ *
+ * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
+ * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
+ * normalize, reserved.
+ *
+ * Dispatch is two-dimensional, x over the output frames in workgroups of 128
+ * and y one invocation per channel, hence both bounds tests.
+ */
+
+#version 450
+
+layout(local_size_x = 128) in;
+
+layout(std430, binding = 0) readonly buffer Coefficients {
+  float coefficients[];
+};
+
+layout(std430, binding = 1) readonly buffer PackedWords {
+  uint packed_words[];
+};
+
+layout(std430, binding = 2) writeonly buffer OutputSamples {
+  float output_samples[];
+};
+
+layout(push_constant) uniform Parameters {
+  uint output_frames;
+  uint decimation;
+  uint taps;
+  uint channels;
+  uint words_per_channel;
+  uint frame_offset;
+  uint lead_frames;
+  uint valid_frames;
+  uint normalize;
+  uint reserved;
+} parameters;
+
+const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
+
+void main()
+{
+  uint output_frame = gl_GlobalInvocationID.x;
+  uint channel = gl_GlobalInvocationID.y;
+
+  if (output_frame >= parameters.output_frames || channel >= parameters.channels)
+    return;
+
+  uint start = parameters.frame_offset + output_frame * parameters.decimation;
+  uint base = channel * parameters.words_per_channel;
+  float scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
+  float sum = 0.0;
+  /* The taps that land on a frame the stream really has.  Outside that range
+   * the frame is zero -- not a bit, a zero sample -- which is what the head
+   * and the tail of a stream are: the response's own delay at the start, and
+   * whatever it still holds after the input has ended.  Both are ranges, so
+   * they cost a clamp here rather than a test per tap. */
+  uint tap = parameters.lead_frames > start ?
+      min(parameters.lead_frames - start, parameters.taps) : 0u;
+  uint last = parameters.valid_frames > start ?
+      min(parameters.valid_frames - start, parameters.taps) : 0u;
+  uint frame = start + tap;
+
+  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
+   * multiply degenerates to the coefficient's sign: the whole inner loop is
+   * an add or a subtract, and the input word never becomes a number. */
+  while (tap < last) {
+    uint word = packed_words[base + (frame >> 5u)];
+    uint bit = frame & 31u;
+    uint run = min(32u - bit, last - tap);
+    uint index;
+
+    for (index = 0u; index < run; ++index) {
+      float coefficient = coefficients[tap + index];
+
+      sum += ((word >> (bit + index)) & 1u) != 0u ? coefficient : -coefficient;
+    }
+    tap += run;
+    frame += run;
+  }
+  output_samples[output_frame * parameters.channels + channel] = sum * scale;
+}

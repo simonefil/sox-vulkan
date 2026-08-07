@@ -1437,6 +1437,26 @@ size_t sox_write_packed_dsd_words(sox_format_t *ft, const sox_sample_t *buf, siz
   return actual;
 }
 
+/* The packed DSD reader takes the place of sox_read for a chain that begins in
+ * an effect which has opted into packing.  It advances no length of its own:
+ * ft->signal.length counts DSD frames for these formats and the handler keeps
+ * its own position, exactly as the ordinary reader does.  A handler that
+ * cannot produce words returns nothing rather than a partial answer, which is
+ * what lets the caller fall back to sox_read without having to unpick how far
+ * it got. */
+size_t sox_read_packed_dsd_words(sox_format_t *ft, sox_sample_t *buf, size_t len)
+{
+  size_t channels = ft->signal.channels;
+  size_t actual;
+
+  if (!ft->read_packed_dsd_words || !channels || len % channels)
+    return 0;
+  actual = (*ft->read_packed_dsd_words)(ft, buf, len);
+  if (actual > len || actual % channels)
+    return 0;
+  return actual;
+}
+
 int sox_close(sox_format_t * ft)
 {
   int result = SOX_SUCCESS;

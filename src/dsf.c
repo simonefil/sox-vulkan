@@ -45,6 +45,7 @@ struct dsf {
 
 static size_t dsf_write_packed(sox_format_t *, const sox_sample_t *, size_t);
 static size_t dsf_write_packed_words(sox_format_t *, const sox_sample_t *, size_t);
+static size_t dsf_read_packed_words(sox_format_t *, sox_sample_t *, size_t);
 
 #define TAG(a, b, c, d) ((a) | (b) << 8 | (c) << 16 | (d) << 24)
 
@@ -145,6 +146,8 @@ static int dsf_startread(sox_format_t *ft)
 	dsf->block_pos = dsf->block_size;
 	dsf->block_start = 0;
 
+	ft->read_packed_dsd_words = dsf_read_packed_words;
+
 	ft->signal.rate = dsf->sfreq;
 	ft->signal.channels = dsf->chan_num;
 	ft->signal.precision = 1;
@@ -209,6 +212,83 @@ static size_t dsf_read(sox_format_t *ft, sox_sample_t *buf, size_t len)
 	dsf->read_samp += rsamp;
 
 	return rsamp * dsf->chan_num;
+}
+
+/* Whole 32-frame words taken straight out of the file's own layout.
+ *
+ * DSF already stores each channel's bits the way the device kernels want
+ * them -- byte b of a word holds frames 8b..8b+7, bit zero the earliest --
+ * so a word is an assembly of four adjacent bytes and nothing is unpacked
+ * here.  This is the whole point of the packed path: a bit never becomes a
+ * sox_sample_t on the host.
+ *
+ * Only word-aligned positions qualify.  A seek can leave the block position
+ * part-way through a word, and a call that lands there returns nothing,
+ * which sends the caller to dsf_read; that reader has no such constraint and
+ * realigns the stream on the way past.  The same is true of the final frames
+ * of a file that does not end on a whole word. */
+static size_t dsf_read_packed_words(sox_format_t *ft, sox_sample_t *buf, size_t len)
+{
+	struct dsf *dsf = ft->priv;
+	unsigned channels = dsf->chan_num;
+	uint64_t samp_left = dsf->scount - dsf->read_samp;
+	size_t total_groups;
+	size_t produced = 0;
+	unsigned channel;
+
+	if (dsf->bit_pos || dsf->block_pos % 4 || !channels || len % channels)
+		return 0;
+
+	total_groups = min(len / channels, (size_t)(samp_left / 32));
+
+	while (produced < total_groups) {
+		size_t groups;
+
+		if (dsf->block_pos >= dsf->block_size) {
+			size_t rlen = channels * dsf->block_size;
+			if (lsx_read_b_buf(ft, dsf->block, rlen) < rlen)
+				break;
+			dsf->block_pos = dsf->block_start;
+			dsf->block_start = 0;
+			if (dsf->block_pos % 4)
+				break;
+		}
+
+		groups = min(total_groups - produced,
+			     (size_t)((dsf->block_size - dsf->block_pos) / 4));
+		if (!groups)
+			break;
+
+		for (channel = 0; channel < channels; ++channel) {
+			const uint8_t *source = dsf->block +
+				channel * dsf->block_size + dsf->block_pos;
+			sox_sample_t *target = buf + channel * total_groups + produced;
+			size_t group;
+
+			for (group = 0; group < groups; ++group)
+				target[group] = (sox_sample_t)(
+					(uint32_t)source[group * 4] |
+					((uint32_t)source[group * 4 + 1] << 8) |
+					((uint32_t)source[group * 4 + 2] << 16) |
+					((uint32_t)source[group * 4 + 3] << 24));
+		}
+
+		dsf->block_pos += (uint32_t)(groups * 4);
+		dsf->read_samp += (uint64_t)groups * 32;
+		produced += groups;
+	}
+
+	/* The channel runs were laid out for the count this call set out to
+	 * produce.  Coming up short leaves gaps between them, so close the gaps
+	 * rather than report a stride the caller cannot deduce from the return
+	 * value. */
+	if (produced && produced < total_groups)
+		for (channel = 1; channel < channels; ++channel)
+			memmove(buf + channel * produced,
+				buf + channel * total_groups,
+				produced * sizeof(*buf));
+
+	return produced * channels;
 }
 
 static int dsf_seek(sox_format_t * ft, sox_uint64_t offset)

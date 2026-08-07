@@ -371,7 +371,6 @@ FIR and rate depend on the selected execution profile:
 - CPU: selectable `sdm-*` and `clans-*` modulators; options `-f`, `-t`, `-n`, and `-l` apply.
 - Vulkan: DSD64 through DSD1024, one to six channels, fixed MASH-2/FSM, −3 dB gain.
 - Vulkan ignores CPU-only `sdm` options `-f`, `-t`, `-n`, and `-l`.
-- DSD decoding uses CPU.
 
 The Vulkan SDM backend is experimental. It is much faster than the CPU modulators, but its second-order noise shaping provides lower quality. Use it only at DSD256 or higher.
 
@@ -431,7 +430,57 @@ fir 1-6=room-correction.txt
 - Vulkan executes supported DFT, polyphase, and half-band stages.
 - Supported plans include `medium`, `high`, `very-high`, exact ratios, 44.1/48 kHz family conversion, and DSD rates.
 - Unsupported stages fall back to CPU.
+- Vulkan ignores `-R` and `-d`, with a warning: they are the only options that
+  would exclude the effect from the device, and they say nothing about where
+  the work should run. On CPU both continue to apply.
 - Use `-V3` to inspect the selected route.
+
+### DSD decoding
+
+With a Vulkan profile selected, DSD is decoded on the device from the file's own packed bits: no bit is expanded into a sample on the host, and the half-band cascade becomes one fused filter that decimates in a single pass. Without a profile the CPU path is unchanged.
+
+| Rule | Detail |
+|------|--------|
+| Conversion comes first | `vol`, `gain`, `trim` apply to the PCM, after `rate`. An effect in front of the conversion is an error, with or without a Vulkan flag. DSD-to-DSD chains are untouched. |
+| Band ceiling | 20 kHz at DSD64, 30 kHz at DSD128, 60 kHz at DSD256, 90 kHz above. Beyond it a DSD stream holds shaped noise, not signal. |
+| One DSD64 filter | The ceiling binds at every output rate: flat to 19.5 kHz, stopped at 20 kHz, from 44.1 kHz to 384 kHz. DSD64 decoded to 96 or 192 kHz is empty above 20 kHz. |
+| Stop-band depth | The requested quality, capped by the profile's own SNR. Only the `fast` cap binds, and only from `-v` up. |
+| Buffer                 | Decode with `--buffer 524288` or larger. One dispatch per call: at the 8 KiB default DSD512 runs at 4.1× instead of 19.2×. |
+
+DSD-to-PCM throughput, stereo, 10-second input, to 44.1 kHz, `--buffer 524288`. M5 Pro:
+
+| Rate | CPU single | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
+|------|-----------|-----------|-------------|----------------|------------------|
+| DSD64 | 58.37× | 89.42× | 30.67× | 3.67× | Not available |
+| DSD128 | 30.00× | 46.18× | 56.20× | 8.63× | Not available |
+| DSD256 | 15.07× | 23.70× | 94.14× | 24.16× | Not available |
+| DSD512 | 7.65× | 11.71× | 68.22× | 13.11× | Not available |
+| DSD1024 | 3.80× | 6.01× | 39.26× | 6.67× | Not available |
+
+Ryzen 7 5700X3D with RTX 3080:
+
+| Rate | CPU single | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
+|------|-----------|-----------|-------------|----------------|------------------|
+| DSD64 | 38.38× | 59.36× | 20.19× | 8.75× | 1.42× |
+| DSD128 | 19.97× | 31.08× | 22.29× | 14.79× | 2.98× |
+| DSD256 | 10.17× | 15.94× | 22.21× | 21.79× | 6.28× |
+| DSD512 | 5.14× | 8.06× | 19.68× | 16.64× | 4.20× |
+| DSD1024 | 2.57× | 4.05× | 15.10× | 11.20× | 2.51× |
+
+DSD64 is the one case the CPU wins, for an arithmetic reason: the cascade halves its rate at every stage and spends about ten multiplies per output sample. Above DSD64 the ceiling shortens the response and the GPU leads by three to eight times.
+
+Accuracy of the whole decode, scored against the exact rational convolution of the plan sox built:
+
+| Path | SNR |
+|------|-----|
+| CPU | 182 dB |
+| Vulkan fast | 113–123 dB |
+| Vulkan precise | 260–269 dB on the FP32 fallback, 290–308 dB with `shaderFloat64` |
+| Vulkan reference | 640.7 dB |
+
+On a build whose samples are normalised the reference profile is exact: the captured pairs equal the exact rational sum in every bit. On a build that scales samples to `SOX_SAMPLE_MAX` the exact product no longer fits a pair, so the stage applies the factor on the device, before collapsing, and the sample written is the correctly rounded one, checked frame by frame against the exact product.
+
+`rate -v` on DSD64 is the one measured plan whose response is too wide to fit a double-double: it reads 640.7 dB.
 
 ### Runtime examples
 
@@ -461,7 +510,7 @@ After the build completes, verify the installation. The build scripts reject exe
 
 Expected output:
 ```
-sox:      SoX v15.0.0
+sox:      SoX v15.1.0
 ```
 
 ### 2. Check Supported Formats

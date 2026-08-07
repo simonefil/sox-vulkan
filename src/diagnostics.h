@@ -125,6 +125,8 @@ void lsx_diagnostics_capture_f64(double const *samples, size_t n);
  * halves still exist.  This is what makes the reference profile measurable
  * from a single run instead of two. */
 void lsx_diagnostics_capture_dd(double high, double low);
+/* The fused DSD stage's output, as pairs, interleaved by channel. */
+void lsx_diagnostics_capture_dsd_dd(double const *pairs, size_t samples);
 
 /* Capture the packed one-bit stream handed to a DSD writer.  Byte-packed
  * input is group-interleaved and carries its valid-bit count; word-packed

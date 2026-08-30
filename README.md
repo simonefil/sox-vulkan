@@ -658,3 +658,25 @@ The build scripts download and compile the following library versions:
 ## License
 
 SoX is distributed under the GNU General Public License (GPL) and GNU Lesser General Public License (LGPL). See `LICENSE.GPL` and `LICENSE.LGPL` for details.
+
+## LLM Disclaimer
+
+This project uses AI-assisted development tools.
+
+**Tools**
+
+- Codex `gpt5.6-sol`
+- Claude `opus5`
+
+### Contribution Profile
+
+```
+Phase                               Human│ AI
+─────────────────────────────────────────┼───────────────
+Requirements & Scope       95% ██████████│             5%
+Architecture & Design      95% ██████████│             5%
+Implementation             40%       ████│░░░░░░      60%
+Testing                    20%         ██│░░░░░░░░    80%
+Documentation               5%           │░░░░░░░░░░  95%
+```
+

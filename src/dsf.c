@@ -553,18 +553,19 @@ static size_t dsf_write_packed_words(sox_format_t *ft, const sox_sample_t *buf, 
 			uint8_t *target = dsf->block + channel * dsf->block_size + dsf->block_pos;
 			const sox_sample_t *source = buf + channel * total_groups + consumed_groups;
 
-			/* DSF stores the earliest DSD bit in bit zero of each byte. */
-			if (MACHINE_IS_LITTLEENDIAN)
-				memcpy(target, source, groups * sizeof(*source));
-			else {
-				size_t group;
-				for (group = 0; group < groups; ++group) {
-					uint32_t word = (uint32_t)source[group];
-					target[group * 4] = (uint8_t)word;
-					target[group * 4 + 1] = (uint8_t)(word >> 8);
-					target[group * 4 + 2] = (uint8_t)(word >> 16);
-					target[group * 4 + 3] = (uint8_t)(word >> 24);
-				}
+			/* DSF stores the earliest DSD bit in bit zero of each byte,
+			 * and the four bytes of a word least significant first.
+			 * A packed sample carries the word's value, not its bytes:
+			 * on a little-endian machine the two used to coincide, so a
+			 * block memcpy served, but a double is neither four bytes
+			 * wide nor the word's own representation. */
+			size_t group;
+			for (group = 0; group < groups; ++group) {
+				uint32_t word = SOX_DSD_PACKED_WORD_VALUE(source[group]);
+				target[group * 4] = (uint8_t)word;
+				target[group * 4 + 1] = (uint8_t)(word >> 8);
+				target[group * 4 + 2] = (uint8_t)(word >> 16);
+				target[group * 4 + 3] = (uint8_t)(word >> 24);
 			}
 		}
 		dsf->block_pos += (uint32_t)(groups * 4);

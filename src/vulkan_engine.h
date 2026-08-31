@@ -66,11 +66,15 @@ typedef enum {
   lsx_vulkan_resident_format_dsd_u32
 } lsx_vulkan_resident_format_t;
 
-/* What the stored numbers mean.  sox_sample is SoX's own full-scale integer
- * range held in a float, which is what most of the pipeline passes around;
- * normalized is the same signal scaled to +/-1, which some shaders want
- * because it keeps the exponent small; dsd is bits, not amplitudes.  A
- * consumer must check this, since the same format can carry either scaling. */
+/* What the stored numbers mean.  sox_sample is whatever scale the chain's own
+ * samples are on, which is what most of the pipeline passes around; normalized
+ * is that signal scaled to +/-1; dsd is bits, not amplitudes.  A consumer must
+ * check this, since the same format can carry either scaling.
+ *
+ * The two amplitude domains used to differ by 2^31, the chain carrying
+ * full-scale integers.  It now carries the normalised value itself, so they
+ * coincide -- lsx_sample_values_are_normalized() is what says so, and every
+ * producer and consumer here asks it rather than assuming either scale. */
 typedef enum {
   lsx_vulkan_resident_domain_sox_sample,
   lsx_vulkan_resident_domain_normalized,

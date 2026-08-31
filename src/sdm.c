@@ -1766,18 +1766,26 @@ static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf, size_t *osam
   size_t capacity = *osamp / p->channels;
   size_t remaining = p->vulkan_output_bytes - p->vulkan_output_pos;
   size_t groups = min(capacity, remaining / 4u);
-  size_t channel;
+  size_t channel, group;
 
   /*
    * The GPU output is planar because DSF stores channels in separate blocks.
-   * A SoX sample carries one complete 32-bit DSD word in this packed mode.
+   * A SoX sample carries one complete 32-bit DSD word in this packed mode --
+   * as the word's numeric value, not as its four bytes laid into the sample's
+   * storage.  The two used to be the same thing, when a sample was an int32
+   * and a memcpy of the whole block did the job; a double has neither the
+   * same width nor the same representation, so each word is loaded and
+   * converted on its own.
    */
-  for (channel = 0; channel < p->channels; ++channel)
-    memcpy(obuf + channel * groups,
-        p->vulkan_output +
-          channel * p->vulkan_output_stride +
-          p->vulkan_output_pos,
-        groups * sizeof(*obuf));
+  for (channel = 0; channel < p->channels; ++channel) {
+    uint8_t const *source = p->vulkan_output +
+      channel * p->vulkan_output_stride + p->vulkan_output_pos;
+    for (group = 0; group < groups; ++group) {
+      sox_uint32_t word;
+      memcpy(&word, source + group * 4u, sizeof(word));
+      obuf[channel * groups + group] = SOX_DSD_PACKED_WORD(word);
+    }
+  }
   p->vulkan_output_pos += groups * 4u;
   if (p->vulkan_output_pos == p->vulkan_output_bytes) {
     p->vulkan_output = NULL;

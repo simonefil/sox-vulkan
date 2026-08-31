@@ -30,3 +30,5 @@ build-fp64/
 build-wv/
 static_libs
 static_libs_keep/
+build-vk/
+build-vk-asan/

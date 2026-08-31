@@ -895,7 +895,12 @@ static int ensure_resident_pipeline(
 
   switch (domain) {
     case lsx_vulkan_resident_domain_normalized: scale = 1.0f; break;
-    case lsx_vulkan_resident_domain_sox_sample: scale = 1.0f / 2147483648.0f;
+    case lsx_vulkan_resident_domain_sox_sample:
+      /* SoX's own domain is normalised too now, so the two coincide and the
+       * scale is one.  The branch stays for the same reason it stays in the
+       * rate shaders' `normalize` parameter: it is what says the ingest reads
+       * the build's sample domain rather than assuming it. */
+      scale = lsx_sample_values_are_normalized() ? 1.0f : 1.0f / 2147483648.0f;
       break;
     default: lsx_fail("unsupported resident Vulkan SDM input domain");
       return SOX_EOF;

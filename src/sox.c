@@ -730,7 +730,7 @@ static int ostart(sox_effect_t *effp)
 {
   unsigned prec = effp->out_signal.precision;
   if (effp->in_signal.mult && effp->in_signal.precision > prec)
-    *effp->in_signal.mult *= 1 - (1 << (31 - prec)) * (1. / SOX_SAMPLE_MAX);
+    *effp->in_signal.mult *= 1 - ldexp(1., -(int)prec);
   return SOX_SUCCESS;
 }
 

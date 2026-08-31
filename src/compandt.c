@@ -145,7 +145,13 @@ static sox_bool parse_transfer_value(char const * text, double * value)
     return sox_false;
   }
   if (!strcmp(text, "-inf"))
-    *value = -20 * log10(-(double)SOX_SAMPLE_MIN);
+    /* Not actually -inf: the smallest level the old integer sample could
+     * represent, -186.64 dBFS, kept as the floor of the transfer function.  It
+     * used to be spelled as the log of -SOX_SAMPLE_MIN because that constant
+     * happened to be 2^31; the constant is 1.0 now, and the same spelling would
+     * have made "-inf" mean 0 dB, which is the top of the scale rather than the
+     * bottom of it. */
+    *value = -20 * log10(2147483648.);
   else if (sscanf(text, "%lf %c", value, &dummy) != 1) {
     lsx_fail("syntax error trying to read transfer function value");
     return sox_false;

@@ -202,8 +202,8 @@ static int getblock(sox_format_t *);
 static void blockstart(sox_format_t *);
 
 /* Conversion macros (from raw.c) */
-#define SOX_ALAW_BYTE_TO_SAMPLE(d) ((sox_sample_t)(sox_alaw2linear16(d)) << 16)
-#define SOX_ULAW_BYTE_TO_SAMPLE(d) ((sox_sample_t)(sox_ulaw2linear16(d)) << 16)
+#define SOX_ALAW_BYTE_TO_SAMPLE(d) SOX_SIGNED_16BIT_TO_SAMPLE(sox_alaw2linear16(d),)
+#define SOX_ULAW_BYTE_TO_SAMPLE(d) SOX_SIGNED_16BIT_TO_SAMPLE(sox_ulaw2linear16(d),)
 
 /* public VOC functions for SOX */
 

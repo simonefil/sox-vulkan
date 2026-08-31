@@ -267,6 +267,25 @@ typedef struct {
   sdm_t         *sdm;
 } priv_t;
 
+/* The output grid, in the units a sample now has.
+ *
+ * A sample used to be an integer whose low 32-prec bits were exactly the ones
+ * the target format could not carry, so quantising to the grid was a shift and
+ * asking whether a sample already sat on the grid was a mask.  Neither has a
+ * counterpart in a double, and both questions have to be put as arithmetic:
+ * how many steps of size 2^-(prec-1) is this sample, and is that a whole
+ * number.
+ *
+ * DITHER_HALF_STEP is what (1 << (31 - prec)) meant: half an output step. */
+#define DITHER_SCALE(prec)     ((double)(1ull << ((prec) - 1)))
+#define DITHER_HALF_STEP(prec) (0.5 / DITHER_SCALE(prec))
+#define DITHER_OFF_GRID(sample, prec) \
+  ((sample) * DITHER_SCALE(prec) != floor((sample) * DITHER_SCALE(prec)))
+
+/* The noise, likewise: RANQD1 >> prec was half an output step written as an
+ * integer in the old sample units, so here it becomes that same fraction. */
+#define DITHER_NOISE(r) ((double)(r) / 2147483648.)
+
 #define CONVOLVE _ _ _ _
 #define NAME flow_iir_4
 #define IIR
@@ -309,8 +328,7 @@ static int flow_no_shape(sox_effect_t * effp, const sox_sample_t * ibuf,
 
   while (len--) {
     if (p->auto_detect) {
-      p->history = (p->history << 1) +
-          !!(*ibuf & (((unsigned)-1) >> p->prec));
+      p->history = (p->history << 1) + DITHER_OFF_GRID(*ibuf, p->prec);
       if (p->history && p->dither_off) {
         p->dither_off = sox_false;
         lsx_debug("flow %" PRIuPTR ": on  @ %" PRIu64, effp->flow, p->num_output);
@@ -322,16 +340,16 @@ static int flow_no_shape(sox_effect_t * effp, const sox_sample_t * ibuf,
 
     if (!p->dither_off) {
       int32_t r = RANQD1 >> p->prec;
-      double d = ((double)*ibuf++ + r + (p->alt_tpdf? -p->r : (RANQD1 >> p->prec))) / (1 << (32 - p->prec));
+      double d = (*ibuf++ + DITHER_NOISE(r) +
+                  DITHER_NOISE(p->alt_tpdf? -p->r : (RANQD1 >> p->prec))) *
+                 DITHER_SCALE(p->prec);
       int i = d < 0? d - .5 : d + .5;
       p->r = r;
       if (i <= -(1 << (p->prec-1)))
         ++effp->clips, *obuf = SOX_SAMPLE_MIN;
       else if (i > (int)SOX_INT_MAX(p->prec))
-        ++effp->clips, *obuf = (sox_sample_t)
-            ((sox_uint32_t)SOX_INT_MAX(p->prec) << (32 - p->prec));
-      else *obuf = (sox_sample_t)
-          ((sox_uint32_t)i << (32 - p->prec));
+        ++effp->clips, *obuf = (double)SOX_INT_MAX(p->prec) / DITHER_SCALE(p->prec);
+      else *obuf = (double)i / DITHER_SCALE(p->prec);
       ++obuf;
     }
     else
@@ -417,8 +435,9 @@ static int start(sox_effect_t * effp)
   }
   p->ranqd1 = ranqd1(sox_globals.ranqd1) + effp->flow;
   if (effp->in_signal.mult) /* (Takes account of ostart mult (sox.c). */
-    *effp->in_signal.mult *= (SOX_SAMPLE_MAX - (1 << (31 - p->prec)) *
-        (2 * mult + 1)) / (SOX_SAMPLE_MAX - (1 << (31 - p->prec)));
+    *effp->in_signal.mult *=
+        (SOX_SAMPLE_MAX - DITHER_HALF_STEP(p->prec) * (2 * mult + 1)) /
+        (SOX_SAMPLE_MAX - DITHER_HALF_STEP(p->prec));
   return SOX_SUCCESS;
 }
 

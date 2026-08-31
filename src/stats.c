@@ -19,6 +19,20 @@
 #include <ctype.h>
 #include <string.h>
 
+/* The bit pattern a sample would have had, back when a sample was an integer.
+ *
+ * `stats` reports how many bits of the file are really in use, and it worked
+ * that out by ORing the samples together and counting the trailing zeros.
+ * That is a question about the representation, not about the sound, and the
+ * representation is gone -- so the pattern has to be rebuilt: a sample sitting
+ * on the 2^-31 grid is exactly the integer it used to be.
+ *
+ * Material finer than that grid -- float input, or an effect's full-precision
+ * output, which is now most of what reaches here -- rounds at this point and
+ * reports 32.  That is the honest answer: no integer format would hold it. */
+#define STATS_SAMPLE_BITS(d) \
+  ((int32_t)llround(fmax(-2147483648., fmin(2147483647., (d) * 2147483648.))))
+
 typedef struct {
   int       scale_bits, hex_bits;
   double    time_constant, scale;
@@ -104,7 +118,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
         p->min_sigma_x2 = p->avg_sigma_x2;
     }
     p->last = d;
-    p->mask |= *ibuf;
+    p->mask |= (uint32_t)STATS_SAMPLE_BITS(*ibuf);
   }
   return SOX_SUCCESS;
 }
@@ -124,15 +138,14 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * olen)
 
 static unsigned bit_depth(uint32_t mask, double min, double max, unsigned * x)
 {
-  SOX_SAMPLE_LOCALS;
-  unsigned result = 32, dummy = 0;
+  unsigned result = 32;
 
   for (; result && !(mask & 1); --result, mask >>= 1);
   if (x)
     *x = result;
   min = -fmax(fabs(min), fabs(max));
-  mask = SOX_FLOAT_64BIT_TO_SAMPLE(min, dummy) << 1;
-  for (; result && (mask & SOX_SAMPLE_MIN); --result, mask <<= 1);
+  mask = (uint32_t)STATS_SAMPLE_BITS(min) << 1;
+  for (; result && (mask & 0x80000000u); --result, mask <<= 1);
   return result;
 }
 

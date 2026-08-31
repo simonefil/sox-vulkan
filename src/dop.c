@@ -19,12 +19,21 @@
 #include "sox_i.h"
 
 typedef struct dop {
-  sox_sample_t *buf;
+  sox_uint32_t *buf;            /* bits being assembled, not samples */
   unsigned marker;
   unsigned pos;
 } dop_t;
 
 #define DOP_MARKER 0x05
+
+/* A DoP word is a bit pattern that a 24-bit PCM file carries: the marker in the
+ * top byte, sixteen DSD bits under it.  It was never a number, and it used to
+ * be handed on as a sox_sample_t only because a sox_sample_t was thirty-two
+ * bits of anything.  Now it has to be said out loud: take the pattern as the
+ * signed integer a 32-bit PCM sample would have been, and convert.  The marker
+ * 0xFA makes that integer negative, which is correct -- the top bit of a DoP
+ * word is part of the marker, not a sign anybody chose. */
+#define DOP_WORD_TO_SAMPLE(w) SOX_SIGNED_32BIT_TO_SAMPLE((sox_int32_t)(w),)
 
 static int dop_start(sox_effect_t *eff)
 {
@@ -85,7 +94,7 @@ static int dop_flow(sox_effect_t *eff, const sox_sample_t *ibuf,
     p->pos += n;
     if (p->pos == 16) {
       for (i = 0; i < channels; i++) {
-        *out++ = p->buf[i] | p->marker << 24;
+        *out++ = DOP_WORD_TO_SAMPLE(p->buf[i] | p->marker << 24);
         p->buf[i] = 0;
       }
       olen--;
@@ -96,7 +105,8 @@ static int dop_flow(sox_effect_t *eff, const sox_sample_t *ibuf,
 
   while (olen && ilen >= 16) {
     for (i = 0; i < channels; i++)
-      *out++ = dop_load_bits(in + i, channels, 0, 16) | p->marker << 24;
+      *out++ = DOP_WORD_TO_SAMPLE(
+          dop_load_bits(in + i, channels, 0, 16) | p->marker << 24);
     olen--;
     in += 16 * channels;
     ilen -= 16;
@@ -112,7 +122,7 @@ static int dop_flow(sox_effect_t *eff, const sox_sample_t *ibuf,
     p->pos += n;
     if (p->pos == 16) {
       for (i = 0; i < channels; i++) {
-        *out++ = p->buf[i] | p->marker << 24;
+        *out++ = DOP_WORD_TO_SAMPLE(p->buf[i] | p->marker << 24);
         p->buf[i] = 0;
       }
       olen--;
@@ -135,7 +145,7 @@ static int dop_drain(sox_effect_t *eff, sox_sample_t *obuf, size_t *osamp)
   if (p->pos) {
     unsigned silence = (0xffff00 >> p->pos) & 0x696900;
     for (i = 0; i < eff->in_signal.channels; i++)
-      *obuf++ = p->buf[i] | p->marker << 24 | silence;
+      *obuf++ = DOP_WORD_TO_SAMPLE(p->buf[i] | p->marker << 24 | silence);
     p->pos = 0;
     *osamp = i;
   } else {

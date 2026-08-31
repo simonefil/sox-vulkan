@@ -80,7 +80,7 @@ static size_t cvsdread(sox_format_t * ft, sox_sample_t * buf, size_t len)
     ++p->bit_count;
     decode(p, p->byte & 1);
     p->byte >>= 1;
-    *buf++ = floor(p->sample + .5);
+    *buf++ = p->sample;
   }
   return i;
 }

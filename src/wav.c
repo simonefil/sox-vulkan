@@ -1524,13 +1524,14 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t l
         case WAVE_FORMAT_IMA_ADPCM:
         case WAVE_FORMAT_ADPCM:
             while (len>0) {
+                SOX_SAMPLE_LOCALS;
                 short *p = wav->samplePtr;
                 short *top = wav->sampleTop;
 
                 if (top>p+len) top = p+len;
                 len -= top-p; /* update residual len */
                 while (p < top)
-                   *p++ = (*buf++) >> 16;
+                   *p++ = SOX_SAMPLE_TO_SIGNED_16BIT(*buf++, ft->clips);
 
                 wav->samplePtr = p;
                 if (p == wav->sampleTop)

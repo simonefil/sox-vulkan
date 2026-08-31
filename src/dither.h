@@ -12,8 +12,7 @@ static int NAME(sox_effect_t * effp, const sox_sample_t * ibuf,
 
   while (len--) {
     if (p->auto_detect) {
-      p->history = (p->history << 1) +
-          !!(*ibuf & (((unsigned)-1) >> p->prec));
+      p->history = (p->history << 1) + DITHER_OFF_GRID(*ibuf, p->prec);
       if (p->history && p->dither_off) {
         p->dither_off = sox_false;
         lsx_debug("flow %" PRIuPTR ": on  @ %" PRIu64, effp->flow, p->num_output);
@@ -40,15 +39,15 @@ static int NAME(sox_effect_t * effp, const sox_sample_t * ibuf,
       d = *ibuf++ - output;
       p->previous_outputs[p->pos + N] = p->previous_outputs[p->pos] = output;
 #endif
-      d1 = (d + r1 + r2) / (1 << (32 - p->prec));
+      d1 = (d + DITHER_NOISE(r1) + DITHER_NOISE(r2)) * DITHER_SCALE(p->prec);
       i = d1 < 0? d1 - .5 : d1 + .5;
       p->previous_errors[p->pos + N] = p->previous_errors[p->pos] =
-          (double)i * (1 << (32 - p->prec)) - d;
+          (double)i / DITHER_SCALE(p->prec) - d;
       if (i < (-1 << (p->prec-1)))
         ++effp->clips, *obuf = SOX_SAMPLE_MIN;
       else if (i > (int)SOX_INT_MAX(p->prec))
-        ++effp->clips, *obuf = SOX_INT_MAX(p->prec) << (32 - p->prec);
-      else *obuf = i << (32 - p->prec);
+        ++effp->clips, *obuf = (double)SOX_INT_MAX(p->prec) / DITHER_SCALE(p->prec);
+      else *obuf = (double)i / DITHER_SCALE(p->prec);
       ++obuf;
     }
     else

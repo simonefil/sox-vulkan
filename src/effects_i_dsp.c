@@ -589,107 +589,45 @@ void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, 
   }
 }
 
-#if HAVE_FENV_H
-  #include <fenv.h>
-  #if defined FE_INVALID
-    #if HAVE_LRINT && LONG_MAX == 2147483647
-      #define lrint32 lrint
-    #elif defined __GNUC__ && defined __x86_64__
-      #define lrint32 lrint32
-      static __inline sox_int32_t lrint32(double input) {
-        sox_int32_t result;
-        __asm__ __volatile__("fistpl %0": "=m"(result): "t"(input): "st");
-        return result;
-      }
-    #endif
-  #endif
-#endif
-
-#if defined lrint32
-#define _ dest[i] = lrint32(src[i]), ++i,
-#pragma STDC FENV_ACCESS ON
-
-static void rint_clip(sox_sample_t * const dest, double const * const src,
-    size_t i, size_t const n, sox_uint64_t * const clips)
-{
-  for (; i < n; ++i) {
-    dest[i] = lrint32(src[i]);
-    if (fetestexcept(FE_INVALID)) {
-      feclearexcept(FE_INVALID);
-      dest[i] = src[i] > 0? SOX_SAMPLE_MAX : SOX_SAMPLE_MIN;
-      ++*clips;
-    }
-  }
-}
+/* The universal tap, and barely a seam at all any more.
+ *
+ * Two implementations used to stand here.  One rounded to int32 with lrint and
+ * read the invalid-operation flag as a range check; the other went through the
+ * conversion macro.  Both existed for one reason: to move samples between the
+ * double an effect computes in and the integer the chain carried between
+ * effects.  The chain no longer carries an integer, so what is left is a copy.
+ *
+ * lsx_normalize_samples was already the identity in one of the two variants and
+ * is now the identity in both, and lsx_sample_values_are_normalized is
+ * constant.  They stay as functions rather than disappearing into their callers
+ * so that the arithmetic change and the source change can be told apart if
+ * something downstream goes wrong; the callers that branch on the flag -- the
+ * Vulkan rate paths and diagnostics -- collapse in their own step.
+ */
 
 void lsx_save_samples(sox_sample_t * const dest, double const * const src,
     size_t const n, sox_uint64_t * const clips)
 {
-  size_t i;
-  /* The universal tap.  This is the last point at which the samples are still
-   * doubles, and the only one where the double and the integer it becomes
-   * exist together, so a capture taken anywhere later describes a number that
-   * has already been rounded to 32 bits. */
+  /* This is still the tap: it is where a chain hands a block of samples on, and
+   * a capture taken here describes what the next effect will see.  What it no
+   * longer is, is the last place the double exists -- the double is what the
+   * next effect gets. */
   if (lsx_diagnostics_on)
     lsx_diagnostics_capture_f64(src, n);
-  feclearexcept(FE_INVALID);
-  for (i = 0; i < (n & ~7);) {
-    _ _ _ _ _ _ _ _ 0;
-    if (fetestexcept(FE_INVALID)) {
-      feclearexcept(FE_INVALID);
-      rint_clip(dest, src, i - 8, i, clips);
-    }
-  }
-  rint_clip(dest, src, i, n, clips);
+  (void)clips;                  /* nothing here can clip any more */
+  if (dest != src)
+    memcpy(dest, src, n * sizeof(*dest));
 }
 
 void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     size_t const n)
 {
-  size_t i;
-  for (i = 0; i < n; ++i)
-    dest[i] = src[i];
+  if (dest != src)
+    memcpy(dest, src, n * sizeof(*dest));
 }
 
-void lsx_normalize_samples(double * const dest, double const * const src, size_t const n)
-{
-  size_t i;
-  double const scale = 1. / SOX_SAMPLE_MAX;
-  for (i = 0; i < n; ++i)
-    dest[i] = src[i] * scale;
-}
-
-sox_bool lsx_sample_values_are_normalized(void)
-{
-  return sox_false;
-}
-
-#pragma STDC FENV_ACCESS OFF
-#undef _
-#else
-
-void lsx_save_samples(sox_sample_t * const dest, double const * const src,
-    size_t const n, sox_uint64_t * const clips)
-{
-  SOX_SAMPLE_LOCALS;
-  size_t i;
-  /* The same tap as in the lrint32 variant above, so that a capture does not
-   * depend on which rounding path the build took. */
-  if (lsx_diagnostics_on)
-    lsx_diagnostics_capture_f64(src, n);
-  for (i = 0; i < n; ++i)
-    dest[i] = SOX_FLOAT_64BIT_TO_SAMPLE(src[i], *clips);
-}
-
-void lsx_load_samples(double * const dest, sox_sample_t const * const src,
+void lsx_normalize_samples(double * const dest, double const * const src,
     size_t const n)
-{
-  size_t i;
-  for (i = 0; i < n; ++i)
-    dest[i] = SOX_SAMPLE_TO_FLOAT_64BIT(src[i],);
-}
-
-void lsx_normalize_samples(double * const dest, double const * const src, size_t const n)
 {
   if (dest != src)
     memcpy(dest, src, n * sizeof(*dest));
@@ -699,5 +637,3 @@ sox_bool lsx_sample_values_are_normalized(void)
 {
   return sox_true;
 }
-
-#endif

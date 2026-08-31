@@ -135,8 +135,8 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
       *obuf++ = SOX_ROUND_CLIP_COUNT(*ibuf * mult, effp->clips);
     else for (; len; --len, ++ibuf) {
       double d = *ibuf * mult;
-      *obuf++ = d < 0 ? 1 / (1 / d - p->limiter) - .5 :
-                d > 0 ? 1 / (1 / d + p->limiter) + .5 : 0;
+      *obuf++ = d < 0 ? 1 / (1 / d - p->limiter) :
+                d > 0 ? 1 / (1 / d + p->limiter) : 0;
     }
   }
   return SOX_SUCCESS;
@@ -211,8 +211,8 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
       *obuf = SOX_ROUND_CLIP_COUNT(*obuf * p->mult, effp->clips);
     else for (*osamp = len; len; --len) {
       double d = *obuf * p->mult;
-      *obuf++ = d < 0 ? 1 / (1 / d - p->limiter) - .5 :
-                d > 0 ? 1 / (1 / d + p->limiter) + .5 : 0;
+      *obuf++ = d < 0 ? 1 / (1 / d - p->limiter) :
+                d > 0 ? 1 / (1 / d + p->limiter) : 0;
     }
   }
   else *osamp = 0;

@@ -632,7 +632,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf, sox_sample_t * o
         case synth_amod  : synth_out = (synth_out + 1) * synth_input * .5; break;
         case synth_fmod  : synth_out *=  synth_input; break;
       }
-      *obuf++ = synth_out < 0? synth_out * p->gain - .5 : synth_out * p->gain + .5;
+      *obuf++ = synth_out * p->gain;
     }
     if (++p->samples_done == p->samples_to_do)
       result = SOX_EOF;

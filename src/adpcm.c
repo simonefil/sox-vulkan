@@ -37,8 +37,16 @@
 #include <sys/types.h>
 #include <stdio.h>
 
+/* None of this is a sample.
+ *
+ * The step size, the step-adjust table, the prediction and the four-bit code
+ * are all integers of the ADPCM codec, and they were typed sox_sample_t only
+ * because sox_sample_t used to be a thirty-two bit integer and was therefore
+ * the type at hand.  With samples now doubles the mistyping would have shifted
+ * the codec into floating point and left it working -- badly, and silently.
+ * They say int32_t because that is what they are. */
 typedef struct {
-        sox_sample_t  step;      /* step size */
+        int32_t step;            /* step size */
         short coef[2];
 } MsState_t;
 
@@ -52,7 +60,7 @@ typedef struct {
  * 1.0 is scaled to 0x100
  */
 static const
-sox_sample_t stepAdjustTable[] = {
+int32_t stepAdjustTable[] = {
         230, 230, 230, 230, 307, 409, 512, 614,
         768, 614, 512, 409, 307, 230, 230, 230
 };
@@ -76,17 +84,17 @@ extern void *lsx_ms_adpcm_alloc(unsigned chans)
         return lsx_malloc(chans * sizeof(MsState_t));
 }
 
-static inline sox_sample_t AdpcmDecode(sox_sample_t c, MsState_t *state,
-                               sox_sample_t sample1, sox_sample_t sample2)
+static inline int32_t AdpcmDecode(int32_t c, MsState_t *state,
+                               int32_t sample1, int32_t sample2)
 {
-        sox_sample_t vlin;
-        sox_sample_t sample;
-        sox_sample_t step;
+        int32_t vlin;
+        int32_t sample;
+        int32_t step;
 
         /** Compute next step value **/
         step = state->step;
         {
-                sox_sample_t nstep;
+                int32_t nstep;
                 nstep = (stepAdjustTable[c] * step) >> 8;
                 state->step = (nstep < 16)? 16:nstep;
         }

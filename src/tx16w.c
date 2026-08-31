@@ -44,7 +44,7 @@ typedef struct {
   size_t   samples_out;
   size_t   bytes_out;
   size_t   rest;                 /* bytes remaining in sample file */
-  sox_sample_t odd;
+  int odd;                      /* a leftover 12-bit word, not a sample */
   sox_bool     odd_flag;
 } priv_t;
 
@@ -247,11 +247,22 @@ static int startwrite(sox_format_t * ft)
     return(SOX_SUCCESS);
 }
 
+/* Scale to twelve bits, round halves toward +inf, clip.  The old spelling was
+ * a shift, which could not overflow because it threw the low bits away; a
+ * double can sit past full scale, so the limit has to be applied here. */
+#define TX16W_SAMPLE_TO_12BIT(d, clips) \
+  ((int)((d) >= 1.0 ? (++(clips), 2047) : \
+         (d) < -1.0 ? (++(clips), -2048) : floor((d) * 2048. + .5)))
+
 static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t len0)
 {
   priv_t * sk = (priv_t *) ft->priv;
   size_t last_i, i = 0, len = min(len0, TXMAXLEN - sk->samples_out);
-  sox_sample_t w1, w2;
+  /* Twelve-bit words, not samples.  `>> 20` used to take the top twelve bits
+   * of the integer a sample was; the same twelve bits are now what scaling by
+   * 2^11 and rounding produces, and the clip that the shift could not perform
+   * has to be done on purpose. */
+  int w1, w2;
 
   while (i < len) {
     last_i = i;
@@ -259,10 +270,10 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t l
       w1 = sk->odd;
       sk->odd_flag = sox_false;
     }
-    else w1 = *buf++ >> 20, ++i;
+    else w1 = TX16W_SAMPLE_TO_12BIT(*buf++, ft->clips), ++i;
 
     if (i < len) {
-      w2 = *buf++ >> 20, ++i;
+      w2 = TX16W_SAMPLE_TO_12BIT(*buf++, ft->clips), ++i;
       if (lsx_writesb(ft, (w1 >> 4) & 0xFF) ||
           lsx_writesb(ft, (((w1 & 0x0F) << 4) | (w2 & 0x0F)) & 0xFF) ||
           lsx_writesb(ft, (w2 >> 4) & 0xFF)) {

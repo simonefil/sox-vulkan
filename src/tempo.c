@@ -34,7 +34,7 @@ typedef struct {
 
   /* Buffers: */
   fifo_t input_fifo;
-  float * overlap_buf;
+  double * overlap_buf;
   fifo_t output_fifo;
 
   /* Counters: */
@@ -45,9 +45,9 @@ typedef struct {
 } tempo_t;
 
 /* Waveform Similarity by least squares; works across multi-channels */
-static float difference(const float * a, const float * b, size_t length)
+static double difference(const double * a, const double * b, size_t length)
 {
-  float diff = 0;
+  double diff = 0;
   size_t i = 0;
 
   #define _ diff += sqr(a[i] - b[i]), ++i; /* Loop optimisation */
@@ -57,12 +57,12 @@ static float difference(const float * a, const float * b, size_t length)
 }
 
 /* Find where the two segments are most alike over the overlap period. */
-static size_t tempo_best_overlap_position(tempo_t * t, float const * new_win)
+static size_t tempo_best_overlap_position(tempo_t * t, double const * new_win)
 {
-  float * f = t->overlap_buf;
+  double * f = t->overlap_buf;
   size_t j, best_pos, prev_best_pos = (t->search + 1) >> 1, step = 64;
   size_t i = best_pos = t->quick_search? prev_best_pos : 0;
-  float diff, least_diff = difference(new_win + t->channels * i, f, t->channels * t->overlap);
+  double diff, least_diff = difference(new_win + t->channels * i, f, t->channels * t->overlap);
   int k = 0;
 
   if (t->quick_search) do { /* hierarchical search */
@@ -85,14 +85,14 @@ static size_t tempo_best_overlap_position(tempo_t * t, float const * new_win)
 }
 
 static void tempo_overlap(
-    tempo_t * t, const float * in1, const float * in2, float * output)
+    tempo_t * t, const double * in1, const double * in2, double * output)
 {
   size_t i, j, k = 0;
-  float fade_step = 1.0f / (float) t->overlap;
+  double fade_step = 1.0 / (double) t->overlap;
 
   for (i = 0; i < t->overlap; ++i) {
-    float fade_in  = fade_step * (float) i;
-    float fade_out = 1.0f - fade_in;
+    double fade_in  = fade_step * (double) i;
+    double fade_out = 1.0 - fade_in;
     for (j = 0; j < t->channels; ++j, ++k)
       output[k] = in1[k] * fade_out + in2[k] * fade_in;
   }
@@ -106,22 +106,22 @@ static void tempo_process(tempo_t * t)
     /* Copy or overlap the first bit to the output */
     if (!t->segments_total) {
       offset = t->search / 2;
-      fifo_write(&t->output_fifo, t->overlap, (float *) fifo_read_ptr(&t->input_fifo) + t->channels * offset);
+      fifo_write(&t->output_fifo, t->overlap, (double *) fifo_read_ptr(&t->input_fifo) + t->channels * offset);
     } else {
       offset = tempo_best_overlap_position(t, fifo_read_ptr(&t->input_fifo));
       tempo_overlap(t, t->overlap_buf,
-          (float *) fifo_read_ptr(&t->input_fifo) + t->channels * offset,
+          (double *) fifo_read_ptr(&t->input_fifo) + t->channels * offset,
           fifo_write(&t->output_fifo, t->overlap, NULL));
     }
     /* Copy the middle bit to the output */
     fifo_write(&t->output_fifo, t->segment - 2 * t->overlap,
-               (float *) fifo_read_ptr(&t->input_fifo) +
+               (double *) fifo_read_ptr(&t->input_fifo) +
                t->channels * (offset + t->overlap));
 
     /* Copy the end bit to overlap_buf ready to be mixed with
      * the beginning of the next segment. */
     memcpy(t->overlap_buf,
-           (float *) fifo_read_ptr(&t->input_fifo) +
+           (double *) fifo_read_ptr(&t->input_fifo) +
            t->channels * (offset + t->segment - t->overlap),
            t->channels * t->overlap * sizeof(*(t->overlap_buf)));
 
@@ -132,13 +132,13 @@ static void tempo_process(tempo_t * t)
   }
 }
 
-static float * tempo_input(tempo_t * t, float const * samples, size_t n)
+static double * tempo_input(tempo_t * t, double const * samples, size_t n)
 {
   t->samples_in += n;
   return fifo_write(&t->input_fifo, n, samples);
 }
 
-static float const * tempo_output(tempo_t * t, float * samples, size_t * n)
+static double const * tempo_output(tempo_t * t, double * samples, size_t * n)
 {
   t->samples_out += *n = min(*n, fifo_occupancy(&t->output_fifo));
   return fifo_read(&t->output_fifo, *n, samples);
@@ -150,7 +150,7 @@ static void tempo_flush(tempo_t * t)
   uint64_t samples_out = t->samples_in / t->factor + .5;
   size_t remaining = samples_out > t->samples_out ?
       (size_t)(samples_out - t->samples_out) : 0;
-  float * buff = lsx_calloc(128 * t->channels, sizeof(*buff));
+  double * buff = lsx_calloc(128 * t->channels, sizeof(*buff));
 
   if (remaining > 0) {
     while (fifo_occupancy(&t->output_fifo) < remaining) {
@@ -179,7 +179,7 @@ static void tempo_setup(tempo_t * t,
   t->overlap_buf = lsx_malloc(t->overlap * t->channels * sizeof(*t->overlap_buf));
   max_skip = ceil(factor * (t->segment - t->overlap));
   t->process_size = max(max_skip + t->overlap, t->segment) + t->search;
-  memset(fifo_reserve(&t->input_fifo, t->search / 2), 0, (t->search / 2) * t->channels * sizeof(float));
+  memset(fifo_reserve(&t->input_fifo, t->search / 2), 0, (t->search / 2) * t->channels * sizeof(double));
 }
 
 static void tempo_delete(tempo_t * t)
@@ -194,8 +194,8 @@ static tempo_t * tempo_create(size_t channels)
 {
   tempo_t * t = lsx_calloc(1, sizeof(*t));
   t->channels = channels;
-  fifo_create(&t->input_fifo, t->channels * sizeof(float));
-  fifo_create(&t->output_fifo, t->channels * sizeof(float));
+  fifo_create(&t->input_fifo, t->channels * sizeof(double));
+  fifo_create(&t->output_fifo, t->channels * sizeof(double));
   return t;
 }
 
@@ -274,16 +274,16 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
 {
   priv_t * p = (priv_t *)effp->priv;
   size_t i, odone = *osamp /= effp->in_signal.channels;
-  float const * s = tempo_output(p->tempo, NULL, &odone);
+  double const * s = tempo_output(p->tempo, NULL, &odone);
   SOX_SAMPLE_LOCALS;
 
   for (i = 0; i < odone * effp->in_signal.channels; ++i)
-    *obuf++ = SOX_FLOAT_32BIT_TO_SAMPLE(*s++, effp->clips);
+    *obuf++ = SOX_FLOAT_64BIT_TO_SAMPLE(*s++, effp->clips);
 
   if (*isamp && odone < *osamp) {
-    float * t = tempo_input(p->tempo, NULL, *isamp / effp->in_signal.channels);
+    double * t = tempo_input(p->tempo, NULL, *isamp / effp->in_signal.channels);
     for (i = *isamp; i; --i)
-      *t++ = SOX_SAMPLE_TO_FLOAT_32BIT(*ibuf++, effp->clips);
+      *t++ = SOX_SAMPLE_TO_FLOAT_64BIT(*ibuf++, effp->clips);
     tempo_process(p->tempo);
   }
   else *isamp = 0;

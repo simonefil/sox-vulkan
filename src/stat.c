@@ -153,11 +153,13 @@ static int sox_stat_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_samp
     }
 
     for (done = 0; done < len; done++) {
-      long lsamp = *ibuf++;
-      double delta, samp = (double)lsamp / stat->scale;
+      sox_sample_t dsamp = *ibuf++;
+      long lsamp = (long)(int32_t)llround(fmax(-2147483648.,
+            fmin(2147483647., dsamp * 2147483648.)));
+      double delta, samp = dsamp / stat->scale;
       /* work in scaled levels for both sample and delta */
       stat->bin[(lsamp >> 30) + 2]++;
-      *obuf++ = lsamp;
+      *obuf++ = dsamp;
 
       if (stat->volume == 2) {
           fprintf(stderr,"%08lx ",lsamp);

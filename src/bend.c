@@ -52,16 +52,16 @@ typedef struct {
 
   double shift;
 
-  float gInFIFO[MAX_FRAME_LENGTH];
-  float gOutFIFO[MAX_FRAME_LENGTH];
+  double gInFIFO[MAX_FRAME_LENGTH];
+  double gOutFIFO[MAX_FRAME_LENGTH];
   double gFFTworksp[2 * MAX_FRAME_LENGTH];
-  float gLastPhase[MAX_FRAME_LENGTH / 2 + 1];
-  float gSumPhase[MAX_FRAME_LENGTH / 2 + 1];
-  float gOutputAccum[2 * MAX_FRAME_LENGTH];
-  float gAnaFreq[MAX_FRAME_LENGTH];
-  float gAnaMagn[MAX_FRAME_LENGTH];
-  float gSynFreq[MAX_FRAME_LENGTH];
-  float gSynMagn[MAX_FRAME_LENGTH];
+  double gLastPhase[MAX_FRAME_LENGTH / 2 + 1];
+  double gSumPhase[MAX_FRAME_LENGTH / 2 + 1];
+  double gOutputAccum[2 * MAX_FRAME_LENGTH];
+  double gAnaFreq[MAX_FRAME_LENGTH];
+  double gAnaMagn[MAX_FRAME_LENGTH];
+  double gSynFreq[MAX_FRAME_LENGTH];
+  double gSynMagn[MAX_FRAME_LENGTH];
   long gRover;
   int fftFrameSize, ovsamp;
 } priv_t;
@@ -162,7 +162,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   double magn, phase, tmp, window, real, imag;
   double freqPerBin, expct;
   long k, qpd, index, inFifoLatency, stepSize, fftFrameSize2;
-  float pitchShift = p->shift;
+  double pitchShift = p->shift;
 
   /* set up some handy variables */
   fftFrameSize2 = p->fftFrameSize / 2;
@@ -179,8 +179,8 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
     ++p->in_pos;
 
     /* As long as we have not yet collected enough data just read in */
-    p->gInFIFO[p->gRover] = SOX_SAMPLE_TO_FLOAT_32BIT(ibuf[i], effp->clips);
-    obuf[i] = SOX_FLOAT_32BIT_TO_SAMPLE(
+    p->gInFIFO[p->gRover] = SOX_SAMPLE_TO_FLOAT_64BIT(ibuf[i], effp->clips);
+    obuf[i] = SOX_FLOAT_64BIT_TO_SAMPLE(
         p->gOutFIFO[p->gRover - inFifoLatency], effp->clips);
     p->gRover++;
 
@@ -246,8 +246,8 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
       }
 
       /* this does the actual pitch shifting */
-      memset(p->gSynMagn, 0, p->fftFrameSize * sizeof(float));
-      memset(p->gSynFreq, 0, p->fftFrameSize * sizeof(float));
+      memset(p->gSynMagn, 0, p->fftFrameSize * sizeof(double));
+      memset(p->gSynFreq, 0, p->fftFrameSize * sizeof(double));
       for (k = 0; k <= fftFrameSize2; k++) {
         index = k * pitchShift;
         if (index <= fftFrameSize2) {
@@ -286,7 +286,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
         p->gOutFIFO[k] = p->gOutputAccum[k];
 
       memmove(p->gOutputAccum, /* shift accumulator */
-          p->gOutputAccum + stepSize, p->fftFrameSize * sizeof(float));
+          p->gOutputAccum + stepSize, p->fftFrameSize * sizeof(double));
 
       for (k = 0; k < inFifoLatency; k++) /* move input FIFO */
         p->gInFIFO[k] = p->gInFIFO[k + stepSize];

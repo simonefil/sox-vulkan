@@ -65,8 +65,8 @@ static const char* const sndfile_library_names[] =
   SNDFILE_FUNC(f,x, int, sf_close, (SNDFILE *sndfile)) \
   SNDFILE_FUNC(f,x, int, sf_format_check, (const SF_INFO *info)) \
   SNDFILE_FUNC(f,x, int, sf_command, (SNDFILE *sndfile, int command, void *data, int datasize)) \
-  SNDFILE_FUNC(f,x, sf_count_t, sf_read_int, (SNDFILE *sndfile, int *ptr, sf_count_t items)) \
-  SNDFILE_FUNC(f,x, sf_count_t, sf_write_int, (SNDFILE *sndfile, const int *ptr, sf_count_t items)) \
+  SNDFILE_FUNC(f,x, sf_count_t, sf_read_double, (SNDFILE *sndfile, double *ptr, sf_count_t items)) \
+  SNDFILE_FUNC(f,x, sf_count_t, sf_write_double, (SNDFILE *sndfile, const double *ptr, sf_count_t items)) \
   SNDFILE_FUNC(f,x, sf_count_t, sf_seek, (SNDFILE *sndfile, sf_count_t frames, int whence)) \
   SNDFILE_FUNC(f,x, const char*, sf_strerror, (SNDFILE *sndfile))
 
@@ -378,10 +378,11 @@ static int startread(sox_format_t * ft)
   }
   else rate = sf->sf_info->samplerate;
 
-  if ((sf->sf_info->format & SF_FORMAT_SUBMASK) == SF_FORMAT_FLOAT) {
-    sf->sf_command(sf->sf_file, SFC_SET_SCALE_FLOAT_INT_READ, NULL, SF_TRUE);
-    sf->sf_command(sf->sf_file, SFC_SET_CLIPPING, NULL, SF_TRUE);
-  }
+  /* The double entry points hand back the file's own integer range unless the
+   * handle is told otherwise; SoX's scale is [-1, 1], so say so.  Nothing is
+   * clipped on the way in: a value past full scale is one the pipeline can
+   * now carry, and only a writer decides what to do with it (decisione D3). */
+  sf->sf_command(sf->sf_file, SFC_SET_NORM_DOUBLE, NULL, SF_TRUE);
 
 #if 0 /* FIXME */
     sox_append_comments(&ft->oob.comments, buf);
@@ -398,8 +399,11 @@ static int startread(sox_format_t * ft)
 static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
 {
   priv_t * sf = (priv_t *)ft->priv;
-  /* FIXME: We assume int == sox_sample_t here */
-  return (size_t)sf->sf_read_int(sf->sf_file, (int *)buf, (sf_count_t)len);
+  /* The int entry points used to be right for the wrong reason: the buffer was
+   * cast to `int *` because a sample happened to be one.  libsndfile's double
+   * entry points normalise to [-1, 1] by default, which is the scale SoX now
+   * uses itself, so this is both correct and one requantisation shorter. */
+  return (size_t)sf->sf_read_double(sf->sf_file, buf, (sf_count_t)len);
 }
 
 /*
@@ -457,10 +461,9 @@ static int startwrite(sox_format_t * ft)
     return SOX_EOF;
   }
 
-#ifdef HAVE_SFC_SET_SCALE_INT_FLOAT_WRITE
-  if ((sf->sf_info->format & SF_FORMAT_SUBMASK) == SF_FORMAT_FLOAT)
-    sf->sf_command(sf->sf_file, SFC_SET_SCALE_INT_FLOAT_WRITE, NULL, SF_TRUE);
-#endif
+  sf->sf_command(sf->sf_file, SFC_SET_NORM_DOUBLE, NULL, SF_TRUE);
+  /* Here, on the other hand, clipping is the writer's job. */
+  sf->sf_command(sf->sf_file, SFC_SET_CLIPPING, NULL, SF_TRUE);
 
   return SOX_SUCCESS;
 }
@@ -472,8 +475,7 @@ static int startwrite(sox_format_t * ft)
 static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t len)
 {
   priv_t * sf = (priv_t *)ft->priv;
-  /* FIXME: We assume int == sox_sample_t here */
-  return (size_t)sf->sf_write_int(sf->sf_file, (int *)buf, (sf_count_t)len);
+  return (size_t)sf->sf_write_double(sf->sf_file, buf, (sf_count_t)len);
 }
 
 /*

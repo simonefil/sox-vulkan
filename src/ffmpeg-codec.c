@@ -593,17 +593,16 @@ static void const * decoded_sample_address(AVFrame const * frame, int sample, in
   return frame->extended_data[planar ? channel : 0] + index * bytes;
 }
 
-/* Convert one decoded sample to SoX's 32-bit signed scale.  The integer
- * formats are exact shifts, so they cannot clip.  The float formats can:
- * they are scaled by 2^31 and rounded to nearest, and a value outside the
- * representable range is clamped and counted in ft->clips.  Full-scale
- * negative is deliberately not a clip -- -1.0 maps exactly onto INT32_MIN --
- * whereas +1.0 has no exact image and is clamped without counting, so that a
- * plain full-scale signal does not report clipping on every peak.
+/* Convert one decoded sample to SoX's normalised scale.  The integer formats
+ * go through the sox.h macros and are exact.  S64 used to throw away its low
+ * thirty-two bits, because a sample had no room for them; a double has room
+ * for fifty-three, so the shift is gone.  The float formats already speak the
+ * scale the pipeline now uses, so they pass through untouched -- values past
+ * full scale included, which is why nothing here counts a clip: on the way in
+ * there is nothing to clip against (decisione D3).
  * Unsupported formats are filtered out beforehand by supported_sample_format;
  * the default arm exists only to keep the switch total. */
 static sox_sample_t decoded_sample_to_sox(
-    sox_format_t * ft,
     AVFrame const * frame,
     int sample,
     int channel,
@@ -614,32 +613,18 @@ static sox_sample_t decoded_sample_to_sox(
 
   switch (format) {
     case AV_SAMPLE_FMT_U8:
-      return (sox_sample_t)
-          (((int32_t)*(uint8_t const *)source - 128) * INT32_C(16777216));
+      return SOX_UNSIGNED_8BIT_TO_SAMPLE(*(uint8_t const *)source,);
     case AV_SAMPLE_FMT_S16:
-      return (sox_sample_t)
-          ((int32_t)*(int16_t const *)source * INT32_C(65536));
+      return SOX_SIGNED_16BIT_TO_SAMPLE(*(int16_t const *)source,);
     case AV_SAMPLE_FMT_S32:
-      return (sox_sample_t)*(int32_t const *)source;
+      return SOX_SIGNED_32BIT_TO_SAMPLE(*(int32_t const *)source,);
     case AV_SAMPLE_FMT_S64:
-      return (sox_sample_t)(int32_t)
-          ((uint64_t)*(int64_t const *)source >> 32);
+      /* 2^63 is a power of two, so this only moves the exponent. */
+      return (sox_sample_t)*(int64_t const *)source / 9223372036854775808.;
     case AV_SAMPLE_FMT_FLT:
-    case AV_SAMPLE_FMT_DBL: {
-      double value = format == AV_SAMPLE_FMT_FLT ? *(float const *)source : *(double const *)source;
-      double scaled = value * 2147483648.;
-
-      if (scaled <= -2147483648.5) {
-        ++ft->clips;
-        return INT32_MIN;
-      }
-      if (scaled >= 2147483647.5) {
-        if (scaled > 2147483648.)
-          ++ft->clips;
-        return INT32_MAX;
-      }
-      return (sox_sample_t)(scaled < 0 ? scaled - .5 : scaled + .5);
-    }
+      return SOX_FLOAT_32BIT_TO_SAMPLE(*(float const *)source,);
+    case AV_SAMPLE_FMT_DBL:
+      return SOX_FLOAT_64BIT_TO_SAMPLE(*(double const *)source,);
     default:
       return 0;
   }
@@ -688,7 +673,7 @@ static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   for (sample = 0; sample < state->frame->nb_samples; ++sample)
     for (channel = 0; channel < (int)state->decoded_channels; ++channel)
       state->decoded[(size_t)sample * state->decoded_channels + channel] =
-          decoded_sample_to_sox(ft, state->frame, sample, channel,
+          decoded_sample_to_sox(state->frame, sample, channel,
               state->decoded_channels);
   state->decoded_offset = 0;
   state->decoded_size = required;
@@ -1104,54 +1089,48 @@ static void * encoded_sample_address(AVFrame * frame, int sample, int channel)
 }
 
 /* Store one sox sample into the encoder's input frame in its own PCM format.
- * The narrowing integer cases round to nearest away from zero and clamp, the
- * arithmetic being done in int64 so that adding the rounding offset cannot
- * itself overflow.  No clip is counted: the target format was chosen to carry
- * the requested precision, so any loss here was asked for.  The float cases
- * divide by 2^31, which is exact.  Formats outside this set are never
- * selected by choose_sample_format. */
-static void sox_sample_to_encoded(AVFrame * frame, int sample, int channel, sox_sample_t value)
+ * This is a writer, so it is where clipping belongs (decisione D3): a sample
+ * can now sit past full scale, and every arm has to bring it back and say so.
+ * The narrowing integer cases go through the sox.h macros, which round to
+ * nearest and count the clip; S64 is spelled out because there is no macro for
+ * a width the pipeline cannot represent exactly anyway.  Formats outside this
+ * set are never selected by choose_sample_format. */
+static void sox_sample_to_encoded(sox_format_t * ft, AVFrame * frame, int sample, int channel, sox_sample_t value)
 {
   enum AVSampleFormat format = av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
   void * destination = encoded_sample_address(frame, sample, channel);
+  SOX_SAMPLE_LOCALS;
 
   switch (format) {
-    case AV_SAMPLE_FMT_U8: {
-      int64_t rounded = value;
-
-      rounded += rounded < 0 ? -INT64_C(8388608) : INT64_C(8388608);
-      rounded /= INT64_C(16777216);
-      if (rounded < -128)
-        rounded = -128;
-      else if (rounded > 127)
-        rounded = 127;
-      *(uint8_t *)destination = (uint8_t)(rounded + 128);
+    case AV_SAMPLE_FMT_U8:
+      *(uint8_t *)destination = SOX_SAMPLE_TO_UNSIGNED_8BIT(value, ft->clips);
       break;
-    }
-    case AV_SAMPLE_FMT_S16: {
-      int64_t rounded = value;
-
-      rounded += rounded < 0 ? -INT64_C(32768) : INT64_C(32768);
-      rounded /= INT64_C(65536);
-      if (rounded < INT16_MIN)
-        rounded = INT16_MIN;
-      else if (rounded > INT16_MAX)
-        rounded = INT16_MAX;
-      *(int16_t *)destination = (int16_t)rounded;
+    case AV_SAMPLE_FMT_S16:
+      *(int16_t *)destination = SOX_SAMPLE_TO_SIGNED_16BIT(value, ft->clips);
       break;
-    }
     case AV_SAMPLE_FMT_S32:
-      *(int32_t *)destination = (int32_t)value;
+      *(int32_t *)destination = SOX_SAMPLE_TO_SIGNED_32BIT(value, ft->clips);
       break;
-    case AV_SAMPLE_FMT_S64:
-      *(int64_t *)destination =
-          (int64_t)value * INT64_C(4294967296);
+    case AV_SAMPLE_FMT_S64: {
+      double scaled = floor(value * 9223372036854775808. + .5);
+
+      /* INT64_MAX has no double image; compare against 2^63 and hand back the
+       * integer, rather than converting a double that is out of range. */
+      if (scaled >= 9223372036854775808.) {
+        ++ft->clips;
+        *(int64_t *)destination = INT64_MAX;
+      } else if (scaled < -9223372036854775808.) {
+        ++ft->clips;
+        *(int64_t *)destination = INT64_MIN;
+      } else
+        *(int64_t *)destination = (int64_t)scaled;
       break;
+    }
     case AV_SAMPLE_FMT_FLT:
-      *(float *)destination = (float)(value * (1. / 2147483648.));
+      *(float *)destination = SOX_SAMPLE_TO_FLOAT_32BIT(value, ft->clips);
       break;
     case AV_SAMPLE_FMT_DBL:
-      *(double *)destination = value * (1. / 2147483648.);
+      *(double *)destination = SOX_SAMPLE_TO_FLOAT_64BIT(value, ft->clips);
       break;
     default:
       break;
@@ -1211,7 +1190,7 @@ static int encode_pending_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state, i
 
   for (sample = 0; sample < samples_per_channel; ++sample)
     for (channel = 0; channel < state->context->ch_layout.nb_channels; ++channel)
-      sox_sample_to_encoded(state->frame, sample, channel,
+      sox_sample_to_encoded(ft, state->frame, sample, channel,
           state->pending[(size_t)sample *
               state->context->ch_layout.nb_channels + channel]);
   state->frame->pts = state->next_pts;

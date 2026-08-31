@@ -65,16 +65,16 @@ static int debug_count = 0;
  * or different filters are found to be required, this function may
  * be needed.  Thus I leave it here for possible future use, but commented
  * out to avoid compiler warnings about it not being used.
-static float float_conv(float const *fp1, float const *fp2,int n)
+static double float_conv(double const *fp1, double const *fp2,int n)
 {
-        float res = 0;
+        double res = 0;
         for(; n > 0; n--)
                 res += (*fp1++) * (*fp2++);
         return res;
 }
 */
 
-static float float_conv_enc(float const *fp1, float const *fp2)
+static double float_conv_enc(double const *fp1, double const *fp2)
 {
     /* This is a specialzed version of float_conv() for encoding
      * which simply assumes a CVSD_ENC_FILTERLEN (16) length of
@@ -87,7 +87,7 @@ static float float_conv_enc(float const *fp1, float const *fp2)
      * in cvsdfilt.h.  At minimum, fp2 must be CVSD_ENC_FILTERLEN
      * (16) entries long.
      */
-    float res = 0;
+    double res = 0;
 
     /* unrolling loop */ 
     res += fp1[0] * fp2[0];
@@ -110,7 +110,7 @@ static float float_conv_enc(float const *fp1, float const *fp2)
     return res;
 }
 
-static float float_conv_dec(float const *fp1, float const *fp2)
+static double float_conv_dec(double const *fp1, double const *fp2)
 {
     /* This is a specialzed version of float_conv() for decoding
      * which assumes a specific length and structure to the data
@@ -125,7 +125,7 @@ static float float_conv_dec(float const *fp1, float const *fp2)
      * entry, and is a symmetrical mirror around fp2[23] (ie,
      * fp2[22] == fp2[24], fp2[0] == fp2[47], etc).
      */
-    float res = 0;
+    double res = 0;
 
     /* unrolling loop, also taking advantage of the symmetry
     * of the sampling rate array*/
@@ -186,7 +186,7 @@ static void cvsdstartcommon(sox_format_t * ft)
          * timeconst = (1/e)^(200 / SR) = exp(-200/SR)
          * SR is the sampling rate
          */
-        p->com.mla_tc0 = exp((-200.0)/((float)(p->cvsd_rate)));
+        p->com.mla_tc0 = exp((-200.0)/(double)(p->cvsd_rate));
         /*
          * phase_inc = 32000 / SR
          */
@@ -211,7 +211,7 @@ static void cvsdstartcommon(sox_format_t * ft)
 int lsx_cvsdstartread(sox_format_t * ft)
 {
         priv_t *p = (priv_t *) ft->priv;
-        float *fp1;
+        double *fp1;
         int i;
 
         cvsdstartcommon(ft);
@@ -239,7 +239,7 @@ int lsx_cvsdstartread(sox_format_t * ft)
 int lsx_cvsdstartwrite(sox_format_t * ft)
 {
         priv_t *p = (priv_t *) ft->priv;
-        float *fp1;
+        double *fp1;
         int i;
 
         cvsdstartcommon(ft);
@@ -292,7 +292,7 @@ size_t lsx_cvsdread(sox_format_t * ft, sox_sample_t *buf, size_t nsamp)
 {
         priv_t *p = (priv_t *) ft->priv;
         size_t done = 0;
-        float oval;
+        double oval;
 
         while (done < nsamp) {
                 if (!p->bit.cnt) {
@@ -345,7 +345,7 @@ size_t lsx_cvsdread(sox_format_t * ft, sox_sample_t *buf, size_t nsamp)
                                 p->com.v_max = oval;
                         if (oval < p->com.v_min)
                                 p->com.v_min = oval;
-                        *buf++ = (oval * ((float)SOX_SAMPLE_MAX));
+                        *buf++ = oval;
                         done++;
                 }
                 p->com.phase &= 3;
@@ -359,7 +359,7 @@ size_t lsx_cvsdwrite(sox_format_t * ft, const sox_sample_t *buf, size_t nsamp)
 {
         priv_t *p = (priv_t *) ft->priv;
         size_t done = 0;
-        float inval;
+        double inval;
 
         for(;;) {
                 /*
@@ -378,8 +378,7 @@ size_t lsx_cvsdwrite(sox_format_t * ft, const sox_sample_t *buf, size_t nsamp)
                         p->c.enc.input_filter[p->c.enc.offset] = 
                                  p->c.enc.input_filter[p->c.enc.offset 
                                      + CVSD_ENC_FILTERLEN] = 
-                                                (*buf++) /
-                                                    ((float)SOX_SAMPLE_MAX);
+                                                (*buf++);
                         done++;
                 }
                 p->com.phase &= 3;

@@ -27,23 +27,23 @@
 typedef struct {
   struct {
     unsigned overload;
-    float mla_int;
-    float mla_tc0;
-    float mla_tc1;
+    double mla_int;
+    double mla_tc0;
+    double mla_tc1;
     unsigned phase;
     unsigned phase_inc;
-    float v_min, v_max;
+    double v_min, v_max;
   } com;
   union {
     struct {
       /* mirror circular buffer */
-      float output_filter[CVSD_DEC_FILTERLEN*2];
+      double output_filter[CVSD_DEC_FILTERLEN*2];
       unsigned offset; /* into output_filter; always in first half */
     } dec;
     struct {
-      float recon_int;
+      double recon_int;
       /* mirror circular buffer */
-      float input_filter[CVSD_ENC_FILTERLEN*2];
+      double input_filter[CVSD_ENC_FILTERLEN*2];
       unsigned offset; /* into input_filter; always in first half */
     } enc;
   } c;

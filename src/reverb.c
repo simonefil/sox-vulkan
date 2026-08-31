@@ -26,24 +26,24 @@
 
 typedef struct {
   size_t  size;
-  float   * buffer, * ptr;
-  float   store;
+  double   * buffer, * ptr;
+  double   store;
 } filter_t;
 
-static float comb_process(filter_t * p,  /* gcc -O2 will inline this */
-    float const * input, float const * feedback, float const * hf_damping)
+static double comb_process(filter_t * p,  /* gcc -O2 will inline this */
+    double const * input, double const * feedback, double const * hf_damping)
 {
-  float output = *p->ptr;
+  double output = *p->ptr;
   p->store = output + (p->store - output) * *hf_damping;
   *p->ptr = *input + p->store * *feedback;
   filter_advance(p);
   return output;
 }
 
-static float allpass_process(filter_t * p,  /* gcc -O2 will inline this */
-    float const * input)
+static double allpass_process(filter_t * p,  /* gcc -O2 will inline this */
+    double const * input)
 {
-  float output = *p->ptr;
+  double output = *p->ptr;
   *p->ptr = *input + output * .5;
   filter_advance(p);
   return output - *input;
@@ -80,11 +80,11 @@ static void filter_array_create(filter_array_t * p, double rate,
 }
 
 static void filter_array_process(filter_array_t * p,
-    size_t length, float const * input, float * output,
-    float const * feedback, float const * hf_damping, float const * gain)
+    size_t length, double const * input, double * output,
+    double const * feedback, double const * hf_damping, double const * gain)
 {
   while (length--) {
-    float out = 0, in = *input++;
+    double out = 0, in = *input++;
 
     size_t i = array_length(comb_lengths) - 1;
     do out += comb_process(p->comb + i, &in, feedback, hf_damping);
@@ -109,12 +109,12 @@ static void filter_array_delete(filter_array_t * p)
 }
 
 typedef struct {
-  float feedback;
-  float hf_damping;
-  float gain;
+  double feedback;
+  double hf_damping;
+  double gain;
   fifo_t input_fifo;
   filter_array_t chan[2];
-  float * out[2];
+  double * out[2];
 } reverb_t;
 
 static void reverb_create(reverb_t * p, double sample_rate_Hz,
@@ -125,7 +125,7 @@ static void reverb_create(reverb_t * p, double sample_rate_Hz,
     double pre_delay_ms,
     double stereo_depth,
     size_t buffer_size,
-    float * * out)
+    double * * out)
 {
   size_t i, delay = pre_delay_ms / 1000 * sample_rate_Hz + .5;
   double scale = room_scale / 100 * .9 + .1;
@@ -137,8 +137,8 @@ static void reverb_create(reverb_t * p, double sample_rate_Hz,
   p->feedback = 1 - exp((reverberance - b) / (a * b));
   p->hf_damping = hf_damping / 100 * .3 + .2;
   p->gain = dB_to_linear(wet_gain_dB) * .015;
-  fifo_create(&p->input_fifo, sizeof(float));
-  memset(fifo_write(&p->input_fifo, delay, 0), 0, delay * sizeof(float));
+  fifo_create(&p->input_fifo, sizeof(double));
+  memset(fifo_write(&p->input_fifo, delay, 0), 0, delay * sizeof(double));
   for (i = 0; i <= ceil(depth); ++i) {
     filter_array_create(p->chan + i, sample_rate_Hz, scale, i * depth);
     out[i] = lsx_zalloc(p->out[i], buffer_size);
@@ -149,7 +149,7 @@ static void reverb_process(reverb_t * p, size_t length)
 {
   size_t i;
   for (i = 0; i < 2 && p->out[i]; ++i)
-    filter_array_process(p->chan + i, length, (float *) fifo_read_ptr(&p->input_fifo), p->out[i], &p->feedback, &p->hf_damping, &p->gain);
+    filter_array_process(p->chan + i, length, (double *) fifo_read_ptr(&p->input_fifo), p->out[i], &p->feedback, &p->hf_damping, &p->gain);
   fifo_read(&p->input_fifo, length, NULL);
 }
 
@@ -173,7 +173,7 @@ typedef struct {
   size_t ichannels, ochannels;
   struct {
     reverb_t reverb;
-    float * dry, * wet[2];
+    double * dry, * wet[2];
   } chan[2];
 } priv_t;
 
@@ -236,17 +236,17 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   for (c = 0; c < p->ichannels; ++c)
     p->chan[c].dry = fifo_write(&p->chan[c].reverb.input_fifo, len, 0);
   for (i = 0; i < len; ++i) for (c = 0; c < p->ichannels; ++c)
-    p->chan[c].dry[i] = SOX_SAMPLE_TO_FLOAT_32BIT(*ibuf++, effp->clips);
+    p->chan[c].dry[i] = SOX_SAMPLE_TO_FLOAT_64BIT(*ibuf++, effp->clips);
   for (c = 0; c < p->ichannels; ++c)
     reverb_process(&p->chan[c].reverb, len);
   if (p->ichannels == 2) for (i = 0; i < len; ++i) for (w = 0; w < 2; ++w) {
-    float out = (1 - p->wet_only) * p->chan[w].dry[i] +
+    double out = (1 - p->wet_only) * p->chan[w].dry[i] +
       .5 * (p->chan[0].wet[w][i] + p->chan[1].wet[w][i]);
-    *obuf++ = SOX_FLOAT_32BIT_TO_SAMPLE(out, effp->clips);
+    *obuf++ = SOX_FLOAT_64BIT_TO_SAMPLE(out, effp->clips);
   }
   else for (i = 0; i < len; ++i) for (w = 0; w < p->ochannels; ++w) {
-    float out = (1 - p->wet_only) * p->chan[0].dry[i] + p->chan[0].wet[w][i];
-    *obuf++ = SOX_FLOAT_32BIT_TO_SAMPLE(out, effp->clips);
+    double out = (1 - p->wet_only) * p->chan[0].dry[i] + p->chan[0].wet[w][i];
+    *obuf++ = SOX_FLOAT_64BIT_TO_SAMPLE(out, effp->clips);
   }
   return SOX_SUCCESS;
 }

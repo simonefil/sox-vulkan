@@ -81,8 +81,13 @@ static int start(sox_effect_t * effp)
       effp->flows = 1; /* essentially a conditional SOX_EFF_MCHAN */
   }
   p->mult = 0;
-  p->max = 1;
-  p->min = -1;
+  /* Seed the running peak with a value small enough never to be the peak of
+   * real material, but not zero: `mult` divides by it.  It used to be 1, one
+   * LSB of a 32-bit sample; on the normalised scale that same quantity is
+   * 2^-31, whereas a literal 1 would now be full scale and `gain -n` could
+   * only ever attenuate. */
+  p->max = 1. / 2147483648.;
+  p->min = -1. / 2147483648.;
   if (p->do_scan) {
     p->tmp_file = lsx_tmpfile();
     if (p->tmp_file == NULL) {

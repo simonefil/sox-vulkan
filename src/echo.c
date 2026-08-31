@@ -55,8 +55,8 @@ typedef struct {
         int     counter;
         int     num_delays;
         double  *delay_buf;
-        float   in_gain, out_gain;
-        float   delay[MAX_ECHOS], decay[MAX_ECHOS];
+        double  in_gain, out_gain;
+        double  delay[MAX_ECHOS], decay[MAX_ECHOS];
         ptrdiff_t samples[MAX_ECHOS], maxsamples;
         size_t fade_out;
 } priv_t;
@@ -79,15 +79,15 @@ static int sox_echo_getopts(sox_effect_t * effp, int argc, char **argv)
           return lsx_usage(effp);
 
         i = 0;
-        sscanf(argv[i++], "%f", &echo->in_gain);
-        sscanf(argv[i++], "%f", &echo->out_gain);
+        sscanf(argv[i++], "%lf", &echo->in_gain);
+        sscanf(argv[i++], "%lf", &echo->out_gain);
         while (i < argc) {
                 if ( echo->num_delays >= MAX_ECHOS )
                         lsx_fail("echo: to many delays, use less than %i delays",
                                 MAX_ECHOS);
                 /* Linux bug and it's cleaner. */
-                sscanf(argv[i++], "%f", &echo->delay[echo->num_delays]);
-                sscanf(argv[i++], "%f", &echo->decay[echo->num_delays]);
+                sscanf(argv[i++], "%lf", &echo->delay[echo->num_delays]);
+                sscanf(argv[i++], "%lf", &echo->decay[echo->num_delays]);
                 echo->num_delays++;
         }
         return (SOX_SUCCESS);
@@ -100,7 +100,7 @@ static int sox_echo_start(sox_effect_t * effp)
 {
         priv_t * echo = (priv_t *) effp->priv;
         int i;
-        float sum_in_volume;
+        double sum_in_volume;
         long j;
 
         echo->maxsamples = 0;
@@ -172,13 +172,11 @@ static int sox_echo_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_samp
         priv_t * echo = (priv_t *) effp->priv;
         int j;
         double d_in, d_out;
-        sox_sample_t out;
         size_t len = min(*isamp, *osamp);
         *isamp = *osamp = len;
 
         while (len--) {
-                /* Store delays as 24-bit signed longs */
-                d_in = (double) *ibuf++ / 256;
+                d_in = *ibuf++;
                 /* Compute output first */
                 d_out = d_in * echo->in_gain;
                 for ( j = 0; j < echo->num_delays; j++ ) {
@@ -186,10 +184,9 @@ static int sox_echo_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_samp
 (echo->counter + echo->maxsamples - echo->samples[j]) % echo->maxsamples]
                         * echo->decay[j];
                 }
-                /* Adjust the output volume and size to 24 bit */
+                /* Adjust the output volume */
                 d_out = d_out * echo->out_gain;
-                out = SOX_24BIT_CLIP_COUNT((sox_sample_t) d_out, effp->clips);
-                *obuf++ = out * 256;
+                *obuf++ = d_out;
                 /* Store input in delay buffer */
                 echo->delay_buf[echo->counter] = d_in;
                 /* Adjust the counter */
@@ -206,7 +203,6 @@ static int sox_echo_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *osamp
 {
         priv_t * echo = (priv_t *) effp->priv;
         double d_in, d_out;
-        sox_sample_t out;
         int j;
         size_t done;
 
@@ -220,10 +216,9 @@ static int sox_echo_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *osamp
 (echo->counter + echo->maxsamples - echo->samples[j]) % echo->maxsamples]
                         * echo->decay[j];
                 }
-                /* Adjust the output volume and size to 24 bit */
+                /* Adjust the output volume */
                 d_out = d_out * echo->out_gain;
-                out = SOX_24BIT_CLIP_COUNT((sox_sample_t) d_out, effp->clips);
-                *obuf++ = out * 256;
+                *obuf++ = d_out;
                 /* Store input in delay buffer */
                 echo->delay_buf[echo->counter] = d_in;
                 /* Adjust the counters */

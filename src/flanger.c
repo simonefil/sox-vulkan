@@ -42,7 +42,7 @@ typedef struct {
   double     delay_last[MAX_CHANNELS];
 
   /* Low Frequency Oscillator */
-  float *    lfo;
+  double *   lfo;
   size_t  lfo_length;
   size_t  lfo_pos;
 
@@ -147,7 +147,7 @@ static int start(sox_effect_t * effp)
   f->lfo = lsx_calloc(f->lfo_length, sizeof(*f->lfo));
   lsx_generate_wave_table(
       f->wave_shape,
-      SOX_FLOAT,
+      SOX_DOUBLE,
       f->lfo,
       f->lfo_length,
       floor(f->delay_min * effp->in_signal.rate + .5),

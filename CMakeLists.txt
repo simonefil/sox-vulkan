@@ -30,7 +30,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.31)
 endif()
 
 project(SoX
-    VERSION 15.1.0
+    VERSION 16.0.0
     DESCRIPTION "Sound eXchange - audio processing tool"
     LANGUAGES C
 )
@@ -39,7 +39,13 @@ project(SoX
 # of the Autotools build that no longer exists here.  It feeds VERSION and
 # SOVERSION in src/CMakeLists.txt and is independent of the project version
 # above: changing it is an ABI decision, not a release one.
-set(SOX_VERSION_MAJOR 3)
+#
+# Bumped to 4 for the fp64 pipeline: sox_sample_t is a double normalised to
+# [-1, +1) where it was a 32-bit integer.  It appears in the signature of
+# sox_read, sox_write, the packed-DSD entry points and every effect handler, and
+# an int32_t* is not a double* under any cast.  Every consumer of libsox has to
+# be recompiled; nothing about this is source- or binary-compatible.
+set(SOX_VERSION_MAJOR 4)
 set(SOX_VERSION_MINOR 0)
 set(SOX_VERSION_PATCH 0)
 

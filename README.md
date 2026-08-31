@@ -16,8 +16,9 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 2. [Build Instructions](#build-instructions)
 3. [Default Options](#default-options)
 4. [Build Options](#build-options)
-5. [Vulkan Profiles](#vulkan-profiles)
-6. [Verification](#verification)
+5. [The Sample Pipeline](#the-sample-pipeline)
+6. [Vulkan Profiles](#vulkan-profiles)
+7. [Verification](#verification)
 
 ---
 
@@ -343,6 +344,42 @@ Output:
 
 ---
 
+## The Sample Pipeline
+
+Samples travel through SoX as `double`, normalised to the half-open range
+`[-1, +1)`. `SOX_SAMPLE_MAX` is `1.0` and is a limit, not a scale factor.
+
+This is what the pipeline used to be, and what changed:
+
+| | Before | Now |
+|---|---|---|
+| `sox_sample_t` | `int32_t`, full scale `2^31 - 1` | `double`, full scale `1.0` |
+| Resolution | 32 bits | 53 bits of mantissa |
+| Between two effects | rounded back to the integer grid | passed through unchanged |
+| Where clipping happens | at every link | only where a sample leaves for a file |
+| `-e float -b 64` input | 22 bits lost | exact |
+
+A chain of neutral effects is now the exact identity. It was not before: each
+link rounded to the 32-bit grid, so ten `gain 0` in a row cost ten roundings.
+
+**This is an ABI break.** `SOVERSION` goes from 3 to 4, and every program that
+links libsox has to be recompiled — `sox_sample_t` is in the signature of
+`sox_read`, `sox_write`, the packed-DSD entry points and every effect handler.
+An `int32_t *` is not a `double *` under any cast, so there is no compatibility
+shim and none is planned.
+
+Two things to know before upgrading:
+
+- **Fewer clips are reported.** Material at or slightly over 0 dBFS used to
+  count a clip at each effect and now counts one only on the way out.
+- **CAF, W64 and MAT files written at `-b 32` by SoX 15.x and earlier are
+  wrong.** They hold integer sample magnitudes inside a 32-bit float subtype;
+  no other program reads them correctly, and SoX read them back correctly only
+  because it made the matching mistake in the other direction. Rewrite them
+  with the older SoX to a lossless integer format before upgrading.
+
+---
+
 ## Vulkan Profiles
 
 - Linux/macOS/BSD build: `./build_static_libs.sh --vulkan`
@@ -510,7 +547,7 @@ After the build completes, verify the installation. The build scripts reject exe
 
 Expected output:
 ```
-sox:      SoX v15.1.0
+sox:      SoX v16.0.0
 ```
 
 ### 2. Check Supported Formats

@@ -4,6 +4,47 @@ Change History
 This file contains a list of all changes starting after the release of
 sox-11gamma, followed by a list of prior authors and features.
 
+SoX-16.0.0
+----------
+
+The sample pipeline is now 64-bit floating point.
+
+  o sox_sample_t is a double normalised to [-1, +1) where it was a 32-bit
+    integer.  This is an ABI break, and SOVERSION goes from 3 to 4: the type
+    appears in the signature of sox_read, sox_write, the packed-DSD entry
+    points and every effect handler's flow and drain.  An int32_t* is not a
+    double* under any cast, so every consumer of libsox must be recompiled.
+    There is no compatibility path and none is planned.
+
+  o A sample is no longer requantised between effects.  A chain of ten neutral
+    effects used to accumulate ten roundings to the 32-bit grid and is now the
+    exact identity.  The internal resolution goes from 32 bits to 53.
+
+  o 64-bit float input survives the pipeline.  Reading an -e float -b 64 file
+    and writing it back used to lose 22 bits; it is now exact.
+
+Observable changes in behaviour:
+
+  o Fewer clips are reported.  Clipping happens only where a sample leaves for
+    a file, not at every link, so material that sat at or a little over 0 dBFS
+    inside the chain no longer counts a clip at each effect.
+
+  o `stat' prints "Scaled by: 1.0" where it printed "2147483647.0", and the
+    sample values `stat -s' emits are on the normalised scale.
+
+  o The temporary file `reverse' writes is twice the size it was, as are the
+    chain's own buffers.  Nothing else about memory use changed.
+
+Compatibility note, for files SoX itself wrote:
+
+  o CAF, W64 and MAT files written at -b 32 by SoX 15.x and earlier contain
+    integer sample magnitudes inside a 32-bit float subtype.  They are wrong,
+    and no other program reads them correctly; SoX read them back "correctly"
+    only because it made the matching mistake in the other direction.  This
+    release writes and reads them properly, which means such a file written by
+    an older SoX now reads at its true, very loud, value.  Rewrite the affected
+    files with the older SoX to a lossless integer format first.
+
 $ox-14.4.2	2015-02-22
 ----------
 

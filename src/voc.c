@@ -510,7 +510,7 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf,
 static void blockstop(sox_format_t * ft)
 {
   priv_t * v = (priv_t *) ft->priv;
-  sox_sample_t datum;
+  int datum;            /* un byte della lunghezza del blocco, non un campione */
 
   lsx_writeb(ft, 0);    /* End of file block code */
   lsx_seeki(ft, (off_t) v->blockseek, 0); /* seek back to block length */

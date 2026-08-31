@@ -16,6 +16,7 @@
  */
 
 #include "sox_i.h"
+#include <string.h>
 
 #ifdef HAVE_WAVPACK_H
 #define HAVE_WAVPACK 1
@@ -84,17 +85,24 @@ static int start_read(sox_format_t * ft)
 static size_t read_samples(sox_format_t * ft, sox_sample_t * buf, size_t len)
 {
   priv_t * p = (priv_t *)ft->priv;
-  size_t i, actual = WavpackUnpackSamples(p->codec, buf, (uint32_t) len / ft->signal.channels) * ft->signal.channels;
+  /* WavPack always unpacks into int32_t, whatever the encoding -- for float
+   * files it puts the float's bit pattern there.  It used to unpack straight
+   * into `buf` and convert in place, which worked only while a sample was an
+   * int32 itself; `buf` is now an array of doubles and cannot be lent out. */
+  int32_t * ibuf = lsx_malloc(len * sizeof(*ibuf));
+  size_t i, actual = WavpackUnpackSamples(p->codec, ibuf, (uint32_t) len / ft->signal.channels) * ft->signal.channels;
   for (i = 0; i < actual; ++i) switch (ft->encoding.bits_per_sample) {
-    SOX_SAMPLE_LOCALS;
-    case  8: buf[i] = SOX_SIGNED_8BIT_TO_SAMPLE(buf[i],); break;
-    case 16: buf[i] = SOX_SIGNED_16BIT_TO_SAMPLE(buf[i],); break;
-    case 24: buf[i] = SOX_SIGNED_24BIT_TO_SAMPLE(buf[i],); break;
-    case 32: buf[i] = ft->encoding.encoding == SOX_ENCODING_WAVPACKF?
-      SOX_FLOAT_32BIT_TO_SAMPLE(*(float *)&buf[i], ft->clips) :
-      SOX_SIGNED_32BIT_TO_SAMPLE(buf[i],);
-      break;
+    case  8: buf[i] = SOX_SIGNED_8BIT_TO_SAMPLE(ibuf[i],); break;
+    case 16: buf[i] = SOX_SIGNED_16BIT_TO_SAMPLE(ibuf[i],); break;
+    case 24: buf[i] = SOX_SIGNED_24BIT_TO_SAMPLE(ibuf[i],); break;
+    case 32: if (ft->encoding.encoding == SOX_ENCODING_WAVPACKF) {
+               float f;
+               memcpy(&f, &ibuf[i], sizeof(f));
+               buf[i] = SOX_FLOAT_32BIT_TO_SAMPLE(f, ft->clips);
+             } else buf[i] = SOX_SIGNED_32BIT_TO_SAMPLE(ibuf[i],);
+             break;
   }
+  free(ibuf);
   return actual;
 }
 
@@ -124,6 +132,8 @@ static int start_write(sox_format_t * ft)
   config.num_channels      = ft->signal.channels;
   config.sample_rate       = (int32_t)(ft->signal.rate + .5);
   config.flags = CONFIG_VERY_HIGH_FLAG;
+  if (ft->encoding.encoding == SOX_ENCODING_WAVPACKF)
+    config.float_norm_exp = 127;   /* samples are IEEE floats normalised to 1.0 */
   size64 = ft->signal.length / ft->signal.channels;
   if (!WavpackSetConfiguration(p->codec, &config, size64 && size64 <= UINT_MAX ? (uint32_t)size64 : (uint32_t)-1)) {
     lsx_fail_errno(ft, SOX_EHDR, "%s", WavpackGetErrorMessage(p->codec));
@@ -144,12 +154,17 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf, size_t 
     SOX_SAMPLE_LOCALS;
     case  8: obuf[i] = SOX_SAMPLE_TO_SIGNED_8BIT(buf[i], ft->clips); break;
     case 16: obuf[i] = SOX_SAMPLE_TO_SIGNED_16BIT(buf[i], ft->clips); break;
-    case 24: obuf[i] = SOX_SAMPLE_TO_SIGNED_24BIT(buf[i], ft->clips) << 8;
-             obuf[i] >>= 8; break;
-    case 32: obuf[i] = ft->encoding.encoding == SOX_ENCODING_WAVPACKF?
-      SOX_SAMPLE_TO_SIGNED_24BIT(*(float *)&buf[i], ft->clips) :
-      SOX_SAMPLE_TO_SIGNED_32BIT(buf[i], ft->clips);
-      break;
+    /* SOX_SAMPLE_TO_SIGNED_24BIT already clamps to [-2^23, 2^23), so the
+     * shift pair that used to sign-extend it is now provably a no-op. */
+    case 24: obuf[i] = SOX_SAMPLE_TO_SIGNED_24BIT(buf[i], ft->clips); break;
+    case 32: if (ft->encoding.encoding == SOX_ENCODING_WAVPACKF) {
+               /* Float files carry the float's bit pattern in the int32 slot;
+                * the old spelling read one out of the sample's own storage,
+                * which was an int32 holding no float at all. */
+               float f = SOX_SAMPLE_TO_FLOAT_32BIT(buf[i], ft->clips);
+               memcpy(&obuf[i], &f, sizeof(f));
+             } else obuf[i] = SOX_SAMPLE_TO_SIGNED_32BIT(buf[i], ft->clips);
+             break;
   }
   result = WavpackPackSamples(p->codec, obuf, (uint32_t) len / ft->signal.channels);
   free(obuf);

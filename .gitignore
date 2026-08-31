@@ -24,3 +24,9 @@ __pycache__/
 # Finder metadata
 .DS_Store
 /.idea/
+
+# Directory di lavoro della migrazione fp64 e dipendenze statiche
+build-fp64/
+build-wv/
+static_libs
+static_libs_keep/

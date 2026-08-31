@@ -517,7 +517,9 @@ static size_t sox_mp3read(sox_format_t * ft, sox_sample_t *buf, size_t len)
                     sample=-MAD_F_ONE;
                 else if (sample >= MAD_F_ONE)
                     sample=MAD_F_ONE-1;
-                *buf++=(sox_sample_t)(sample<<(32-1-MAD_F_FRACBITS));
+                /* mad_fixed_t has MAD_F_FRACBITS fractional bits; dividing by
+                 * their scale is exact and says what the shift used to say. */
+                *buf++=(sox_sample_t)sample / (double)MAD_F_ONE;
                 i++;
             }
             p->cursamp++;

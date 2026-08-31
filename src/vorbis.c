@@ -196,7 +196,7 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf, size_t len)
   priv_t * vb = (priv_t *) ft->priv;
   size_t i;
   int ret;
-  sox_sample_t l;
+  int l;
 
 
   for (i = 0; i < len; i++) {
@@ -211,9 +211,10 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf, size_t len)
       }
     }
 
-    l = (vb->buf[vb->start + 1] << 24)
-        | (0xffffff & (vb->buf[vb->start] << 16));
-    *(buf + i) = l;
+    /* refill_buffer asks ov_read for signed 16-bit little-endian words. */
+    l = (int16_t)(((unsigned)(unsigned char)vb->buf[vb->start + 1] << 8)
+        | (unsigned char)vb->buf[vb->start]);
+    *(buf + i) = SOX_SIGNED_16BIT_TO_SAMPLE(l,);
     vb->start += 2;
   }
   return i;
@@ -355,8 +356,8 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf,
   /* Copy samples into vorbis buffer */
   for (i = 0; i < samples; i++)
     for (j = 0; j < ft->signal.channels; j++)
-      buffer[j][i] = buf[i * ft->signal.channels + j]
-          / ((float) SOX_SAMPLE_MAX);
+      buffer[j][i] = SOX_SAMPLE_TO_FLOAT_32BIT(
+          buf[i * ft->signal.channels + j], ft->clips);
 
   vorbis_analysis_wrote(&ve->vd, (int) samples);
 

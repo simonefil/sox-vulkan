@@ -753,10 +753,16 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
   effp1->obeg += idone;
   if (effp1->obeg == effp1->oend)
     effp1->obeg = effp1->oend = 0;
-  else if (effp1->oend - effp1->obeg < effp->imin) { /* Need to refill? */
+  /* Slide the leftover down to the front when the effect needs more before
+   * it will run again, and also when the buffer has filled to its end: there
+   * the free space is nil, so the producer would next be asked to make zero
+   * samples, and drain reads that as end of input and retires the source
+   * mid-stream.  The two blocks can overlap, hence memmove. */
+  else if (effp1->oend - effp1->obeg < effp->imin ||
+      effp1->oend == sox_globals.bufsiz) {
     size_t flow_offs = sox_globals.bufsiz/effp->flows;
     for (f = 0; f < effp->flows; ++f)
-      memcpy(effp1->obuf + f * flow_offs,
+      memmove(effp1->obuf + f * flow_offs,
           effp1->obuf + f * flow_offs + effp1->obeg/effp->flows,
           (effp1->oend - effp1->obeg)/effp->flows * sizeof(*effp1->obuf));
     effp1->oend -= effp1->obeg;

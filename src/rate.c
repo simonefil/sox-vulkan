@@ -112,18 +112,35 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_transform_endpoint = {
 
 #define coef(coef_p, interp_order, fir_len, phase_num, coef_interp_num, fir_coef_num) coef_p[(fir_len) * ((interp_order) + 1) * (phase_num) + ((interp_order) + 1) * (fir_coef_num) + (interp_order - coef_interp_num)]
 
-static sample_t * prepare_coefs(raw_coef_t const * coefs, int num_coefs,
-    int num_phases, int interp_order, int multiplier)
+/* coef_lows, when given, is the low half of a double-double response, and
+ * result_low receives it laid out the same way as result.  Only interpolation
+ * order zero carries it: the deltas of a higher order would have to be formed
+ * in double-double as well, and a stage that has them never reaches the
+ * device -- rate_vulkan_plan_supported turns the whole plan back to the CPU
+ * on interp_order != 0 -- so there is nothing there to carry them for. */
+static sample_t * prepare_coefs(raw_coef_t const * coefs,
+    raw_coef_t const * coef_lows, int num_coefs,
+    int num_phases, int interp_order, int multiplier,
+    sample_t * * result_low)
 {
   int i, j, length = num_coefs4 * num_phases;
   sample_t * result = malloc(length * (interp_order + 1) * sizeof(*result));
+  sample_t * low = coef_lows && !interp_order ?
+      malloc(length * sizeof(*low)) : NULL;
   double fm1 = coefs[0], f1 = 0, f2 = 0;
+  double fm1_low = low ? coef_lows[0] : 0;
 
+  if (result_low)
+    *result_low = low;
   for (i = num_coefs4 - 1; i >= 0; --i)
     for (j = num_phases - 1; j >= 0; --j) {
       double f0 = fm1, b = 0, c = 0, d = 0; /* = 0 to kill compiler warning */
+      double f0_low = fm1_low;
       int pos = i * num_phases + j - 1;
       fm1 = coefs4_check(i) && pos > 0 ? coefs[pos - 1] * multiplier : 0;
+      if (low)
+        fm1_low = coefs4_check(i) && pos > 0 ?
+            coef_lows[pos - 1] * multiplier : 0;
       switch (interp_order) {
         case 1: b = f1 - f0; break;
         case 2: b = f1 - (.5 * (f2+f0) - f1) - f0; c = .5 * (f2+f0) - f1; break;
@@ -133,6 +150,8 @@ static sample_t * prepare_coefs(raw_coef_t const * coefs, int num_coefs,
       #define coef_coef(x) \
         coef(result, interp_order, num_coefs4, j, x, num_coefs4 - 1 - i)
       coef_coef(0) = f0;
+      if (low)
+        coef(low, 0, num_coefs4, j, 0, num_coefs4 - 1 - i) = f0_low;
       if (interp_order > 0) coef_coef(1) = b;
       if (interp_order > 1) coef_coef(2) = c;
       if (interp_order > 2) coef_coef(3) = d;
@@ -144,6 +163,11 @@ static sample_t * prepare_coefs(raw_coef_t const * coefs, int num_coefs,
 
 typedef struct { /* So generated filter coefs may be shared between channels */
   sample_t   * poly_fir_coefs;
+#if HAVE_VULKAN
+  /* The low halves of poly_fir_coefs, when the response was designed in
+   * double-double.  NULL whenever it was not; see prepare_coefs. */
+  sample_t   * poly_fir_coef_lows;
+#endif
   dft_filter_t dft_filter[2];
   /* The fused DSD response, when the plan has one.  Kept in host doubles
    * rather than sample_t: it is designed once and handed to the device, and
@@ -330,7 +354,23 @@ static void dft_stage_init(
   if (!f->num_taps) {
     int num_taps = 0, dft_length, i;
     int k = phase == 50 && lsx_is_power_of_2(L) && Fn == L? L << 1 : 4;
-    double * h = lsx_design_lpf(Fp, Fs, Fn, att, &num_taps, -k, -1.);
+    double * h;
+#if HAVE_VULKAN
+    /* The low halves are worth designing only where something can carry
+     * them: the reference profile's double-double arithmetic, and a linear
+     * phase.  lsx_fir_to_phase rebuilds the response through fp64 transforms,
+     * so for any other phase the pair would be thrown away here anyway. */
+    double * low = NULL;
+
+    h = lsx_design_lpf_dd(Fp, Fs, Fn, att, &num_taps, -k, -1.,
+        phase == 50 && sox_globals.vulkan_profile == sox_vulkan_profile_reference?
+            &low : NULL);
+    f->low_taps = low;
+    if (low)
+      lsx_report("DFT stage designed in double-double: %i taps", num_taps);
+#else
+    h = lsx_design_lpf(Fp, Fs, Fn, att, &num_taps, -k, -1.);
+#endif
 
     if (phase != 50)
       lsx_fir_to_phase(&h, &num_taps, &f->post_peak, phase);
@@ -487,7 +527,9 @@ static void rate_plan_create(
   stage_t * s;
 
   assert(factor > 0);
-  assert(!bits || (15 <= bits && bits <= 33));
+  /* 46 is as deep as -d goes; the -z preset reaches past it to the
+   * double-double's own floor. */
+  assert(!bits || (15 <= bits && bits <= 105));
   assert(0 <= phase && phase <= 100);
   assert(53 <= bw_pc && bw_pc <= 100);
   assert(85 <= anti_aliasing_pc && anti_aliasing_pc <= 100);
@@ -593,7 +635,15 @@ static void rate_plan_create(
     arb_stage.out_in_ratio = MULT32 * arbL / arb_stage.step.all;
   }
   else if (have_arb_stage) {                     /* Higher quality arb stage: */
-    poly_fir_t const * f = &poly_firs[6*(upsample + !!preM) + mode - !upsample];
+    /* `mode' grows with the design bit-depth, but the table it indexes is
+     * three blocks of fixed size: past the end of a block the index walks
+     * into the fixed-beta u100 entries, and past the last one it leaves the
+     * array altogether.  Clamping here keeps `mode' itself intact for the
+     * thresholds below, which are what it is really for. */
+    int poly_block = 6*(upsample + !!preM);
+    int poly_last = poly_block == 12? 18 : poly_block + 5;
+    poly_fir_t const * f = &poly_firs[range_limit(
+        poly_block + mode - !upsample, poly_block, poly_last)];
     int order, num_coefs = f->interp[0].scalar, phase_bits, phases, coefs_size;
     double x = .5, at, Fp, Fs, Fn, mult = upsample? 1 : arbL / arbM;
     poly_fir1_t const * f1;
@@ -630,12 +680,29 @@ static void rate_plan_create(
 
     if (!arb_stage.shared->poly_fir_coefs) {
       int num_taps = num_coefs * phases - 1;
-      raw_coef_t * coefs = lsx_design_lpf(
-          Fp, Fs, Fn, attArb, &num_taps, phases, f->beta);
+      raw_coef_t * coef_lows = NULL;
+      raw_coef_t * coefs;
+      sample_t * lows = NULL;
+
+#if HAVE_VULKAN
+      coefs = lsx_design_lpf_dd(Fp, Fs, Fn, attArb, &num_taps, phases,
+          f->beta,
+          sox_globals.vulkan_profile == sox_vulkan_profile_reference?
+              &coef_lows : NULL);
+#else
+      coefs = lsx_design_lpf(Fp, Fs, Fn, attArb, &num_taps, phases, f->beta);
+#endif
       arb_stage.shared->poly_fir_coefs = prepare_coefs(
-          coefs, num_coefs, phases, order, 1);
+          coefs, coef_lows, num_coefs, phases, order, 1, &lows);
+#if HAVE_VULKAN
+      arb_stage.shared->poly_fir_coef_lows = lows;
+      if (lows)
+        lsx_report("polyphase stage designed in double-double: "
+            "%i taps, %i phases", num_coefs, phases);
+#endif
       lsx_debug("fir_len=%i phases=%i coef_interp=%i size=%s",
           num_coefs, phases, order, lsx_sigfigs3((double)coefs_size));
+      free(coef_lows);
       free(coefs);
     }
     arb_stage.kind = rate_stage_poly_fir;
@@ -693,6 +760,11 @@ static void rate_plan_destroy(rate_plan_t * p)
   free(shared->dft_filter[0].taps);
   free(shared->dft_filter[1].coefs);
   free(shared->dft_filter[1].taps);
+#if HAVE_VULKAN
+  free(shared->dft_filter[0].low_taps);
+  free(shared->dft_filter[1].low_taps);
+  free(shared->poly_fir_coef_lows);
+#endif
   free(shared->poly_fir_coefs);
   free(shared->dsd_taps);
   memset(shared, 0, sizeof(*shared));
@@ -1454,13 +1526,21 @@ static int rate_vulkan_start(sox_effect_t *effp)
             stage->L, stage->M, taps_per_phase);
       }
       else {
-        executor->dft = lsx_rate_vulkan_create(
-            vulkan, filter->taps,
-            (size_t)filter->num_taps,
-            (size_t)filter->post_peak,
-            (uint32_t)stage->L,
-            (uint32_t)stage->M,
-            (uint32_t)channels);
+        executor->dft = filter->low_taps?
+            lsx_rate_vulkan_create_reference_dd(
+                vulkan, filter->taps, filter->low_taps,
+                (size_t)filter->num_taps,
+                (size_t)filter->post_peak,
+                (uint32_t)stage->L,
+                (uint32_t)stage->M,
+                (uint32_t)channels) :
+            lsx_rate_vulkan_create(
+                vulkan, filter->taps,
+                (size_t)filter->num_taps,
+                (size_t)filter->post_peak,
+                (uint32_t)stage->L,
+                (uint32_t)stage->M,
+                (uint32_t)channels);
         if (!executor->dft)
           goto error;
       }
@@ -1486,7 +1566,14 @@ static int rate_vulkan_start(sox_effect_t *effp)
       uint32_t phase_step = half_taps ? 2u : (uint32_t)stage->M;
       uint32_t phase_start = half_taps ? 0u : (uint32_t)stage->at.parts.integer;
 
-      executor->polyphase = lsx_rate_polyphase_vulkan_create(vulkan, coefficients, taps, phase_count, phase_step, phase_start, (uint32_t)channels, (uint32_t)stage->preload, half_taps != NULL);
+      /* Half-band taps are built here in fp64 and have no low halves; the
+       * shared polyphase response has them whenever it was designed with
+       * them. */
+      double const *coefficient_lows = half_taps ? NULL : stage->shared->poly_fir_coef_lows;
+
+      executor->polyphase = coefficient_lows?
+          lsx_rate_polyphase_vulkan_create_reference_dd(vulkan, coefficients, coefficient_lows, taps, phase_count, phase_step, phase_start, (uint32_t)channels, (uint32_t)stage->preload, half_taps != NULL) :
+          lsx_rate_polyphase_vulkan_create(vulkan, coefficients, taps, phase_count, phase_step, phase_start, (uint32_t)channels, (uint32_t)stage->preload, half_taps != NULL);
       free(half_taps);
       if (!executor->polyphase)
         goto error;
@@ -1532,7 +1619,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
   priv_t * p = (priv_t *) effp->priv;
   int c, quality;
   char * dummy_p, * found_at;
-  char const * opts = "+i:c:b:B:A:p:Q:R:d:MILafnost" "qlmghevu";
+  char const * opts = "+i:c:b:B:A:p:Q:R:d:MILafnost" "qlmghevuxz";
   char const * qopts = strchr(opts, 'q');
   double rej = 0, bw_3dB_pc = 0;
   sox_bool allow_aliasing = sox_false;
@@ -1551,7 +1638,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     GETOPT_NUMERIC(optstate, 'p', phase, 0, 100)
     GETOPT_NUMERIC(optstate, 'B', bw_0dB_pc, 53, 99.5)
     GETOPT_NUMERIC(optstate, 'A', anti_aliasing_pc, 85, 100)
-    GETOPT_NUMERIC(optstate, 'd', bit_depth, 15, 33)
+    GETOPT_NUMERIC(optstate, 'd', bit_depth, 15, 46)
     GETOPT_LOCAL_NUMERIC(optstate, 'b', bw_3dB_pc, 74, 99.7)
     GETOPT_LOCAL_NUMERIC(optstate, 'R', rej, 90, 200)
     GETOPT_LOCAL_NUMERIC(optstate, 'Q', quality, 0, 7)
@@ -1596,13 +1683,33 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     p->bit_depth = rej / linear_to_dB(2.);
   else {
     if (quality >= 0) {
-      p->bit_depth = quality? 16 + 4 * max(quality - 3, 0) : 0;
+      /* The scale steps by four bits up to `u'; `x' jumps to 46 because
+       * that is where the measured residual stops following the designed
+       * attenuation and the fp64 accumulation becomes the floor.  A deeper
+       * design from here only lengthens the filter.
+       *
+       * `z' goes past that floor because one arithmetic can see past it: the
+       * reference profile carries a double-double, whose 106 bits are 638 dB,
+       * and 105 design bits is the deepest stop-band that lands above it
+       * rather than below.  Anywhere else this is a filter nothing can
+       * render, which is why it says so below. */
+      p->bit_depth = quality? quality > 8? 105 : quality > 7? 46 :
+          16 + 4 * max(quality - 3, 0) : 0;
       if (quality <= 2)
         p->rolloff = rolloff_medium;
     }
     rej = p->bit_depth * linear_to_dB(2.);
   }
   p->vulkan_eligible = quality >= 0;
+  /* The deepest level is designed against the double-double, and only the
+   * reference profile has one.  Everywhere else the stop-band it asks for is
+   * some 350 dB below what the arithmetic can resolve, so the taps are paid
+   * for and nothing comes back.  The setting stands -- it is what was asked
+   * for -- but it does not stand silently. */
+  if (quality > 8 && sox_globals.vulkan_profile != sox_vulkan_profile_reference)
+    lsx_warn("-z is designed for the Vulkan reference profile; "
+        "without it the arithmetic resolves about 283 dB, not %g",
+        p->bit_depth * linear_to_dB(2.));
 
   if (bw_3dB_pc && p->bw_0dB_pc) {
     lsx_fail("conflicting bandwidth options");
@@ -1902,6 +2009,11 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
             lsx_fail("resident Vulkan chained DFT stage failed");
             return SOX_EOF;
           }
+          /* The filter's latency can outlast a whole block, and those first
+           * blocks produce nothing: read the next one rather than forward an
+           * empty buffer downstream. */
+          if (!resident.valid_elements)
+            continue;
           if (index + 1u < final_stream_index) {
             /*
              * Every polyphase stage in the chain has a block limit, so the
@@ -1939,6 +2051,11 @@ static int process_vulkan_stages(sox_effect_t *effp, size_t stage_count, sox_boo
             lsx_fail("resident Vulkan DFT stage failed");
             return SOX_EOF;
           }
+          /* The filter's latency can outlast a whole block, and those first
+           * blocks produce nothing: read the next one rather than forward an
+           * empty buffer downstream. */
+          if (!resident.valid_elements)
+            continue;
           if (process_vulkan_resident_polyphase_to_host(
                   polyphase, &resident,
                   &p->vulkan_fifos[index + 2u],
@@ -2135,7 +2252,7 @@ static int take_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_s
   input = fifo_read(input_fifo, block_samples, NULL);
   if (lsx_rate_vulkan_process_resident(last->dft, input, effp->out_signal.rate, p->rate.samples_out / channels, state, normalize, resident) != SOX_SUCCESS)
     return SOX_EOF;
-  *produced = sox_true;
+  *produced = resident->valid_elements ? sox_true : sox_false;
   return SOX_SUCCESS;
 }
 
@@ -2745,7 +2862,7 @@ sox_effect_handler_t const * lsx_rate_effect_fn(void)
     "rate", 0, SOX_EFF_RATE, create, start, flow, drain, stop, 0, sizeof(priv_t)
   };
   static char const * lines[] = {
-    "[-q|-l|-m|-h|-v] [override-options] RATE[k]",
+    "[-q|-l|-m|-h|-v|-x|-z] [override-options] RATE[k]",
     "                    BAND-",
     "     QUALITY        WIDTH  REJ dB   TYPICAL USE",
     " -q  quick          n/a  ~30 @ Fs/4 playback on ancient hardware",
@@ -2753,7 +2870,9 @@ sox_effect_handler_t const * lsx_rate_effect_fn(void)
     " -m  medium         95%     100     audio playback",
     " -h  high (default) 95%     125     16-bit mastering (use with dither)",
     " -v  very high      95%     175     24-bit mastering",
-    "              OVERRIDE OPTIONS (only with -m, -h, -v)",
+    " -x  extreme        95%     275     floating-point mastering",
+    " -z  overkill       94%     632     double-double, Vulkan reference",
+    "              OVERRIDE OPTIONS (only with -m, -h, -v, -x, -z)",
     " -M/-I/-L     Phase response = minimum/intermediate/linear(default)",
     " -s           Steep filter (band-width = 99%)",
     " -a           Allow aliasing above the pass-band",

@@ -753,8 +753,9 @@ static int run_resident_selection(
  *
  * The phase is advanced on every path, the empty one included: a block that
  * yields nothing still consumed frames, and forgetting them would shift every
- * later block.  allow_empty says whether that is acceptable to the caller --
- * for the streaming path it is normal, for a single block it is a bug.
+ * later block.  allow_empty says whether that is acceptable to the caller:
+ * every caller that can recognise an empty result and simply not forward it
+ * passes true, which is what lets a filter longer than one block prime.
  *
  * The published buffer is interleaved rather than planar, unlike the FIR's:
  * the selection shader writes it that way because the eventual consumer or
@@ -1345,5 +1346,8 @@ int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *i
     lsx_fail("resident Vulkan rate FIR failed");
     return SOX_EOF;
   }
-  return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, sox_false, resident);
+  /* An empty block is legitimate here too: when the filter's latency exceeds
+   * a whole block -- which it does past about 32k taps -- the first calls are
+   * pure priming and have nothing to hand over yet. */
+  return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, sox_true, resident);
 }

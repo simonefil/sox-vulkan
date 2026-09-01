@@ -114,6 +114,14 @@ double * lsx_design_lpf(
     int * num_taps, /* 0: value will be estimated */
     int k,          /* >0: number of phases; <0: num_taps ≡ 1 (mod -k) */
     double beta);   /* <0: value will be estimated */
+/* The same design, with the low halves of a double-double computation of it
+ * written to *low as well.  The high halves are the return value and are the
+ * design lsx_design_lpf would have returned, to within one ulp: the caller
+ * that ignores *low sees no difference.  *low is set to NULL, and the fp64
+ * designer is used, wherever the double-double one is not built. */
+double * lsx_design_lpf_dd(
+    double Fp, double Fs, double Fn, double att,
+    int * num_taps, int k, double beta, double * * low);
 void lsx_fir_to_phase(double * * h, int * len,
     int * post_len, double phase0);
 void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, char const * title, double y1, double y2);

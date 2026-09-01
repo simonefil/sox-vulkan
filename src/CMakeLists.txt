@@ -943,15 +943,20 @@ if(HAVE_VULKAN)
         vulkan_fft.c
         vulkan_fft_cache.c
         vulkan_fft_dd.cpp
+        rate_design_dd.cpp
         vulkan_engine.c
     )
     set_source_files_properties(vulkan_fft_dd.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_dd"
         COMPILE_DEFINITIONS VKFFT_USE_DOUBLEDOUBLE_FP128)
+    # The filter designer needs the same shim, and nothing else from VkFFT.
+    set_source_files_properties(rate_design_dd.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_dd")
     if(IS_WINDOWS)
         list(APPEND LIBSOX_EFFECTS_SOURCES glslang_dynamic.c)
     endif()
     list(APPEND LIBSOX_EFFECTS_HEADERS
+        rate_design_dd.h
         fir_vulkan.h
         rate_cubic_vulkan.h
         rate_vulkan.h

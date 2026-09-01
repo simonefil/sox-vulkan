@@ -11,6 +11,12 @@
 typedef struct {
   int        dft_length, num_taps, post_peak;
   double     * coefs, * taps;
+#if HAVE_VULKAN
+  /* The low halves of taps, when the response was designed in double-double.
+   * NULL whenever it was not: the fp64 design is the same filter, so a NULL
+   * here means "no extra precision to carry", never "no response". */
+  double     * low_taps;
+#endif
 } dft_filter_t;
 
 #if HAVE_VULKAN

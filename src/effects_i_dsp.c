@@ -23,6 +23,9 @@
 #endif
 
 #include "sox_i.h"
+#if HAVE_VULKAN
+#include "rate_design_dd.h"
+#endif
 #include "diagnostics.h"
 #include <assert.h>
 #include <string.h>
@@ -408,14 +411,15 @@ void lsx_kaiser_params(double att, double Fc, double tr_bw, double * beta, int *
   *num_taps = !*num_taps? ceil(att/tr_bw + 1) : *num_taps;
 }
 
-double * lsx_design_lpf(
+double * lsx_design_lpf_dd(
     double Fp,      /* End of pass-band */
     double Fs,      /* Start of stop-band */
     double Fn,      /* Nyquist freq; e.g. 0.5, 1, PI */
     double att,     /* Stop-band attenuation in dB */
     int * num_taps, /* 0: value will be estimated */
     int k,          /* >0: number of phases; <0: num_taps ≡ 1 (mod -k) */
-    double beta)    /* <0: value will be estimated */
+    double beta,    /* <0: value will be estimated */
+    double * * low) /* NULL: no low halves are wanted */
 {
   int n = *num_taps, phases = max(k, 1), modulo = max(-k, 1);
   double tr_bw, Fc, rho = phases == 1? .5 : att < 120? .63 : .75;
@@ -429,8 +433,28 @@ double * lsx_design_lpf(
   lsx_kaiser_params(att, Fc, tr_bw, &beta, num_taps);
   if (!n)
     *num_taps = phases > 1? *num_taps / phases * phases + phases - 1 : (*num_taps + modulo - 2) / modulo * modulo + 1;
-  return Fn < 0? 0 : lsx_make_lpf(
-      *num_taps, Fc, beta, rho, (double)phases, sox_false);
+  if (low)
+    *low = NULL;
+  if (Fn < 0)
+    return 0;
+#if HAVE_VULKAN
+  if (low) {
+    double * h = lsx_calloc((size_t)*num_taps, sizeof(*h));
+
+    *low = lsx_calloc((size_t)*num_taps, sizeof(**low));
+    lsx_make_lpf_dd(*num_taps, Fc, beta, rho, (double)phases, sox_false,
+        h, *low);
+    return h;
+  }
+#endif
+  return lsx_make_lpf(*num_taps, Fc, beta, rho, (double)phases, sox_false);
+}
+
+double * lsx_design_lpf(
+    double Fp, double Fs, double Fn, double att,
+    int * num_taps, int k, double beta)
+{
+  return lsx_design_lpf_dd(Fp, Fs, Fn, att, num_taps, k, beta, NULL);
 }
 
 static double safe_log(double x)

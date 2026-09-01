@@ -185,7 +185,7 @@ static double const *host_samples(lsx_rate_polyphase_vulkan_t *context, size_t c
   return context->host_output;
 }
 
-static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *coefficients)
+static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *coefficients, double const *coefficient_lows)
 {
   VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   VkDeviceSize sample_bytes = sample_size(context);
@@ -219,9 +219,10 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
 
       if (context->reference_dd) {
         double *target_values = (double *)context->coefficients.mapped + 2u * target;
+        size_t source = (size_t)phase * context->parameters.taps + tap;
 
         target_values[0] = value;
-        target_values[1] = 0.;
+        target_values[1] = coefficient_lows ? coefficient_lows[source] : 0.;
       }
       else if (context->precise_fp32) {
         float high = (float)value;
@@ -349,7 +350,12 @@ static int create_commands(lsx_rate_polyphase_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum)
+/* The one body behind both entry points.  coefficient_lows is the low half of
+ * a double-double response and is used only where the device arithmetic can
+ * hold it: outside the reference profile the pair has nowhere to go, so it is
+ * ignored rather than refused.  Passing NULL is what every other profile
+ * does, and leaves the low halves zero as before. */
+static lsx_rate_polyphase_vulkan_t *polyphase_create(lsx_vulkan_context_t *vulkan, double const *coefficients, double const *coefficient_lows, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum)
 {
   lsx_rate_polyphase_vulkan_t *context;
   uint64_t max_output_frames;
@@ -379,14 +385,15 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
   context->phase_start = phase_start;
   context->max_output_frames = (uint32_t)max_output_frames;
   context->resident_occupancy_frames = resident_preload_frames;
-  if (create_buffers(context, coefficients) != SOX_SUCCESS || create_pipeline(context) != SOX_SUCCESS || create_commands(context) != SOX_SUCCESS)
+  if (create_buffers(context, coefficients, coefficient_lows) != SOX_SUCCESS || create_pipeline(context) != SOX_SUCCESS || create_commands(context) != SOX_SUCCESS)
     goto error;
   lsx_report(
       "Vulkan rate polyphase: %u/%u, %u taps/phase, "
       "%u channel%s, %s%s",
       phase_count, phase_step, taps, channels,
       channels == 1u ? "" : "s",
-      context->reference_dd ? "FP64x2" :
+      context->reference_dd ?
+          (coefficient_lows ? "FP64x2, double-double coefficients" : "FP64x2") :
       context->double_precision ? "FP64" :
       context->precise_fp32 ? "FP32x2" : "FP32",
       symmetric_presum ? ", symmetric presumming" : "");
@@ -394,6 +401,16 @@ lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context
 
 error: lsx_rate_polyphase_vulkan_destroy(context);
   return NULL;
+}
+
+lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum)
+{
+  return polyphase_create(vulkan, coefficients, NULL, taps, phase_count, phase_step, phase_start, channels, resident_preload_frames, symmetric_presum);
+}
+
+lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create_reference_dd(lsx_vulkan_context_t *vulkan, double const *coefficient_highs, double const *coefficient_lows, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum)
+{
+  return polyphase_create(vulkan, coefficient_highs, coefficient_lows, taps, phase_count, phase_step, phase_start, channels, resident_preload_frames, symmetric_presum);
 }
 
 void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context)

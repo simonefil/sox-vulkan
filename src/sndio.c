@@ -28,12 +28,20 @@ struct sndio_priv {
 
 /*
  * convert ``count'' samples from sox encoding to sndio encoding
+ *
+ * The shift below is how a 32-bit sample became a ``bits''-bit one, and it
+ * still is; what changed is that a sample is no longer that 32-bit integer, so
+ * it has to be made into one first.  For a sample the old pipeline could carry
+ * the two spellings agree exactly, and the conversion adds the clipping the
+ * reader used to do.
  */
 static void encode(struct sio_par *par,
-    sox_sample_t const *idata, unsigned char *odata, unsigned count)
+    sox_sample_t const *idata, unsigned char *odata, unsigned count,
+    uint64_t *clips)
 {
   int obnext, osnext, s, osigbit;
   unsigned oshift, obps, i;
+  SOX_SAMPLE_LOCALS;
 
   obps = par->bps;
   osigbit = par->sig ? 0 : 1 << (par->bits - 1);
@@ -47,7 +55,7 @@ static void encode(struct sio_par *par,
     osnext = 2 * par->bps;
   }
   for (; count > 0; count--) {
-    s = (*idata++ >> oshift) ^ osigbit;
+    s = (SOX_SAMPLE_TO_SIGNED_32BIT(*idata++, *clips) >> oshift) ^ osigbit;
     for (i = obps; i > 0; i--) {
       *odata = (unsigned char)s;
       s >>= 8;
@@ -84,7 +92,7 @@ static void decode(struct sio_par *par,
       idata += ibnext;
     }
     idata += isnext;
-    *odata++ = (s ^ isigbit) << ishift;
+    *odata++ = SOX_SIGNED_32BIT_TO_SAMPLE((s ^ isigbit) << ishift,);
   }
 }
 
@@ -213,7 +221,7 @@ static size_t writesamples(sox_format_t *ft, const sox_sample_t *buf, size_t len
     sc = spb;
     if (sc > todo)
       sc = todo;
-    encode(&p->par, buf, p->buf, sc);
+    encode(&p->par, buf, p->buf, sc, &ft->clips);
     n = sio_write(p->hdl, p->buf, (size_t)(sc * p->par.bps));
     if (n == 0 && sio_eof(p->hdl))
       break;

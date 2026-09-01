@@ -273,7 +273,7 @@ static void doVolume(double *v, double samp, comp_band_t * l, size_t chan)
     *v += delta * l->decayRate[chan];
 }
 
-static int sox_mcompand_flow_1(sox_effect_t * effp, priv_t * c, comp_band_t * l, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len, size_t filechans)
+static int sox_mcompand_flow_1(priv_t * c, comp_band_t * l, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len, size_t filechans)
 {
   size_t idone, odone;
 
@@ -301,12 +301,9 @@ static int sox_mcompand_flow_1(sox_effect_t * effp, priv_t * c, comp_band_t * l,
       int ch = l->expectedChannels > 1 ? chan : 0;
       double level_in_lin = l->volume[ch];
       double level_out_lin = lsx_compandt(&l->transfer_fn, level_in_lin);
-      double checkbuf;
 
       if (c->delay_buf_size <= 0) {
-        checkbuf = ibuf[chan] * level_out_lin;
-        SOX_SAMPLE_CLIP_COUNT(checkbuf, effp->clips);
-        obuf[odone++] = checkbuf;
+        obuf[odone++] = ibuf[chan] * level_out_lin;
         idone++;
       } else {
         /* FIXME: note that this lookahead algorithm is really lame:
@@ -323,9 +320,7 @@ static int sox_mcompand_flow_1(sox_effect_t * effp, priv_t * c, comp_band_t * l,
            band's delay and the longest delay of all the bands. */
 
         if (l->delay_buf_cnt >= l->delay_size) {
-          checkbuf = l->delay_buf[(l->delay_buf_ptr + c->delay_buf_size - l->delay_size)%c->delay_buf_size] * level_out_lin;
-          SOX_SAMPLE_CLIP_COUNT(checkbuf, effp->clips);
-          l->delay_buf[(l->delay_buf_ptr + c->delay_buf_size - l->delay_size)%c->delay_buf_size] = checkbuf;
+          l->delay_buf[(l->delay_buf_ptr + c->delay_buf_size - l->delay_size)%c->delay_buf_size] *= level_out_lin;
         }
         if (l->delay_buf_cnt >= c->delay_buf_size) {
           obuf[odone] = l->delay_buf[l->delay_buf_ptr];
@@ -365,7 +360,6 @@ static int flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sample_t *obu
   size_t len = min(*isamp, *osamp);
   size_t band, i;
   sox_sample_t *abuf, *bbuf, *cbuf, *oldabuf, *ibuf_copy;
-  double out;
 
   if (c->band_buf_len < len) {
     c->band_buf1 = lsx_realloc(c->band_buf1,len*sizeof(sox_sample_t));
@@ -393,12 +387,10 @@ static int flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sample_t *obu
     }
     if (abuf == ibuf_copy)
       abuf = c->band_buf3;
-    (void)sox_mcompand_flow_1(effp, c,l,bbuf,abuf,len, (size_t)effp->out_signal.channels);
+    (void)sox_mcompand_flow_1(c,l,bbuf,abuf,len, (size_t)effp->out_signal.channels);
     for (i=0;i<len;++i)
     {
-      out = (double)obuf[i] + (double)abuf[i];
-      SOX_SAMPLE_CLIP_COUNT(out, effp->clips);
-      obuf[i] = out;
+      obuf[i] += abuf[i];
     }
     oldabuf = abuf;
     abuf = cbuf;
@@ -412,18 +404,15 @@ static int flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sample_t *obu
   return SOX_SUCCESS;
 }
 
-static int sox_mcompand_drain_1(sox_effect_t * effp, priv_t * c, comp_band_t * l, sox_sample_t *obuf, size_t maxdrain)
+static int sox_mcompand_drain_1(priv_t * c, comp_band_t * l, sox_sample_t *obuf, size_t maxdrain)
 {
   size_t done;
-  double out;
 
   /*
    * Drain out delay samples.  Note that this loop does all channels.
    */
   for (done = 0;  done < maxdrain  &&  l->delay_buf_cnt > 0;  done++) {
-    out = obuf[done] + l->delay_buf[l->delay_buf_ptr++];
-    SOX_SAMPLE_CLIP_COUNT(out, effp->clips);
-    obuf[done] = out;
+    obuf[done] += l->delay_buf[l->delay_buf_ptr++];
     l->delay_buf_ptr %= c->delay_buf_size;
     l->delay_buf_cnt--;
   }
@@ -447,7 +436,7 @@ static int drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *osamp)
   memset(obuf,0,*osamp * sizeof *obuf);
   for (band=0;band<c->nBands;++band) {
     l = &c->bands[band];
-    drained = sox_mcompand_drain_1(effp, c,l,obuf,*osamp);
+    drained = sox_mcompand_drain_1(c,l,obuf,*osamp);
     if (drained > mostdrained)
       mostdrained = drained;
   }

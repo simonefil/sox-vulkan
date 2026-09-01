@@ -40,7 +40,7 @@ static int NAME(sox_effect_t * effp, const sox_sample_t * ibuf,
       p->previous_outputs[p->pos + N] = p->previous_outputs[p->pos] = output;
 #endif
       d1 = (d + DITHER_NOISE(r1) + DITHER_NOISE(r2)) * DITHER_SCALE(p->prec);
-      i = d1 < 0? d1 - .5 : d1 + .5;
+      i = dither_round(d1, p->prec);
       p->previous_errors[p->pos + N] = p->previous_errors[p->pos] =
           (double)i / DITHER_SCALE(p->prec) - d;
       if (i < (-1 << (p->prec-1)))

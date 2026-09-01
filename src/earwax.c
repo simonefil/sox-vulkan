@@ -82,7 +82,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
     }
     p->tap[0] = *ibuf++ / 64; /* scale output */
     output += p->tap[0] * filt[0];
-    *obuf++ = SOX_ROUND_CLIP_COUNT(output, effp->clips);
+    *obuf++ = output;
   }
   return SOX_SUCCESS;
 }

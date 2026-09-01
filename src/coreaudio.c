@@ -246,13 +246,18 @@ static int setup(sox_format_t *ft, int is_input)
     ft->signal.rate = stream_desc.mSampleRate;
   }
 
-  ac->bufsize = sox_globals.bufsiz / sizeof(sox_sample_t) * Buffactor;
+  /* `bufsiz' is a count of samples, not a count of bytes, so dividing it by
+   * the size of a sample never meant anything.  It was harmless while a sample
+   * was four bytes wide and the expression happened to yield bufsiz/4; a sample
+   * is eight bytes now, and the same line quietly halved both this ring and the
+   * device buffer asked for below.  The quarter is written as a quarter. */
+  ac->bufsize = sox_globals.bufsiz / 4 * Buffactor;
   ac->bufrd = 0;
   ac->bufwr = 0;
   ac->bufrdavail = 0;
   ac->buf = lsx_malloc(ac->bufsize * sizeof(float));
 
-  buf_size = sox_globals.bufsiz / sizeof(sox_sample_t) * sizeof(float);
+  buf_size = sox_globals.bufsiz / 4 * sizeof(float);
   property_size = sizeof(buf_size);
   status = AudioDeviceSetProperty(ac->adid, NULL, 0, is_input,
                                   kAudioDevicePropertyBufferSize,

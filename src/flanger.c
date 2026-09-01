@@ -207,7 +207,7 @@ static int flow(sox_effect_t * effp, sox_sample_t const * ibuf,
 
       f->delay_last[c] = delayed;
       out = in * f->in_gain + delayed * f->delay_gain;
-      *obuf++ = SOX_ROUND_CLIP_COUNT(out, effp->clips);
+      *obuf++ = out;
     }
     f->lfo_pos = (f->lfo_pos + 1) % f->lfo_length;
   }

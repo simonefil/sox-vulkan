@@ -492,6 +492,7 @@ static size_t wavewrite(sox_format_t * ft, const sox_sample_t* buf, size_t len)
       case 2:
           for (i = 0; i < ready; ++i)
           {
+            SOX_SAMPLE_LOCALS;
             ((int32_t *)header->lpData)[header->dwUser++] = SOX_SAMPLE_TO_SIGNED_32BIT(buf[copied++], clips);
           }
           break;

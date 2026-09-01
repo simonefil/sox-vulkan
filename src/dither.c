@@ -286,6 +286,24 @@ typedef struct {
  * integer in the old sample units, so here it becomes that same fraction. */
 #define DITHER_NOISE(r) ((double)(r) / 2147483648.)
 
+/* Rounding to the output grid, bounded.
+ *
+ * The reader does not clip any more, so the sample arriving here is whatever a
+ * float file happened to hold, and `d' -- the sample scaled by 2^(prec-1) --
+ * with it.  Converting a double that lies outside the range of `int' is
+ * undefined: arm64 saturates and gets the right answer by luck, x86-64 yields
+ * INT_MIN, which would send a positive overload down the negative branch below
+ * and write a full-scale click of the wrong sign.
+ *
+ * Bounding `d' one step past each limit leaves every in-range value exactly as
+ * it was and lets the two tests at the call site decide, as they always did.
+ * `prec' is at most 24 (see start()), so both bounds fit an int comfortably. */
+static int dither_round(double d, size_t prec)
+{
+  double lo = -DITHER_SCALE(prec) - 1, hi = DITHER_SCALE(prec);
+  return (int)(d < lo? lo : d > hi? hi : d < 0? d - .5 : d + .5);
+}
+
 #define CONVOLVE _ _ _ _
 #define NAME flow_iir_4
 #define IIR
@@ -343,7 +361,7 @@ static int flow_no_shape(sox_effect_t * effp, const sox_sample_t * ibuf,
       double d = (*ibuf++ + DITHER_NOISE(r) +
                   DITHER_NOISE(p->alt_tpdf? -p->r : (RANQD1 >> p->prec))) *
                  DITHER_SCALE(p->prec);
-      int i = d < 0? d - .5 : d + .5;
+      int i = dither_round(d, p->prec);
       p->r = r;
       if (i <= -(1 << (p->prec-1)))
         ++effp->clips, *obuf = SOX_SAMPLE_MIN;

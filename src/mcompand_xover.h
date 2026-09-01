@@ -84,7 +84,7 @@ static int crossover_flow(sox_effect_t * effp, crossover_t * p, sox_sample_t
         out_low = p->coefs[0] * *ibuf;
         CONVOLVE
         assert(j == N+1);
-        *obuf_low++ = SOX_ROUND_CLIP_COUNT(out_low, effp->clips);
+        *obuf_low++ = out_low;
       }
 #undef _
 #define _ out_high += p->coefs[j+N+1] * p->previous[c][p->pos + j].in \
@@ -94,7 +94,7 @@ static int crossover_flow(sox_effect_t * effp, crossover_t * p, sox_sample_t
         out_high = p->coefs[N+1] * *ibuf;
         CONVOLVE
         assert(j == N+1);
-        *obuf_high++ = SOX_ROUND_CLIP_COUNT(out_high, effp->clips);
+        *obuf_high++ = out_high;
       }
       p->previous[c][p->pos + N].in = p->previous[c][p->pos].in = *ibuf++;
       p->previous[c][p->pos + N].out_low = p->previous[c][p->pos].out_low = out_low;

@@ -123,7 +123,7 @@ static int sox_dcshift_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_s
     }
     else for (; len > 0; --len) {            /* quite basic, with clipping */
       double d = dcshift + *ibuf++;
-      *obuf++ = SOX_ROUND_CLIP_COUNT(d, effp->clips);
+      *obuf++ = d;
     }
     return SOX_SUCCESS;
 }

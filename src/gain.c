@@ -96,7 +96,7 @@ static int start(sox_effect_t * effp)
     }
   }
   if (p->do_limiter)
-    p->limiter = (1 - 1 / p->fixed_gain) * (1. / SOX_SAMPLE_MAX);
+    p->limiter = 1 - 1 / p->fixed_gain;
   else if (p->fixed_gain == floor(p->fixed_gain) && !p->do_scan)
     effp->out_signal.precision = effp->in_signal.precision;
   return SOX_SUCCESS;
@@ -137,7 +137,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
     double mult = ((priv_t *)(effp - effp->flow)->priv)->fixed_gain;
     len = *isamp = *osamp = min(*isamp, *osamp);
     if (!p->do_limiter) for (; len; --len, ++ibuf)
-      *obuf++ = SOX_ROUND_CLIP_COUNT(*ibuf * mult, effp->clips);
+      *obuf++ = *ibuf * mult;
     else for (; len; --len, ++ibuf) {
       double d = *ibuf * mult;
       *obuf++ = d < 0 ? 1 / (1 / d - p->limiter) :
@@ -213,7 +213,7 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
       result = SOX_EOF;
     }
     if (!p->do_limiter) for (*osamp = len; len; --len, ++obuf)
-      *obuf = SOX_ROUND_CLIP_COUNT(*obuf * p->mult, effp->clips);
+      *obuf *= p->mult;
     else for (*osamp = len; len; --len) {
       double d = *obuf * p->mult;
       *obuf++ = d < 0 ? 1 / (1 / d - p->limiter) :

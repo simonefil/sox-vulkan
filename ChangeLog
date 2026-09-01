@@ -23,11 +23,35 @@ The sample pipeline is now 64-bit floating point.
   o 64-bit float input survives the pipeline.  Reading an -e float -b 64 file
     and writing it back used to lose 22 bits; it is now exact.
 
+  o Two public macros are gone.  SOX_SAMPLE_NEG was the sign bit of the integer
+    a sample used to be, and flipping it now negates a sample instead of
+    shifting its range by half; the offset it stood for is written as an offset
+    in SOX_UNSIGNED_TO_SAMPLE and SOX_SAMPLE_TO_UNSIGNED.  SOX_ROUND_CLIP_COUNT
+    rounded a double to that integer and clipped on the way, and there is
+    nothing left for it to round to.  Third-party effects that called it should
+    assign the value.
+
 Observable changes in behaviour:
 
   o Fewer clips are reported.  Clipping happens only where a sample leaves for
     a file, not at every link, so material that sat at or a little over 0 dBFS
     inside the chain no longer counts a clip at each effect.
+
+  o The Windows audio driver builds again.  `waveaudio' expands 32-bit device
+    samples through a macro that stopped being a plain cast when the sample
+    type changed, and one of its three cases was missing the temporaries the
+    macro now needs; nothing outside Windows compiles that file, so no other
+    platform could see it.
+
+  o `vol', `compand', `mcompand' and `stretch' no longer clip their own output.
+    An effect that clips destroys headroom a later one might have given back,
+    so a chain like `compand ... vol 0.5' now keeps what the compander pushed
+    past full scale instead of squaring it off in the middle: on a noise test
+    the old build wrote 134 samples pinned to exactly half scale and the new
+    one writes none, the worst of them recovering from 0.500 to 0.698.  With
+    nothing after the effect the written file does not change, because the
+    writer clips what the effect no longer does.  The limiter branches of
+    `vol -l' and `dcshift -l' still clip, which is what the option asks for.
 
   o `stat' prints "Scaled by: 1.0" where it printed "2147483647.0", and the
     sample values `stat -s' emits are on the normalised scale.

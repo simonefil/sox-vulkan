@@ -1113,10 +1113,10 @@ Converts SoX native sample to a 64-bit float.
 Client API:
 Clamps a sample into [-1, +1) and increments a counter if it had to.
 
-Callers inside effects should be removing themselves rather than being kept:
-under the new invariant an effect that clips is an effect that destroys headroom
-a later one might have given back.  What remains of it belongs to writers and to
-the few places that genuinely need a bounded value, such as a table index.
+Under the new invariant an effect that clips is an effect that destroys headroom
+a later one might have given back, so this belongs to the writers.  The two
+exceptions are the limiter branches of `vol' and `dcshift', where clipping is
+what the user asked for with `-l' rather than a side effect of the arithmetic.
 
 The upper limit is exclusive, so a sample at or above +1 is pulled to the
 largest value below it rather than to +1 itself, which is not a sample.
@@ -1131,24 +1131,6 @@ largest value below it rather than to +1 itself, which is not a sample.
       { (samp) = SOX_SAMPLE_MIN; (clips)++; } \
   } while (0)
 
-/**
-Client API:
-The identity, kept so that the seventeen effects that call it keep compiling.
-
-It used to round a double to the integer a sample was and clip it on the way.
-Both halves are now wrong: there is nothing to round to, and clipping inside an
-effect throws away headroom that the rest of the chain may still hand back.
-Every call site is a place where a rounding stopped happening, which is exactly
-what the migration is for.
-
-It stays as a macro rather than being deleted at every site in one go, so that
-the change to the arithmetic and the change to the source can be told apart when
-something goes wrong.  Fase 4 removes the calls.
-@param d Value (rvalue), passed through.
-@param clips Not used.
-@returns The value.
-*/
-#define SOX_ROUND_CLIP_COUNT(d, clips) ((sox_sample_t)(d))
 
 /**
 Client API:

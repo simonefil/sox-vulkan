@@ -166,7 +166,6 @@ typedef struct {
   sox_bool no_glob;
 
   sox_format_t * ft;  /* libSoX file descriptor */
-  uint64_t volume_clips;
   rg_mode replay_gain_mode;
 } file_t;
 
@@ -208,7 +207,6 @@ static char *norm_level = NULL;
 
 static sox_signalinfo_t combiner_signal, ofile_signal_options;
 static sox_encodinginfo_t combiner_encoding, ofile_encoding_options;
-static uint64_t mixing_clips = 0;
 static size_t current_input = 0;
 static uint64_t input_wide_samples = 0;
 static uint64_t read_wide_samples = 0;
@@ -580,10 +578,8 @@ static void balance_input(sox_sample_t * buf, size_t ws, file_t * f)
 {
   size_t s = ws * f->ft->signal.channels;
 
-  if (f->volume != 1) while (s--) {
-    double d = f->volume * *buf;
-    *buf++ = SOX_ROUND_CLIP_COUNT(d, f->volume_clips);
-  }
+  if (f->volume != 1) while (s--)
+    *buf++ *= f->volume;
 }
 
 /* The input combiner: contains one sample buffer per input file, but only
@@ -665,21 +661,17 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
         for (s = 0; s < effp->in_signal.channels; ++s, ++p) { /* sum samples */
           *p = 0;
           for (i = 0; i < input_count; ++i)
-            if (ws < z->ilen[i] && s < files[i]->ft->signal.channels) {
-              /* Cast to double prevents integer overflow */
-              double sample = *p + (double)z->ibuf[i][ws * files[i]->ft->signal.channels + s];
-              *p = SOX_ROUND_CLIP_COUNT(sample, mixing_clips);
-            }
+            if (ws < z->ilen[i] && s < files[i]->ft->signal.channels)
+              *p += z->ibuf[i][ws * files[i]->ft->signal.channels + s];
         }
       } /* sox_mix */ else if (combine_method == sox_multiply)  {
         for (s = 0; s < effp->in_signal.channels; ++s, ++p) { /* multiply samples */
           i = 0;
           *p = ws < z->ilen[i] && s < files[i]->ft->signal.channels?
             z->ibuf[i][ws * files[i]->ft->signal.channels + s] : 0;
-          for (++i; i < input_count; ++i) {
-            double sample = *p * (-1. / SOX_SAMPLE_MIN) * (ws < z->ilen[i] && s < files[i]->ft->signal.channels? z->ibuf[i][ws * files[i]->ft->signal.channels + s] : 0);
-            *p = SOX_ROUND_CLIP_COUNT(sample, mixing_clips);
-          }
+          for (++i; i < input_count; ++i)
+            *p *= ws < z->ilen[i] && s < files[i]->ft->signal.channels?
+              z->ibuf[i][ws * files[i]->ft->signal.channels + s] : 0;
         }
       } /* sox_multiply */ else { /* sox_merge: like a multi-track recorder */
         for (i = 0; i < input_count; ++i)
@@ -1370,8 +1362,8 @@ static uint64_t total_clips(void)
   size_t i;
   uint64_t clips = 0;
   for (i = 0; i < file_count; ++i)
-    clips += files[i]->ft->clips + files[i]->volume_clips;
-  return clips + mixing_clips + sox_effects_clips(effects_chain);
+    clips += files[i]->ft->clips;
+  return clips + sox_effects_clips(effects_chain);
 }
 
 static sox_bool since(struct timeval * then, double secs, sox_bool always_reset)
@@ -3321,14 +3313,6 @@ int main(int argc, char **argv)
           (files[i]->ft->handler.flags & SOX_FILE_DEVICE)?
                        files[i]->ft->handler.names[0] : files[i]->ft->filename,
           files[i]->ft->clips);
-
-  if (mixing_clips > 0)
-    lsx_warn("mix-combining clipped %" PRIu64 " samples; decrease volume?", mixing_clips);
-
-  for (i = 0; i < file_count; i++)
-    if (files[i]->volume_clips > 0)
-      lsx_warn("`%s' balancing clipped %" PRIu64 " samples; decrease volume?",
-          files[i]->filename, files[i]->volume_clips);
 
   if (show_progress) {
     if (user_abort)

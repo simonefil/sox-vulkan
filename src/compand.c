@@ -214,19 +214,14 @@ static int flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sample_t *obu
       int ch = l->expectedChannels > 1 ? chan : 0;
       double level_in_lin = l->channels[ch].volume;
       double level_out_lin = lsx_compandt(&l->transfer_fn, level_in_lin);
-      double checkbuf;
 
       if (l->delay_buf_size <= 0) {
-        checkbuf = ibuf[chan] * level_out_lin;
-        SOX_SAMPLE_CLIP_COUNT(checkbuf, effp->clips);
-        obuf[odone++] = checkbuf;
+        obuf[odone++] = ibuf[chan] * level_out_lin;
         idone++;
       } else {
         if (l->delay_buf_cnt >= l->delay_buf_size) {
           l->delay_buf_full=1; /* delay buffer is now definitely full */
-          checkbuf = l->delay_buf[l->delay_buf_index] * level_out_lin;
-          SOX_SAMPLE_CLIP_COUNT(checkbuf, effp->clips);
-          obuf[odone] = checkbuf;
+          obuf[odone] = l->delay_buf[l->delay_buf_index] * level_out_lin;
           odone++;
           idone++;
         } else {

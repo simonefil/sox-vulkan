@@ -47,7 +47,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
       double out, mult = 1. / SOX_SAMPLE_TO_FLOAT_64BIT(divisor,);
       for (i = 1; i < effp->in_signal.channels; ++i) {
         out = *ibuf++ * mult;
-        p->last[i] = *obuf++ = SOX_ROUND_CLIP_COUNT(out, effp->clips);
+        p->last[i] = *obuf++ = out;
       }
     }
     else for (i = 1; i < effp->in_signal.channels; ++i, ++ibuf)

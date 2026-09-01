@@ -153,13 +153,9 @@ static int flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sample_t *obu
     }
     else
     {
-        /* quite basic, with clipping */
+        /* quite basic */
         for (;len>0; len--)
-        {
-                sample = gain * *ibuf++;
-                SOX_SAMPLE_CLIP_COUNT(sample, effp->clips);
-                *obuf++ = sample;
-        }
+                *obuf++ = gain * *ibuf++;
     }
     return SOX_SUCCESS;
 }

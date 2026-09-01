@@ -151,7 +151,7 @@ int lsx_biquad_flow(sox_effect_t * effp, const sox_sample_t *ibuf,
     double o0 = *ibuf*p->b0 + p->i1*p->b1 + p->i2*p->b2 - p->o1*p->a1 - p->o2*p->a2;
     p->i2 = p->i1, p->i1 = *ibuf++;
     p->o2 = p->o1, p->o1 = o0;
-    *obuf++ = SOX_ROUND_CLIP_COUNT(o0, effp->clips);
+    *obuf++ = o0;
   }
   return SOX_SUCCESS;
 }

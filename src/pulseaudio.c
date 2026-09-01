@@ -10,6 +10,8 @@
 
 typedef struct {
   pa_simple *pasp;
+  int32_t * buf;    /* The stream carries S32; the pipeline no longer does. */
+  size_t    buf_len;  /* In samples. */
 } priv_t;
 
 static int setup(sox_format_t *ft, int is_input)
@@ -77,6 +79,9 @@ static int setup(sox_format_t *ft, int is_input)
    * what user specifies.
    */
 
+  pa->buf_len = sox_globals.bufsiz;
+  pa->buf = lsx_malloc(pa->buf_len * sizeof(*pa->buf));
+
   return SOX_SUCCESS;
 }
 
@@ -90,29 +95,33 @@ static int stopread(sox_format_t * ft)
   priv_t *pa = (priv_t *)ft->priv;
 
   pa_simple_free(pa->pasp);
+  free(pa->buf);
 
   return SOX_SUCCESS;
 }
 
+/* Pulse Audio buffer lengths are true buffer lengths and not count of samples,
+ * and the two used to be the same thing said twice: a sample was an int32 and
+ * the stream is S32, so the pipeline buffer could go to the device untouched.
+ * A sample is a double now, so it goes through the same conversion every other
+ * device driver uses, one bufsiz-sized block at a time. */
 static size_t read_samples(sox_format_t *ft, sox_sample_t *buf, size_t nsamp)
 {
   priv_t *pa = (priv_t *)ft->priv;
-  size_t len;
-  int rc, error;
+  size_t done, i, n;
+  int error;
 
-  /* Pulse Audio buffer lengths are true buffer lengths and not
-   * count of samples. */
-  len = nsamp * sizeof(sox_sample_t);
-
-  rc = pa_simple_read(pa->pasp, buf, len, &error);
-
-  if (rc < 0)
-  {
-    lsx_fail_errno(ft, SOX_EPERM, "error reading from pulse audio device: %s", pa_strerror(error));
-    return SOX_EOF;
+  for (done = 0; done < nsamp; done += n) {
+    n = min(nsamp - done, pa->buf_len);
+    if (pa_simple_read(pa->pasp, pa->buf, n * sizeof(*pa->buf), &error) < 0)
+    {
+      lsx_fail_errno(ft, SOX_EPERM, "error reading from pulse audio device: %s", pa_strerror(error));
+      return SOX_EOF;
+    }
+    for (i = 0; i < n; ++i)
+      buf[done + i] = SOX_SIGNED_32BIT_TO_SAMPLE(pa->buf[i],);
   }
-  else
-    return nsamp;
+  return nsamp;
 }
 
 static int startwrite(sox_format_t * ft)
@@ -123,24 +132,20 @@ static int startwrite(sox_format_t * ft)
 static size_t write_samples(sox_format_t *ft, const sox_sample_t *buf, size_t nsamp)
 {
   priv_t *pa = (priv_t *)ft->priv;
-  size_t len;
-  int rc, error;
+  size_t done, i, n;
+  int error;
+  SOX_SAMPLE_LOCALS;
 
-  if (!nsamp)
-    return 0;
-
-  /* Pulse Audio buffer lengths are true buffer lengths and not
-   * count of samples. */
-  len = nsamp * sizeof(sox_sample_t);
-
-  rc = pa_simple_write(pa->pasp, buf, len, &error);
-
-  if (rc < 0)
-  {
-    lsx_fail_errno(ft, SOX_EPERM, "error writing to pulse audio device: %s", pa_strerror(error));
-    return SOX_EOF;
+  for (done = 0; done < nsamp; done += n) {
+    n = min(nsamp - done, pa->buf_len);
+    for (i = 0; i < n; ++i)
+      pa->buf[i] = SOX_SAMPLE_TO_SIGNED_32BIT(buf[done + i], ft->clips);
+    if (pa_simple_write(pa->pasp, pa->buf, n * sizeof(*pa->buf), &error) < 0)
+    {
+      lsx_fail_errno(ft, SOX_EPERM, "error writing to pulse audio device: %s", pa_strerror(error));
+      return SOX_EOF;
+    }
   }
-
   return nsamp;
 }
 
@@ -151,6 +156,7 @@ static int stopwrite(sox_format_t * ft)
 
   pa_simple_drain(pa->pasp, &error);
   pa_simple_free(pa->pasp);
+  free(pa->buf);
 
   return SOX_SUCCESS;
 }

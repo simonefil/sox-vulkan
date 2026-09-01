@@ -171,7 +171,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
     double out = 0;
     for (i = 0; i < p->out_specs[j].num_in_channels; i++)
       out += ibuf[p->out_specs[j].in_specs[i].channel_num] * p->out_specs[j].in_specs[i].multiplier;
-    *obuf++ = SOX_ROUND_CLIP_COUNT(out, effp->clips);
+    *obuf++ = out;
   }
   return SOX_SUCCESS;
 }

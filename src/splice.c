@@ -76,7 +76,7 @@ static void splice(sox_effect_t * effp, const sox_sample_t * in1, const
       double fade_out = cos(i * fade_step); /* constant RMS level (`power') */
       for (j = 0; j < channels; ++j, ++k) {
         double d = in1[k] * fade_out + in2[k] * fade_in;
-        output[k] = SOX_ROUND_CLIP_COUNT(d, effp->clips); /* Might clip */
+        output[k] = d;
       }
     }
   }
@@ -87,7 +87,7 @@ static void splice(sox_effect_t * effp, const sox_sample_t * in1, const
       double fade_out = 1 - fade_in;    /* constant peak level (`gain') */
       for (j = 0; j < channels; ++j, ++k) {
         double d = in1[k] * fade_out + in2[k] * fade_in;
-        output[k] = SOX_ROUND_CLIP_COUNT(d, effp->clips); /* Should not clip */
+        output[k] = d;
       }
     }
   }
@@ -98,7 +98,7 @@ static void splice(sox_effect_t * effp, const sox_sample_t * in1, const
       double fade_out = 1 - fade_in;    /* constant peak level (`gain') */
       for (j = 0; j < channels; ++j, ++k) {
         double d = in1[k] * fade_out + in2[k] * fade_in;
-        output[k] = SOX_ROUND_CLIP_COUNT(d, effp->clips); /* Should not clip */
+        output[k] = d;
       }
     }
   }

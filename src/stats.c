@@ -155,7 +155,9 @@ static void output(priv_t const * p, double x)
     unsigned mult = 1 << (p->scale_bits - 1);
     int i;
     x = floor(x * mult + .5);
-    i = min(x, mult - 1.);
+    /* The reader does not clip, so x can be anywhere; bound it at both ends
+     * before the conversion, which is undefined outside the range of `int'. */
+    i = min(max(x, -(double)mult), mult - 1.);
     if (p->hex_bits)
       if (x < 0) {
         char buf[30];

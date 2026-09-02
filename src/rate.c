@@ -1126,6 +1126,43 @@ static void rate_extrapolation_remember(
   }
 }
 
+static size_t rate_extrapolation_initial_frames(sox_rate_t rate)
+{
+  size_t input_rate = (size_t)(rate + .5);
+
+  return min(max(input_rate / 10, (size_t)2048), (size_t)65536);
+}
+
+static int rate_extrapolation_ensure_buffer(sox_effect_t *effp)
+{
+  size_t frames = rate_extrapolation_initial_frames(effp->in_signal.rate);
+  size_t channels = effp->in_signal.channels;
+  size_t required;
+  size_t adjusted = 1;
+
+  if (channels > SIZE_MAX / frames) {
+    lsx_fail("rate -E processing buffer size overflow");
+    return SOX_EOF;
+  }
+  required = frames * channels;
+  if (sox_globals.bufsiz >= required)
+    return SOX_SUCCESS;
+  while (adjusted < required) {
+    if (adjusted > SIZE_MAX / 2) {
+      adjusted = required;
+      break;
+    }
+    adjusted <<= 1;
+  }
+  lsx_report("rate -E increased processing buffer from %" PRIuPTR
+      " to %" PRIuPTR " samples for %g Hz, %u channel%s",
+      sox_globals.bufsiz, adjusted, effp->in_signal.rate,
+      effp->in_signal.channels,
+      effp->in_signal.channels == 1 ? "" : "s");
+  sox_globals.bufsiz = adjusted;
+  return SOX_SUCCESS;
+}
+
 static void rate_extrapolation_init(sox_effect_t *effp, size_t channels)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -1134,7 +1171,7 @@ static void rate_extrapolation_init(sox_effect_t *effp, size_t channels)
   p->extrapolation_channels = channels;
   p->extrapolation_extension_frames = max(input_rate, (size_t)1);
   p->extrapolation_initial_frames =
-      min(max(input_rate / 10, (size_t)2048), (size_t)65536);
+      rate_extrapolation_initial_frames(effp->in_signal.rate);
   p->extrapolation_prime_frames =
       min(max(input_rate / 20, (size_t)1024), (size_t)16384);
   p->extrapolation_prime_frames = max(
@@ -2111,6 +2148,10 @@ static int start(sox_effect_t * effp)
   if (!p->rate.plan.num_stages) {
     lsx_warn("input and output rates too close, skipping resampling");
     return SOX_EFF_NULL;
+  }
+  if (p->extrapolate && rate_extrapolation_ensure_buffer(effp) != SOX_SUCCESS) {
+    rate_plan_destroy(&p->rate.plan);
+    return SOX_EOF;
   }
   if (dsd_rate > 0 && p->rate.plan.stages[0].kind != rate_stage_dsd_fir) {
     /* Only a plan that halves at all has a cascade to fuse, and only a fused

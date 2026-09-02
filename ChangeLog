@@ -4,6 +4,14 @@ Change History
 This file contains a list of all changes starting after the release of
 sox-11gamma, followed by a list of prior authors and features.
 
+SoX-16.1.1
+----------
+
+  o `rate -E' now raises the processing buffer automatically when the input
+    rate and channel count require more lookahead than the configured size.
+    This prevents premature end-of-file handling without changing the
+    extrapolation algorithm or requiring a manual `--buffer' option.
+
 SoX-16.1.0
 ----------
 

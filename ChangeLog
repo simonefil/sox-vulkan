@@ -4,6 +4,23 @@ Change History
 This file contains a list of all changes starting after the release of
 sox-11gamma, followed by a list of prior authors and features.
 
+SoX-16.1.0
+----------
+
+The rate effect can now extrapolate PCM signal boundaries.
+
+  o `rate -E' predicts the signal before its first sample and after its last
+    instead of presenting silence to the resampling filter.  This suppresses
+    boundary transients without changing the output length.
+
+  o The predictor runs in 64-bit floating point on the CPU, uses Burg
+    autoregression with an order selected by held-out validation, and falls
+    back to a bounded gradual continuation when prediction is not reliable.
+
+  o CPU and Vulkan rate backends share the same extrapolated boundaries.
+    Packed DSD input is excluded because it has no PCM samples to model.
+    Without `-E', rate retains its previous behaviour.
+
 SoX-16.0.0
 ----------
 

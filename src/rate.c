@@ -29,6 +29,7 @@
 #include "dft_filter.h"
 #include "diagnostics.h"
 #include <assert.h>
+#include <float.h>
 #include <string.h>
 
 #if HAVE_VULKAN
@@ -835,8 +836,17 @@ typedef struct {
   int             rolloff, coef_interp, max_coefs_size;
   double          bit_depth, phase, bw_0dB_pc, anti_aliasing_pc;
   sox_bool        use_hi_prec_clock, noIOpt, given_0dB_pt, vulkan_eligible;
+  sox_bool        extrapolate, extrapolation_started, extrapolation_ending;
   rate_t          rate;
   rate_shared_t   shared, * shared_ptr;
+  sample_t        *extrapolation_buffer, *extrapolation_pending;
+  sample_t        *extrapolation_tail;
+  size_t          extrapolation_channels, extrapolation_initial_frames;
+  size_t          extrapolation_prime_frames, extrapolation_extension_frames;
+  size_t          extrapolation_buffered_frames, extrapolation_tail_frames;
+  size_t          extrapolation_pending_samples, extrapolation_pending_offset;
+  uint64_t        extrapolation_drop_samples, extrapolation_real_samples;
+  uint64_t        extrapolation_output_samples;
 #if HAVE_VULKAN
   /* One executor per plan stage, and one FIFO more than that: the FIFOs sit
    * between the stages, the first holding this effect's input and the last
@@ -887,6 +897,299 @@ typedef struct {
   uint32_t        vulkan_external_input_pending;
 #endif
 } priv_t;
+
+/* A boundary predictor is deliberately separate from the resampler.  It runs
+ * twice per stream on the CPU, in fp64, while the long convolution remains on
+ * whichever backend the rate plan selected.  Burg reflection coefficients
+ * keep every candidate stable; a held-out tail then chooses the least complex
+ * order that actually predicts this boundary rather than merely fitting it. */
+#define RATE_PREDICTOR_MAX_ORDER 48
+#define RATE_PREDICTOR_MIN_FRAMES (2 * RATE_PREDICTOR_MAX_ORDER + 16)
+
+static int rate_burg_fit(
+    double const *samples, size_t frames, int requested_order,
+    double *coefficients)
+{
+  double a[RATE_PREDICTOR_MAX_ORDER + 1] = {1};
+  double next_a[RATE_PREDICTOR_MAX_ORDER + 1];
+  double *forward = lsx_malloc(frames * sizeof(*forward));
+  double *backward = lsx_malloc(frames * sizeof(*backward));
+  double *next_forward = lsx_malloc(frames * sizeof(*next_forward));
+  double *next_backward = lsx_malloc(frames * sizeof(*next_backward));
+  double energy = 0;
+  int order = 0, m;
+  size_t n;
+
+  memcpy(forward, samples, frames * sizeof(*forward));
+  memcpy(backward, samples, frames * sizeof(*backward));
+  for (n = 0; n < frames; ++n)
+    energy += samples[n] * samples[n];
+  for (m = 1; m <= requested_order; ++m) {
+    double numerator = 0, denominator = 0;
+    double reflection;
+    int i;
+
+    for (n = (size_t)m; n < frames; ++n) {
+      numerator += forward[n] * backward[n - 1];
+      denominator += forward[n] * forward[n] +
+          backward[n - 1] * backward[n - 1];
+    }
+    if (!(denominator > DBL_EPSILON * max(energy, 1.)) ||
+        !isfinite(denominator))
+      break;
+    reflection = -2 * numerator / denominator;
+    if (!isfinite(reflection))
+      break;
+    reflection = max(-.999999999, min(.999999999, reflection));
+    memcpy(next_a, a, sizeof(next_a));
+    for (i = 1; i < m; ++i)
+      next_a[i] = a[i] + reflection * a[m - i];
+    next_a[m] = reflection;
+    memcpy(a, next_a, sizeof(a));
+    for (n = (size_t)m; n < frames; ++n) {
+      next_forward[n] = forward[n] + reflection * backward[n - 1];
+      next_backward[n] = backward[n - 1] + reflection * forward[n];
+    }
+    {
+      double *swap = forward;
+
+      forward = next_forward;
+      next_forward = swap;
+      swap = backward;
+      backward = next_backward;
+      next_backward = swap;
+    }
+    order = m;
+  }
+  for (m = 0; m < order; ++m)
+    coefficients[m] = a[m + 1];
+  free(forward);
+  free(backward);
+  free(next_forward);
+  free(next_backward);
+  return order;
+}
+
+static double rate_boundary_mean(double const *samples, size_t frames)
+{
+  double mean = 0;
+  size_t i;
+
+  for (i = 0; i < frames; ++i)
+    mean += samples[i];
+  return mean / frames;
+}
+
+static int rate_boundary_select_order(double const *samples, size_t frames)
+{
+  static int const candidates[] = {1, 2, 4, 6, 8, 12, 16, 24, 32, 48};
+  size_t validation = min(frames / 4, (size_t)1024);
+  size_t training = frames - validation;
+  double mean = rate_boundary_mean(samples, training);
+  double *history = lsx_malloc(frames * sizeof(*history));
+  double baseline_error = 0, best_score = DBL_MAX;
+  int best_order = 0;
+  size_t i, candidate;
+
+  for (i = 0; i < training; ++i)
+    history[i] = samples[i] - mean;
+  for (i = training; i < frames; ++i) {
+    double difference = samples[i] - samples[training - 1];
+
+    baseline_error += difference * difference;
+  }
+  for (candidate = 0; candidate < array_length(candidates); ++candidate) {
+    int requested = candidates[candidate];
+    double coefficients[RATE_PREDICTOR_MAX_ORDER];
+    double error = 0, score;
+    int order, j;
+
+    if (training <= (size_t)(2 * requested + 1))
+      continue;
+    order = rate_burg_fit(history, training, requested, coefficients);
+    if (order != requested)
+      continue;
+    for (i = training; i < frames; ++i) {
+      double prediction = 0;
+
+      for (j = 0; j < order; ++j)
+        prediction -= coefficients[j] * history[i - 1 - (size_t)j];
+      history[i] = prediction;
+      prediction += mean;
+      if (!isfinite(prediction)) {
+        error = DBL_MAX;
+        break;
+      }
+      prediction -= samples[i];
+      error += prediction * prediction;
+    }
+    score = error == DBL_MAX ? error :
+        error * (1 + 2. * requested / max(validation, (size_t)1));
+    if (score < best_score) {
+      best_score = score;
+      best_order = requested;
+    }
+  }
+  free(history);
+  return best_score < baseline_error * .98 ? best_order : 0;
+}
+
+static void rate_boundary_extrapolate(
+    sample_t const *source, size_t frames, size_t channels, size_t extra,
+    sox_bool backwards, sample_t *destination)
+{
+  size_t channel;
+
+  for (channel = 0; channel < channels; ++channel) {
+    double coefficients[RATE_PREDICTOR_MAX_ORDER];
+    double *history = lsx_malloc((frames + extra) * sizeof(*history));
+    double mean, peak = 0, limit, endpoint;
+    int order, invalid = 0;
+    size_t i;
+
+    for (i = 0; i < frames; ++i) {
+      size_t source_frame = backwards ? frames - 1 - i : i;
+
+      history[i] = source[source_frame * channels + channel];
+      peak = max(peak, fabs(history[i]));
+    }
+    endpoint = history[frames - 1];
+    order = rate_boundary_select_order(history, frames);
+    mean = rate_boundary_mean(history, frames);
+    limit = max(peak * 4, 1e-12);
+    if (order) {
+      int fitted;
+
+      for (i = 0; i < frames; ++i)
+        history[i] -= mean;
+      fitted = rate_burg_fit(history, frames, order, coefficients);
+      if (fitted != order)
+        order = 0;
+    }
+    for (i = 0; order && i < extra; ++i) {
+      double prediction = 0;
+      int j;
+
+      for (j = 0; j < order; ++j)
+        prediction -= coefficients[j] *
+            history[frames + i - 1 - (size_t)j];
+      if (!isfinite(prediction + mean) || fabs(prediction + mean) > limit) {
+        invalid = 1;
+        break;
+      }
+      history[frames + i] = prediction;
+    }
+    if (!order || invalid) {
+      for (i = 0; i < extra; ++i) {
+        double phase = (i + 1.) / extra;
+
+        history[frames + i] = mean + (endpoint - mean) *
+            cos(phase * M_PI * .5);
+      }
+      mean = 0;
+    }
+    for (i = 0; i < extra; ++i) {
+      size_t output_frame = backwards ? extra - 1 - i : i;
+
+      destination[output_frame * channels + channel] =
+          history[frames + i] + mean;
+    }
+    free(history);
+  }
+}
+
+static void rate_extrapolation_remember(
+    priv_t *p, sample_t const *samples, size_t sample_count)
+{
+  size_t channels = p->extrapolation_channels;
+  size_t frames = sample_count / channels;
+  size_t keep = min(frames, p->extrapolation_prime_frames);
+
+  if (frames >= p->extrapolation_prime_frames) {
+    memcpy(p->extrapolation_tail,
+        samples + (frames - keep) * channels,
+        keep * channels * sizeof(*samples));
+    p->extrapolation_tail_frames = keep;
+  }
+  else if (frames) {
+    size_t old_keep = min(p->extrapolation_tail_frames,
+        p->extrapolation_prime_frames - frames);
+
+    if (old_keep < p->extrapolation_tail_frames)
+      memmove(p->extrapolation_tail,
+          p->extrapolation_tail +
+              (p->extrapolation_tail_frames - old_keep) * channels,
+          old_keep * channels * sizeof(*samples));
+    memcpy(p->extrapolation_tail + old_keep * channels, samples,
+        frames * channels * sizeof(*samples));
+    p->extrapolation_tail_frames = old_keep + frames;
+  }
+}
+
+static void rate_extrapolation_init(sox_effect_t *effp, size_t channels)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t input_rate = (size_t)(effp->in_signal.rate + .5);
+
+  p->extrapolation_channels = channels;
+  p->extrapolation_extension_frames = max(input_rate, (size_t)1);
+  p->extrapolation_initial_frames =
+      min(max(input_rate / 10, (size_t)2048), (size_t)65536);
+  p->extrapolation_prime_frames =
+      min(max(input_rate / 20, (size_t)1024), (size_t)16384);
+  p->extrapolation_prime_frames = max(
+      p->extrapolation_prime_frames, (size_t)RATE_PREDICTOR_MIN_FRAMES);
+  p->extrapolation_buffer = lsx_calloc(
+      (p->extrapolation_extension_frames * 2 +
+       p->extrapolation_initial_frames) * channels,
+      sizeof(*p->extrapolation_buffer));
+  p->extrapolation_tail = lsx_malloc(
+      p->extrapolation_prime_frames * channels *
+      sizeof(*p->extrapolation_tail));
+}
+
+static void rate_extrapolation_prepare_start(priv_t *p)
+{
+  size_t channels = p->extrapolation_channels;
+  size_t extension = p->extrapolation_extension_frames;
+  size_t frames = p->extrapolation_buffered_frames;
+  sample_t *real = p->extrapolation_buffer + extension * channels;
+  size_t prime = min(frames, p->extrapolation_prime_frames);
+
+  rate_extrapolation_remember(p, real, frames * channels);
+  if (frames >= RATE_PREDICTOR_MIN_FRAMES) {
+    rate_boundary_extrapolate(real, prime, channels, extension, sox_true,
+        p->extrapolation_buffer);
+    p->extrapolation_pending = p->extrapolation_buffer;
+    p->extrapolation_pending_samples = (extension + frames) * channels;
+    p->extrapolation_drop_samples =
+        (uint64_t)(extension / p->rate.plan.factor + .5) * channels;
+  }
+  else {
+    p->extrapolation_pending = real;
+    p->extrapolation_pending_samples = frames * channels;
+  }
+  p->extrapolation_pending_offset = 0;
+  p->extrapolation_started = sox_true;
+}
+
+static void rate_extrapolation_prepare_end(priv_t *p)
+{
+  size_t channels = p->extrapolation_channels;
+
+  if (p->extrapolation_tail_frames >= RATE_PREDICTOR_MIN_FRAMES) {
+    sample_t *suffix = p->extrapolation_buffer;
+
+    rate_boundary_extrapolate(p->extrapolation_tail,
+        p->extrapolation_tail_frames, channels,
+        p->extrapolation_extension_frames, sox_false, suffix);
+    p->extrapolation_pending = suffix;
+    p->extrapolation_pending_samples =
+        p->extrapolation_extension_frames * channels;
+    p->extrapolation_pending_offset = 0;
+  }
+  p->extrapolation_ending = sox_true;
+}
 
 /* Expand a half-band stage's coefficients into a full response the FIR
  * backend can take.
@@ -1619,7 +1922,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
   priv_t * p = (priv_t *) effp->priv;
   int c, quality;
   char * dummy_p, * found_at;
-  char const * opts = "+i:c:b:B:A:p:Q:R:d:MILafnost" "qlmghevuxz";
+  char const * opts = "+i:c:b:B:A:p:Q:R:d:EMILafnost" "qlmghevuxz";
   char const * qopts = strchr(opts, 'q');
   double rej = 0, bw_3dB_pc = 0;
   sox_bool allow_aliasing = sox_false;
@@ -1642,6 +1945,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     GETOPT_LOCAL_NUMERIC(optstate, 'b', bw_3dB_pc, 74, 99.7)
     GETOPT_LOCAL_NUMERIC(optstate, 'R', rej, 90, 200)
     GETOPT_LOCAL_NUMERIC(optstate, 'Q', quality, 0, 7)
+    case 'E': p->extrapolate = sox_true; break;
     case 'M': p->phase =  0; break;
     case 'I': p->phase = 25; break;
     case 'L': p->phase = 50; break;
@@ -1783,6 +2087,10 @@ static int start(sox_effect_t * effp)
     }
     dsd_rate = effp->in_signal.rate;
   }
+  if (p->extrapolate && dsd_rate > 0) {
+    lsx_fail("rate -E signal extrapolation requires PCM input");
+    return SOX_EOF;
+  }
 
   if (effp->in_signal.rate == out_rate)
     return SOX_EFF_NULL;
@@ -1858,10 +2166,12 @@ static int start(sox_effect_t * effp)
     }
     if (lsx_diagnostics_on)
       lsx_diagnostics_effect_setf(effp, "backend", "vulkan");
-    if (lsx_rate_effect_resident_transform_supported(effp))
-      effp->internal_chain_endpoint = &vulkan_resident_transform_endpoint;
-    else if (lsx_rate_effect_resident_supported(effp))
-      effp->internal_chain_endpoint = &vulkan_resident_producer_endpoint;
+    if (!p->extrapolate) {
+      if (lsx_rate_effect_resident_transform_supported(effp))
+        effp->internal_chain_endpoint = &vulkan_resident_transform_endpoint;
+      else if (lsx_rate_effect_resident_supported(effp))
+        effp->internal_chain_endpoint = &vulkan_resident_producer_endpoint;
+    }
     /*
      * A downstream resident consumer reads whole batches of this effect's
      * output, so the batch depth follows this effect's own topology.
@@ -1873,10 +2183,14 @@ static int start(sox_effect_t * effp)
         effp->in_signal.channels, effp->in_signal.length,
         lsx_rate_effect_resident_topology(effp)) != SOX_SUCCESS)
       return SOX_EOF;
+    if (p->extrapolate)
+      rate_extrapolation_init(effp, effp->in_signal.channels);
     return SOX_SUCCESS;
   }
 #endif
   rate_cpu_start(&p->rate);
+  if (p->extrapolate)
+    rate_extrapolation_init(effp, 1);
   if (lsx_diagnostics_on) {
     lsx_diagnostics_effect_setf(effp, "backend", "cpu");
     lsx_diagnostics_effect_setf(effp, "precision", "FP64");
@@ -2756,7 +3070,7 @@ static int flush_vulkan(sox_effect_t *effp)
 }
 #endif
 
-static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
+static int flow_core(sox_effect_t * effp, const sox_sample_t * ibuf,
                 sox_sample_t * obuf, size_t * isamp, size_t * osamp)
 {
   priv_t * p = (priv_t *)effp->priv;
@@ -2792,7 +3106,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   return SOX_SUCCESS;
 }
 
-static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
+static int drain_core(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
 {
   priv_t * p = (priv_t *)effp->priv;
   static size_t isamp = 0;
@@ -2807,12 +3121,178 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * osamp)
   }
 #endif
   rate_cpu_flush(&p->rate);
-  return flow(effp, 0, obuf, &isamp, osamp);
+  return flow_core(effp, 0, obuf, &isamp, osamp);
+}
+
+static void rate_extrapolation_filter_output(
+    priv_t *p, sox_sample_t *output, size_t *samples, uint64_t limit)
+{
+  size_t drop = (size_t)min(p->extrapolation_drop_samples,
+      (uint64_t)*samples);
+
+  if (drop) {
+    *samples -= drop;
+    p->extrapolation_drop_samples -= drop;
+    memmove(output, output + drop, *samples * sizeof(*output));
+  }
+  if ((uint64_t)*samples > limit - min(limit,
+      p->extrapolation_output_samples))
+    *samples = (size_t)(limit - min(limit,
+        p->extrapolation_output_samples));
+  p->extrapolation_output_samples += *samples;
+}
+
+static int rate_extrapolation_flow_pending(
+    sox_effect_t *effp, sox_sample_t *output, size_t *output_samples,
+    uint64_t limit)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t input_samples = p->extrapolation_pending_samples -
+      p->extrapolation_pending_offset;
+  int status = flow_core(effp,
+      p->extrapolation_pending + p->extrapolation_pending_offset,
+      output, &input_samples, output_samples);
+
+  p->extrapolation_pending_offset += input_samples;
+  rate_extrapolation_filter_output(p, output, output_samples, limit);
+  return status;
+}
+
+static int flow(sox_effect_t *effp, sox_sample_t const *ibuf,
+    sox_sample_t *obuf, size_t *isamp, size_t *osamp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t offered = *isamp;
+  size_t capacity = *osamp;
+
+  if (!p->extrapolate)
+    return flow_core(effp, ibuf, obuf, isamp, osamp);
+
+  while (p->extrapolation_pending_offset <
+      p->extrapolation_pending_samples) {
+    int status;
+
+    *osamp = capacity;
+    status = rate_extrapolation_flow_pending(
+        effp, obuf, osamp, UINT64_MAX);
+    if (status != SOX_SUCCESS || *osamp) {
+      *isamp = 0;
+      return status;
+    }
+  }
+  if (!p->extrapolation_started) {
+    size_t channels = p->extrapolation_channels;
+    size_t offered_frames = offered / channels;
+    size_t take_frames = min(offered_frames,
+        p->extrapolation_initial_frames -
+        p->extrapolation_buffered_frames);
+    size_t consumed = take_frames * channels;
+    sample_t *real = p->extrapolation_buffer +
+        (p->extrapolation_extension_frames +
+         p->extrapolation_buffered_frames) * channels;
+
+    memcpy(real, ibuf, consumed * sizeof(*real));
+    p->extrapolation_buffered_frames += take_frames;
+    p->extrapolation_real_samples += consumed;
+    *isamp = consumed;
+    *osamp = 0;
+    if (p->extrapolation_buffered_frames !=
+        p->extrapolation_initial_frames)
+      return SOX_SUCCESS;
+    rate_extrapolation_prepare_start(p);
+    while (p->extrapolation_pending_offset <
+        p->extrapolation_pending_samples) {
+      int status;
+
+      *osamp = capacity;
+      status = rate_extrapolation_flow_pending(
+          effp, obuf, osamp, UINT64_MAX);
+      if (status != SOX_SUCCESS || *osamp) {
+        *isamp = consumed;
+        return status;
+      }
+    }
+    if (consumed < offered) {
+      size_t direct = offered - consumed;
+      int status;
+
+      *osamp = capacity;
+      status = flow_core(effp, ibuf + consumed, obuf, &direct, osamp);
+      if (direct) {
+        rate_extrapolation_remember(p, ibuf + consumed, direct);
+        p->extrapolation_real_samples += direct;
+        consumed += direct;
+      }
+      rate_extrapolation_filter_output(p, obuf, osamp, UINT64_MAX);
+      *isamp = consumed;
+      return status;
+    }
+    *isamp = consumed;
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
+  {
+    int status = flow_core(effp, ibuf, obuf, isamp, osamp);
+
+    if (*isamp) {
+      rate_extrapolation_remember(p, ibuf, *isamp);
+      p->extrapolation_real_samples += *isamp;
+    }
+    rate_extrapolation_filter_output(p, obuf, osamp, UINT64_MAX);
+    return status;
+  }
+}
+
+static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
+{
+  priv_t *p = (priv_t *)effp->priv;
+  size_t capacity = *osamp;
+  uint64_t target;
+
+  if (!p->extrapolate)
+    return drain_core(effp, obuf, osamp);
+  if (!p->extrapolation_started)
+    rate_extrapolation_prepare_start(p);
+  target = (uint64_t)((p->extrapolation_real_samples /
+      p->extrapolation_channels) / p->rate.plan.factor + .5) *
+      p->extrapolation_channels;
+  if (p->extrapolation_output_samples >= target) {
+    *osamp = 0;
+    return SOX_SUCCESS;
+  }
+
+  for (;;) {
+    if (p->extrapolation_pending_offset <
+        p->extrapolation_pending_samples) {
+      int status;
+
+      *osamp = capacity;
+      status = rate_extrapolation_flow_pending(effp, obuf, osamp, target);
+      if (status != SOX_SUCCESS || *osamp)
+        return status;
+      continue;
+    }
+    if (!p->extrapolation_ending) {
+      rate_extrapolation_prepare_end(p);
+      continue;
+    }
+    *osamp = capacity;
+    {
+      int status = drain_core(effp, obuf, osamp);
+
+      rate_extrapolation_filter_output(p, obuf, osamp, target);
+      return status;
+    }
+  }
 }
 
 static int stop(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *) effp->priv;
+
+  free(p->extrapolation_buffer);
+  free(p->extrapolation_tail);
+  p->extrapolation_buffer = p->extrapolation_tail = NULL;
 
 #if HAVE_VULKAN
   if (p->vulkan_stage_count) {
@@ -2872,6 +3352,7 @@ sox_effect_handler_t const * lsx_rate_effect_fn(void)
     " -v  very high      95%     175     24-bit mastering",
     " -x  extreme        95%     275     floating-point mastering",
     " -z  overkill       94%     632     double-double, Vulkan reference",
+    " -E           Extrapolate PCM signal at both boundaries (LPC)",
     "              OVERRIDE OPTIONS (only with -m, -h, -v, -x, -z)",
     " -M/-I/-L     Phase response = minimum/intermediate/linear(default)",
     " -s           Steep filter (band-width = 99%)",

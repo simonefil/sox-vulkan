@@ -31,7 +31,6 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 - Visual Studio 2019 or later (with C++ workload)
 - PowerShell 7 (`pwsh`) for the FFmpeg build; the script refuses to start on Windows PowerShell 5.1 unless `-NoFfmpeg` is given
 - CMake 3.15 or later
-- Vulkan SDK with `glslc`, glslang C headers, and `glslang.dll` (required by default for the Vulkan FIR and DSD backends; use `-NoVulkan` to disable them)
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
 - Git (optional, for cloning)
@@ -48,6 +47,10 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 # Visual Studio Installer > Modify > Workloads > "Desktop development with C++"
 # CMake is included with Visual Studio C++ tools
 ```
+
+**Required by the `-Vulkan` build option:**
+
+- Vulkan SDK with `glslc`, glslang C headers, and `glslang.dll`
 
 ### Linux (Debian/Ubuntu)
 
@@ -71,6 +74,13 @@ sudo apt-get install -y libpulse-dev
 sudo apt-get install -y libopencore-amrnb-dev libopencore-amrwb-dev
 ```
 
+**Required by the `--vulkan` build option:**
+```bash
+sudo apt-get install -y libvulkan-dev glslc glslang-dev
+```
+
+SoX requires Vulkan-Headers 1.3.270 or later for `VK_EXT_frame_boundary`. Debian 12/Bookworm ships older headers in `libvulkan-dev`; keep its loader library, but install newer Vulkan headers under `/usr/local/include` or use a current Vulkan SDK.
+
 ### Linux (Fedora/RHEL/CentOS)
 
 **Required:**
@@ -89,6 +99,11 @@ sudo dnf install -y alsa-lib-devel
 sudo dnf install -y pulseaudio-libs-devel
 ```
 
+**Required by the `--vulkan` build option:**
+```bash
+sudo dnf install -y vulkan-loader-devel vulkan-headers glslc glslang-devel
+```
+
 ### Linux (Arch Linux)
 
 **Required:**
@@ -99,6 +114,11 @@ sudo pacman -S base-devel cmake git curl xz bzip2 unzip
 **Optional:**
 ```bash
 sudo pacman -S alsa-lib libpulse
+```
+
+**Required by the `--vulkan` build option:**
+```bash
+sudo pacman -S vulkan-icd-loader vulkan-headers shaderc glslang
 ```
 
 ### macOS
@@ -143,6 +163,13 @@ brew install nasm
 sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nasm
 ```
 
+**Required by the `--vulkan` build option:**
+```bash
+sudo pkg install vulkan-loader vulkan-headers shaderc glslang
+```
+
+Running a Vulkan-enabled binary requires a Vulkan Runtime to be installed: the Vulkan loader plus a compatible GPU driver or ICD. On macOS, install MoltenVK as the Vulkan implementation. The exact runtime package is hardware- and platform-specific. VkFFT is installed automatically by the static build scripts.
+
 ---
 
 ## Build Instructions
@@ -179,8 +206,8 @@ Output:
 # Build without FFmpeg-backed formats
 .\build_static_libs.ps1 -NoFfmpeg
 
-# Build without the Vulkan FIR and DSD backends
-.\build_static_libs.ps1 -NoVulkan
+# Build with Vulkan support
+.\build_static_libs.ps1 -Vulkan
 
 # Build with 4 parallel jobs
 .\build_static_libs.ps1 -Jobs 4
@@ -282,9 +309,14 @@ Output:
 | `-NoWavpack` | Exclude WavPack support |
 | `-NoSndfile` | Exclude libsndfile support |
 | `-NoFfmpeg` | Exclude FFmpeg-backed format support |
-| `-NoVulkan` | Exclude the Vulkan FIR and DSD backends |
 | `-NoId3tag` | Exclude ID3 tag support |
 | `-NoPng` | Exclude PNG spectrogram support |
+
+**Vulkan Backend:**
+
+| Argument | Description |
+|----------|-------------|
+| `-Vulkan` | Enable the Vulkan rate, FIR, and DSD backends (disabled by default; requires the Vulkan SDK) |
 
 **Audio Drivers:**
 
@@ -321,7 +353,7 @@ Output:
 
 | Argument | Description |
 |----------|-------------|
-| `--vulkan` | Enable the Vulkan FIR and DSD backends (needs a Vulkan loader, `glslc` and the glslang headers) |
+| `--vulkan` | Enable the Vulkan rate, FIR, and DSD backends (needs a Vulkan loader, `glslc` and the glslang headers) |
 | `--no-vulkan` | Disable them (default) |
 
 **Audio Driver Exclusion:**
@@ -383,7 +415,7 @@ Two things to know before upgrading:
 ## Vulkan Profiles
 
 - Linux/macOS/BSD build: `./build_static_libs.sh --vulkan`
-- Windows build: enabled by default; disable with `-NoVulkan`
+- Windows build: `.\build_static_libs.ps1 -Vulkan`
 - Runtime: select one profile
 - No runtime `--vulkan` option
 
@@ -716,4 +748,3 @@ Implementation             40%       ████│░░░░░░      60%
 Testing                    20%         ██│░░░░░░░░    80%
 Documentation               5%           │░░░░░░░░░░  95%
 ```
-

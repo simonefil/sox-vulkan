@@ -24,7 +24,9 @@ param(
     [switch]$NoId3tag,
     [switch]$NoPng,
     [switch]$NoFfmpeg,
-    [switch]$NoVulkan,
+
+    # Optional acceleration backend (disabled by default)
+    [switch]$Vulkan,
 
     # Audio driver options
     # Default: waveaudio (libao not supported on Windows)
@@ -55,7 +57,7 @@ $EnableSndfile = -not $NoSndfile
 $EnableId3tag = -not $NoId3tag
 $EnablePng = -not $NoPng
 $EnableFfmpeg = -not $NoFfmpeg
-$EnableVulkan = -not $NoVulkan
+$EnableVulkan = $Vulkan
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS
@@ -1276,7 +1278,9 @@ function Show-Help {
     Write-Host "  -NoId3tag           Exclude ID3 tag support"
     Write-Host "  -NoPng              Exclude PNG spectrogram support"
     Write-Host "  -NoFfmpeg           Exclude FFmpeg codec and container support"
-    Write-Host "  -NoVulkan           Exclude the Windows Vulkan FIR and DSD backends"
+    Write-Host ""
+    Write-Host "Vulkan Backend (disabled by default):"
+    Write-Host "  -Vulkan             Enable the Vulkan rate, FIR, and DSD backends"
     Write-Host ""
     Write-Host "Audio Driver Options:"
     Write-Host "  Default drivers: waveaudio (Windows native)"
@@ -1286,7 +1290,7 @@ function Show-Help {
     Write-Host "Examples:"
     Write-Host "  .\build_static_libs.ps1                    # Build with all codecs"
     Write-Host "  .\build_static_libs.ps1 -NoMp2 -NoId3tag   # Exclude MP2 and ID3 tag"
-    Write-Host "  .\build_static_libs.ps1 -NoVulkan           # Build without Vulkan SDK"
+    Write-Host "  .\build_static_libs.ps1 -Vulkan             # Build with Vulkan support"
     Write-Host ""
     exit 0
 }
@@ -1344,7 +1348,7 @@ function Main {
             }
         }
         if (-not $glslc) {
-            Write-Err "Vulkan SDK with glslc is required. Install it or use -NoVulkan."
+            Write-Err "Vulkan SDK with glslc is required. Install it or omit -Vulkan."
             exit 1
         }
         Write-Info "Found glslc: $($glslc.FullName)"

@@ -2,7 +2,6 @@
 
 SoX is a command-line audio processing tool for converting, processing, recording, and playing audio. This repository extends classic SoX with:
 
-- Functional OpenMP-backed `--multi-threaded` processing across independent effect channels and CPU SDM channels; `--single-threaded` forces single-thread execution.
 - Optional Vulkan acceleration for resampling, FIR filtering, and PCM-to-DSD conversion, with `fast`, `precise`, and `reference` numerical profiles and device-resident effect chains.
 - Extended PCM-to-DSD conversion from DSD64 through DSD1024, with selectable high-order CPU modulators (`sdm`) and a parallel Vulkan MASH-2/FSM modulator (`sdm-vulkan`) that trades noise performance for an order of magnitude in speed.
 - FFmpeg-backed AC-3, E-AC-3, AAC, ALAC, TrueHD, MLP, DTS, DTS-HD, and xHE-AAC/USAC support.
@@ -169,7 +168,7 @@ sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nas
 sudo pkg install vulkan-loader vulkan-headers shaderc glslang
 ```
 
-Running a Vulkan-enabled binary requires a Vulkan Runtime to be installed: the Vulkan loader plus a compatible GPU driver or ICD. On macOS, install MoltenVK as the Vulkan implementation. The exact runtime package is hardware- and platform-specific. VkFFT is installed automatically by the static build scripts.
+Running a Vulkan-enabled binary requires a Vulkan Runtime to be installed: the Vulkan loader plus a compatible GPU driver or ICD. On macOS, install MoltenVK as the Vulkan implementation. The exact runtime package is hardware and platform-specific. VkFFT is installed automatically by the static build scripts.
 
 ---
 
@@ -383,7 +382,7 @@ Output:
 ## The sample pipeline
 
 Samples travel through SoX as `double`, normalised to the half-open range
-`[-1, +1)`. `SOX_SAMPLE_MAX` is `1.0` and is a limit, not a scale factor.
+`[-1, +1)`. `SOX_SAMPLE_MAX` is `1.0`.
 
 This is what the pipeline used to be, and what changed:
 
@@ -403,16 +402,6 @@ links libsox has to be recompiled: `sox_sample_t` is in the signature of
 `sox_read`, `sox_write`, the packed-DSD entry points and every effect handler.
 An `int32_t *` is not a `double *` under any cast, so there is no compatibility
 shim and none is planned.
-
-Two things to know before upgrading:
-
-- **Fewer clips are reported.** Material at or slightly over 0 dBFS used to
-  count a clip at each effect and now counts one only on the way out.
-- **CAF, W64 and MAT files written at `-b 32` by SoX 15.x and earlier are
-  wrong.** They hold integer sample magnitudes inside a 32-bit float subtype;
-  no other program reads them correctly, and SoX read them back correctly only
-  because it made the matching mistake in the other direction. Rewrite them
-  with the older SoX to a lossless integer format before upgrading.
 
 ---
 
@@ -456,9 +445,6 @@ by name instead:
 | `rate`, `fir`, DSD decode | The device under a profile, the CPU without one |
 | `sdm` | The CPU, always |
 | `sdm-vulkan` | The device, and it needs a profile |
-
-In v15 `sdm` under a Vulkan flag quietly became the device modulator. It doesn't
-any more, and that's the one incompatibility to watch for in old command lines.
 
 ### Rate
 

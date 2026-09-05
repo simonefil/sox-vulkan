@@ -3,7 +3,7 @@
  * Copyright 1999-2012 Chris Bagwell and SoX Contributors.
  *
  * This source code is freely redistributable and may be used for
- * any purpose.  This copyright notice must be maintained.
+ * any purpose. This copyright notice must be maintained.
  * Chris Bagwell And SoX Contributors are not responsible for
  * the consequences of using this software.
  */
@@ -456,7 +456,7 @@ sample can take, +1 is not.
 
 Effects have always computed in double and stored back into an integer between
 one and the next; the integer was never a precision anyone chose, it was the
-exchange format they had to squeeze through.  Carrying the double all the way
+exchange format they had to squeeze through. Carrying the double all the way
 removes one rounding per link in the chain and makes 64-bit float input survive
 the pipeline instead of losing 22 bits of mantissa on the way in.
 
@@ -464,8 +464,8 @@ Nothing is lost in the other direction: 53 bits of mantissa represent every
 32-bit integer exactly, so every integer PCM format still round-trips bit for
 bit.
 
-Values outside [-1, +1) are legal in transit.  Clipping happens where a sample
-becomes a number in a file -- in the writers -- and nowhere else, so an effect
+Values outside [-1, +1) are legal in transit. Clipping happens where a sample
+becomes a number in a file, in the writers, and nowhere else, so an effect
 that overshoots and a later one that pulls the level back down leave nothing
 behind.
 */
@@ -476,19 +476,19 @@ Client API:
 Packed DSD carried through the sample pipeline.
 
 DSD is one bit per sample, so a chain that moved one bit per sox_sample_t
-would spend 32 bits carrying one.  Instead a modulator may hand whole groups
+would spend 32 bits carrying one. Instead a modulator may hand whole groups
 of bits across in a single sample, and sox_signalinfo_t.packing says how many
 bits each one holds: SOX_DSD_PACKING_BYTE for the byte form below, or
-SOX_DSD_PACKING_WORD for whole 32-bit words.  Zero means ordinary PCM, which
+SOX_DSD_PACKING_WORD for whole 32-bit words. Zero means ordinary PCM, which
 is what every effect that has not opted into packing assumes.
 
 The byte form leaves room for a partial group at the end of a stream: the
 low 8 bits are the data and the next 4 a count of how many of them are
-valid, most significant bit first.  The word form has no such count -- every
-word is full -- and is the faster path, so it is what the resident DSD chain
+valid, most significant bit first. The word form has no such count, every
+word is full, and is the faster path, so it is what the resident DSD chain
 uses until its final flush.
 
-The same forms carry DSD the other way.  A reader that offers
+The same forms carry DSD the other way. A reader that offers
 read_packed_dsd_words hands whole words to an effect that has opted into
 packing, so decoding never expands a bit into a sample on the host; the
 partial group at the end of a file has no word form and is left to the
@@ -498,13 +498,13 @@ handler's ordinary reader.
 #define SOX_DSD_PACKING_WORD 32
 
 /* A packed sample is bits, not a number, and it travels as the double that
- * holds those bits' unsigned value exactly.  53 bits of mantissa hold any
+ * holds those bits' unsigned value exactly. 53 bits of mantissa hold any
  * 32-bit word without rounding, so nothing is lost by the ride.
  *
- * The value is always non-negative.  That is not a convenience, it is what
+ * The value is always non-negative. That is not a convenience, it is what
  * makes the round trip defined: converting a negative double to an unsigned
  * integer is undefined behaviour in C, where converting a negative int32 to
- * uint32 was merely modular and happened to give back the bits.  The word form
+ * uint32 was merely modular and happened to give back the bits. The word form
  * therefore stores 0x80000000 as +2147483648.0, never as -2147483648.0, and
  * every reader goes through sox_uint32_t.
  */
@@ -707,7 +707,7 @@ The API version of the sox.h file. It is not meant to follow the version
 number of SoX but it has historically. Please do not count on
 SOX_LIB_VERSION_CODE staying in sync with the libSoX version.
 */
-#define SOX_LIB_VERSION_CODE   SOX_LIB_VERSION(16, 1, 1)
+#define SOX_LIB_VERSION_CODE   SOX_LIB_VERSION(16, 2, 0)
 
 /**
 Client API:
@@ -770,7 +770,7 @@ Returns 0x7FFFFFFF.
 Client API:
 Bits of mantissa in a sox_sample_t = 53.
 
-53, not 64: a double has 64 bits but 11 of them are the exponent.  What the
+53, not 64: a double has 64 bits but 11 of them are the exponent. What the
 pipeline resolves is the mantissa, and 53 bits of it is 21 more than the
 integer form carried.
 */
@@ -781,7 +781,7 @@ Client API:
 Upper limit of the sample range = +1.0, and unlike SOX_SAMPLE_MIN it is not
 itself a value a sample takes: the range is half open, [-1, +1).
 
-It is a limit, not a scale factor.  Multiplying by it to reach "full scale" was
+It is a limit, not a scale factor. Multiplying by it to reach "full scale" was
 the right thing to do when a sample was an integer and is now a no-op that only
 looks like arithmetic.
 */
@@ -807,20 +807,20 @@ Lower limit of the sample range = -1.0, and a value a sample may take.
  *
  * An integer of b bits becomes a sample by dividing by 2^(b-1), and that is
  * exact for every b up to 32: a double holds any 32-bit integer without
- * rounding, and dividing by a power of two only moves the exponent.  Every
+ * rounding, and dividing by a power of two only moves the exponent. Every
  * integer PCM format still round-trips bit for bit, which is the reason the
  * range is [-1, +1) and not something tidier.
  *
  * Rounding on the way out: halves toward +inf, all others to nearest integer.
  *
- * Reading no longer clips.  A float file may hold values past full scale, and
+ * Reading no longer clips. A float file may hold values past full scale, and
  * they now survive the pipeline; if the chain brings them back inside nothing
  * was lost, and if it does not the writer clips them once at the end rather
- * than the reader clipping them at the start.  That is the invariant: clipping
+ * than the reader clipping them at the start. That is the invariant: clipping
  * happens where a sample becomes a number in a file, and nowhere else.
  *
  * Unsigned integers differ from signed ones by an offset of 2^(b-1) applied
- * before the division.  The old spelling flipped the top bit, which was the
+ * before the division. The old spelling flipped the top bit, which was the
  * same operation expressed in a representation that no longer exists.
  */
 
@@ -836,15 +836,15 @@ conversion macros.
  *
  * It was the sign bit of the integer a sample used to be, and it existed so
  * that signed and unsigned integers could be turned into one another by
- * flipping it.  A double has a sign bit too, but flipping that one negates the
- * sample instead of shifting its range by half -- so the macro would not have
+ * flipping it. A double has a sign bit too, but flipping that one negates the
+ * sample instead of shifting its range by half, so the macro would not have
  * been merely useless, it would have been wrong in a way that still compiles.
  * The offset it stood for now appears as an offset, in SOX_UNSIGNED_TO_SAMPLE
  * and SOX_SAMPLE_TO_UNSIGNED.
  *
  * Removing a public macro is a break, and this migration is a major bump.
  *
- * The scale factor of a b-bit integer, as a double.  1u << 31 is
+ * The scale factor of a b-bit integer, as a double. 1u << 31 is
  * implementation-defined territory in C, so it goes through 1ull.
  */
 #define SOX_SAMPLE_SCALE(bits) ((double)(1ull << ((bits) - 1)))
@@ -873,7 +873,7 @@ Converts sox_sample_t to a signed integer of width (bits).
  *
  * This is where clipping lives now, together with the writers that call it: a
  * sample is allowed past full scale everywhere upstream, and pays for it only
- * here, once.  Both ends are checked -- the integer form could not overflow
+ * here, once. Both ends are checked, the integer form could not overflow
  * downward because -1 was exactly representable, and a double can be anywhere.
  *
  * floor(x + 0.5) rather than a cast, because a cast truncates toward zero and
@@ -900,7 +900,7 @@ Converts signed integer of width (bits) to sox_sample_t.
 /* Sign-extend, then divide.
  *
  * The value arrives as the low `bits` bits of a wider word, with nothing
- * useful above them -- a 24-bit sample of -1 arrives as 0xFFFFFF, not as -1.
+ * useful above them, a 24-bit sample of -1 arrives as 0xFFFFFF, not as -1.
  * The old spelling shifted it left by 32-bits, which put its sign bit exactly
  * where int32's sign bit is and made the extension a side effect of the shift.
  * That step is still needed and still the cheapest way to say it; only the
@@ -908,7 +908,7 @@ Converts signed integer of width (bits) to sox_sample_t.
  *
  * Casting a uint32 whose top bit is set to sox_int32_t is implementation-
  * defined before C23, and every compiler SoX builds on defines it the one way
- * two's complement allows.  The old macro relied on the same thing.
+ * two's complement allows. The old macro relied on the same thing.
  *
  * Exact: the low 32-bits bits are zeros, so dividing by 2^31 only moves the
  * exponent. */
@@ -1020,8 +1020,8 @@ Converts 64-bit float to sox_sample_t.
  * Fourteen lines of scaling, rounding and clipping used to stand here, and all
  * of it was the cost of squeezing a double through a 32-bit integer: the
  * mantissa lost 22 bits on the way in, and a value past full scale was clipped
- * before any effect had a chance to bring it back.  A sample is a double in
- * [-1, +1) and a 64-bit float file holds a double in [-1, +1).  There is
+ * before any effect had a chance to bring it back. A sample is a double in
+ * [-1, +1) and a 64-bit float file holds a double in [-1, +1). There is
  * nothing to convert.
  *
  * Values outside the range pass through unclipped, by design; the writer at the
@@ -1114,7 +1114,7 @@ Client API:
 Clamps a sample into [-1, +1) and increments a counter if it had to.
 
 Under the new invariant an effect that clips is an effect that destroys headroom
-a later one might have given back, so this belongs to the writers.  The two
+a later one might have given back, so this belongs to the writers. The two
 exceptions are the limiter branches of `vol' and `dcshift', where clipping is
 what the user asked for with `-l' rather than a side effect of the arithmetic.
 
@@ -1617,7 +1617,7 @@ typedef struct sox_instrinfo_t{
 
 /**
 Client API:
-File buffer info.  Holds info so that data can be read in blocks.
+File buffer info. Holds info so that data can be read in blocks.
 */
 typedef struct sox_fileinfo_t {
   char          *buf;                 /**< Pointer to data buffer */
@@ -2072,9 +2072,9 @@ LSX_API
 sox_open_mem_read(
     LSX_PARAM_IN_BYTECOUNT(buffer_size) void  * buffer,     /**< Pointer to audio data buffer (required). */
     size_t                                      buffer_size,/**< Number of bytes to read from audio data buffer. */
-    LSX_PARAM_IN_OPT sox_signalinfo_t   const * signal,     /**< Information already known about audio stream, or NULL if none. */
+    LSX_PARAM_IN_OPT sox_signalinfo_t   const * signal,    /**< Information already known about audio stream, or NULL if none. */
     LSX_PARAM_IN_OPT sox_encodinginfo_t const * encoding,   /**< Information already known about sample encoding, or NULL if none. */
-    LSX_PARAM_IN_OPT_Z char             const * filetype    /**< Previously-determined file type, or NULL to auto-detect. */
+    LSX_PARAM_IN_OPT_Z char             const * filetype   /**< Previously-determined file type, or NULL to auto-detect. */
     );
 
 /**
@@ -2115,8 +2115,8 @@ LSX_API
 sox_open_write(
     LSX_PARAM_IN_Z     char               const * path,     /**< Path to file to be written (required). */
     LSX_PARAM_IN       sox_signalinfo_t   const * signal,   /**< Information about desired audio stream (required). */
-    LSX_PARAM_IN_OPT   sox_encodinginfo_t const * encoding, /**< Information about desired sample encoding, or NULL to use defaults. */
-    LSX_PARAM_IN_OPT_Z char               const * filetype, /**< Previously-determined file type, or NULL to auto-detect. */
+    LSX_PARAM_IN_OPT                   sox_encodinginfo_t const * encoding,    /**< Information about desired sample encoding, or NULL to use defaults. */
+    LSX_PARAM_IN_OPT_Z                 char               const * filetype,    /**< Previously-determined file type, or NULL to auto-detect. */
     LSX_PARAM_IN_OPT   sox_oob_t          const * oob,      /**< Out-of-band data to add to file, or NULL if none. */
     LSX_PARAM_IN_OPT   sox_bool           (LSX_API * overwrite_permitted)(LSX_PARAM_IN_Z char const * filename) /**< Called if file exists to determine whether overwrite is ok. */
     );
@@ -2151,7 +2151,7 @@ LSX_API
 sox_open_mem_write(
     LSX_PARAM_OUT_BYTECAP(buffer_size) void                     * buffer,      /**< Pointer to audio data buffer that receives data (required). */
     LSX_PARAM_IN                       size_t                     buffer_size, /**< Maximum number of bytes to write to audio data buffer. */
-    LSX_PARAM_IN                       sox_signalinfo_t   const * signal,      /**< Information about desired audio stream (required). */
+    LSX_PARAM_IN       sox_signalinfo_t   const * signal,   /**< Information about desired audio stream (required). */
     LSX_PARAM_IN_OPT                   sox_encodinginfo_t const * encoding,    /**< Information about desired sample encoding, or NULL to use defaults. */
     LSX_PARAM_IN_OPT_Z                 char               const * filetype,    /**< Previously-determined file type, or NULL to auto-detect. */
     LSX_PARAM_IN_OPT                   sox_oob_t          const * oob          /**< Out-of-band data to add to file, or NULL if none. */
@@ -2168,10 +2168,10 @@ LSX_API
 sox_open_memstream_write(
     LSX_PARAM_OUT      char                     * * buffer_ptr,    /**< Receives pointer to audio data buffer that receives data (required). */
     LSX_PARAM_OUT      size_t                   * buffer_size_ptr, /**< Receives size of data written to audio data buffer (required). */
-    LSX_PARAM_IN       sox_signalinfo_t   const * signal,          /**< Information about desired audio stream (required). */
-    LSX_PARAM_IN_OPT   sox_encodinginfo_t const * encoding,        /**< Information about desired sample encoding, or NULL to use defaults. */
-    LSX_PARAM_IN_OPT_Z char               const * filetype,        /**< Previously-determined file type, or NULL to auto-detect. */
-    LSX_PARAM_IN_OPT   sox_oob_t          const * oob              /**< Out-of-band data to add to file, or NULL if none. */
+    LSX_PARAM_IN       sox_signalinfo_t   const * signal,   /**< Information about desired audio stream (required). */
+    LSX_PARAM_IN_OPT                   sox_encodinginfo_t const * encoding,    /**< Information about desired sample encoding, or NULL to use defaults. */
+    LSX_PARAM_IN_OPT_Z                 char               const * filetype,    /**< Previously-determined file type, or NULL to auto-detect. */
+    LSX_PARAM_IN_OPT                   sox_oob_t          const * oob          /**< Out-of-band data to add to file, or NULL if none. */
     );
 
 /**
@@ -2206,9 +2206,9 @@ Writes packed DSD bytes, bypassing the PCM sample path.
 
 buf holds SOX_DSD_PACKED_BYTE values interleaved by channel, so len must be a
 whole number of sample frames, and every channel of a frame must declare the
-same valid-bit count.  Only a handler that has installed a packed DSD writer
+same valid-bit count. Only a handler that has installed a packed DSD writer
 accepts these; anything else, including a malformed buffer, returns 0 without
-writing.  buf belongs to the caller and is not retained.
+writing. buf belongs to the caller and is not retained.
 @returns number of packed values written, which is 0 or all of len.
 */
 size_t
@@ -2242,11 +2242,11 @@ Reads complete 32-bit DSD words, bypassing the PCM sample path.
 
 The mirror of sox_write_packed_dsd_words: each value produced is a full word
 of 32 DSD frames with bit zero the earliest, and the words are grouped by
-channel rather than interleaved.  len must be a whole number of frames.  Only
+channel rather than interleaved. len must be a whole number of frames. Only
 a handler that has installed a packed DSD reader offers this; anything else
 returns 0 without reading, and the caller falls back to sox_read.
 
-Whole words only.  A file whose length is not a multiple of 32 frames leaves
+Whole words only. A file whose length is not a multiple of 32 frames leaves
 its tail behind for sox_read, which is also what happens once the words run
 out at the end of the stream.
 @returns number of packed words read, a multiple of the channel count; the

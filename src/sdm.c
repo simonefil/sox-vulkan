@@ -8,7 +8,7 @@
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
  * General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
@@ -1144,28 +1144,55 @@ static sox_sample_t sdm_sample_1bit(sdm_t *p, double x)
   double s6 = p->simple_state[6];                                           \
   double s7 = p->simple_state[7]
 
-#define SDM_KERNEL_STEP_LOW()                                                \
-  double x = *ibuf++ * scale;                                               \
-  double d0 = s0 - g[0] * s1 + x - y;                                      \
-  double d1 = s1 + s0 - g[1] * s2;                                         \
-  double d2 = s2 + s1 - g[2] * s3;                                         \
-  double v = x + a[0] * d0;                                                 \
-  v += a[1] * d1;                                                          \
-  v += a[2] * d2
-
 #define SDM_KERNEL_OUTPUT()                                                  \
   y = signbit(v) ? -1.0 : 1.0;                                             \
   *obuf++ = (sox_sample_t)(y * SOX_SAMPLE_MAX)
+
+/* The modulator step rearranged so the loop-carried chain is one multiply-add
+ * and the sign test. The direct form ran y -> d0 -> the a[] tree -> v ->
+ * signbit -> y, about twenty cycles of latency for four of work. The state
+ * update is linear and y enters it once, so the feedback comes out:
+ *
+ *   s_n = A s_{n-1} + e0 (x_n - y_{n-1})
+ *   v_n = x_n + a . s_n = (1 + a0) x_n + w . s_{n-1} - a0 y_{n-1},  w = A' a
+ *
+ * The dot product reads the previous state, so it no longer waits for y.
+ * Costs about ten more flops per sample, paid out of throughput the
+ * latency-bound loop had spare. The two forms agree exactly but round
+ * differently, so the bit stream is not identical to the older one.
+ *
+ * w is indexed by constants below, so it stays in registers. */
+#define SDM_FEEDFORWARD_COEFFS(order)                                        \
+  double w[MAX_FILTER_ORDER];                                               \
+  const double c0 = 1.0 + a[0];                                             \
+  do {                                                                       \
+    int wi;                                                                  \
+    w[0] = a[0] + a[1];                                                      \
+    for (wi = 1; wi < (order) - 1; ++wi)                                     \
+      w[wi] = a[wi] + a[wi + 1] - g[wi - 1] * a[wi - 1];                     \
+    w[(order) - 1] = a[(order) - 1] - g[(order) - 2] * a[(order) - 2];       \
+  } while (0)
 
 static void sdm_process_simple_order4(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t *obuf, size_t len)
 {
   SDM_KERNEL_BEGIN();
 
+  SDM_FEEDFORWARD_COEFFS(4);
+
   while (len--) {
-    SDM_KERNEL_STEP_LOW();
-    double d3 = s3 + s2;
-    v += a[3] * d3;
+    double x = *ibuf++ * scale;
+    double yp = y;
+    double u = c0 * x + ((w[0] * s0 + w[1] * s1) + (w[2] * s2 + w[3] * s3));
+    double v = u - a[0] * yp;
+    double p;
+    double d0, d1, d2, d3;
+
     SDM_KERNEL_OUTPUT();
+    p = x - yp;
+    d0 = s0 - g[0] * s1 + p;
+    d1 = s1 + s0 - g[1] * s2;
+    d2 = s2 + s1 - g[2] * s3;
+    d3 = s3 + s2;
     s0 = d0, s1 = d1, s2 = d2, s3 = d3;
   }
 
@@ -1181,13 +1208,23 @@ static void sdm_process_simple_order5(sdm_t *p, const sox_sample_t *ibuf, sox_sa
   SDM_KERNEL_BEGIN();
   double s4 = p->simple_state[4];
 
+  SDM_FEEDFORWARD_COEFFS(5);
+
   while (len--) {
-    SDM_KERNEL_STEP_LOW();
-    double d3 = s3 + s2 - g[3] * s4;
-    double d4 = s4 + s3;
-    v += a[3] * d3;
-    v += a[4] * d4;
+    double x = *ibuf++ * scale;
+    double yp = y;
+    double u = c0 * x + (((w[0] * s0 + w[1] * s1) + (w[2] * s2 + w[3] * s3)) + w[4] * s4);
+    double v = u - a[0] * yp;
+    double p;
+    double d0, d1, d2, d3, d4;
+
     SDM_KERNEL_OUTPUT();
+    p = x - yp;
+    d0 = s0 - g[0] * s1 + p;
+    d1 = s1 + s0 - g[1] * s2;
+    d2 = s2 + s1 - g[2] * s3;
+    d3 = s3 + s2 - g[3] * s4;
+    d4 = s4 + s3;
     s0 = d0, s1 = d1, s2 = d2, s3 = d3, s4 = d4;
   }
 
@@ -1205,15 +1242,25 @@ static void sdm_process_simple_order6(sdm_t *p, const sox_sample_t *ibuf, sox_sa
   double s4 = p->simple_state[4];
   double s5 = p->simple_state[5];
 
+  SDM_FEEDFORWARD_COEFFS(6);
+
   while (len--) {
-    SDM_KERNEL_STEP_LOW();
-    double d3 = s3 + s2 - g[3] * s4;
-    double d4 = s4 + s3 - g[4] * s5;
-    double d5 = s5 + s4;
-    v += a[3] * d3;
-    v += a[4] * d4;
-    v += a[5] * d5;
+    double x = *ibuf++ * scale;
+    double yp = y;
+    double u = c0 * x + (((w[0] * s0 + w[1] * s1) + (w[2] * s2 + w[3] * s3)) +
+        (w[4] * s4 + w[5] * s5));
+    double v = u - a[0] * yp;
+    double p;
+    double d0, d1, d2, d3, d4, d5;
+
     SDM_KERNEL_OUTPUT();
+    p = x - yp;
+    d0 = s0 - g[0] * s1 + p;
+    d1 = s1 + s0 - g[1] * s2;
+    d2 = s2 + s1 - g[2] * s3;
+    d3 = s3 + s2 - g[3] * s4;
+    d4 = s4 + s3 - g[4] * s5;
+    d5 = s5 + s4;
     s0 = d0, s1 = d1, s2 = d2, s3 = d3, s4 = d4, s5 = d5;
   }
 
@@ -1233,17 +1280,26 @@ static void sdm_process_simple_order7(sdm_t *p, const sox_sample_t *ibuf, sox_sa
   double s5 = p->simple_state[5];
   double s6 = p->simple_state[6];
 
+  SDM_FEEDFORWARD_COEFFS(7);
+
   while (len--) {
-    SDM_KERNEL_STEP_LOW();
-    double d3 = s3 + s2 - g[3] * s4;
-    double d4 = s4 + s3 - g[4] * s5;
-    double d5 = s5 + s4 - g[5] * s6;
-    double d6 = s6 + s5;
-    v += a[3] * d3;
-    v += a[4] * d4;
-    v += a[5] * d5;
-    v += a[6] * d6;
+    double x = *ibuf++ * scale;
+    double yp = y;
+    double u = c0 * x + (((w[0] * s0 + w[1] * s1) + (w[2] * s2 + w[3] * s3)) +
+        ((w[4] * s4 + w[5] * s5) + w[6] * s6));
+    double v = u - a[0] * yp;
+    double p;
+    double d0, d1, d2, d3, d4, d5, d6;
+
     SDM_KERNEL_OUTPUT();
+    p = x - yp;
+    d0 = s0 - g[0] * s1 + p;
+    d1 = s1 + s0 - g[1] * s2;
+    d2 = s2 + s1 - g[2] * s3;
+    d3 = s3 + s2 - g[3] * s4;
+    d4 = s4 + s3 - g[4] * s5;
+    d5 = s5 + s4 - g[5] * s6;
+    d6 = s6 + s5;
     s0 = d0, s1 = d1, s2 = d2, s3 = d3;
     s4 = d4, s5 = d5, s6 = d6;
   }
@@ -1263,22 +1319,27 @@ static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf, sox_sa
   SDM_KERNEL_BEGIN();
   SDM_KERNEL_LOAD_HIGH_STATE();
 
+  SDM_FEEDFORWARD_COEFFS(8);
+
   while (len--) {
     double x = *ibuf++ * scale;
-    double d0 = s0 - g[0] * s1 + x - y;
-    double d1 = s1 + s0 - g[1] * s2;
-    double d2 = s2 + s1 - g[2] * s3;
-    double d3 = s3 + s2 - g[3] * s4;
-    double d4 = s4 + s3 - g[4] * s5;
-    double d5 = s5 + s4 - g[5] * s6;
-    double d6 = s6 + s5 - g[6] * s7;
-    double d7 = s7 + s6;
-    double v01 = a[0] * d0 + a[1] * d1;
-    double v23 = a[2] * d2 + a[3] * d3;
-    double v45 = a[4] * d4 + a[5] * d5;
-    double v67 = a[6] * d6 + a[7] * d7;
-    double v = x + (v01 + v23) + (v45 + v67);
+    double yp = y;
+    double u = c0 * x + (w[0] * s0 + w[1] * s1 + w[2] * s2 + w[3] * s3) +
+        (w[4] * s4 + w[5] * s5 + w[6] * s6 + w[7] * s7);
+    double v = u - a[0] * yp;
+    double p;
+    double d0, d1, d2, d3, d4, d5, d6, d7;
+
     SDM_KERNEL_OUTPUT();
+    p = x - yp;
+    d0 = s0 - g[0] * s1 + p;
+    d1 = s1 + s0 - g[1] * s2;
+    d2 = s2 + s1 - g[2] * s3;
+    d3 = s3 + s2 - g[3] * s4;
+    d4 = s4 + s3 - g[4] * s5;
+    d5 = s5 + s4 - g[5] * s6;
+    d6 = s6 + s5 - g[6] * s7;
+    d7 = s7 + s6;
     s0 = d0, s1 = d1, s2 = d2, s3 = d3;
     s4 = d4, s5 = d5, s6 = d6, s7 = d7;
   }
@@ -1295,7 +1356,6 @@ static void sdm_process_simple_order8(sdm_t *p, const sox_sample_t *ibuf, sox_sa
 }
 
 #undef SDM_KERNEL_OUTPUT
-#undef SDM_KERNEL_STEP_LOW
 #undef SDM_KERNEL_LOAD_HIGH_STATE
 #undef SDM_KERNEL_BEGIN
 
@@ -1315,9 +1375,9 @@ static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t 
  *
  * A high-order sigma-delta loop is only conditionally stable: driven too
  * hard, its integrators run away and the output becomes a stream of alternate
- * bits carrying nothing.  Once that has happened the state cannot be
+ * bits carrying nothing. Once that has happened the state cannot be
  * recovered, so it is detected and reported rather than left to produce
- * noise.  Both tests matter -- a state may become infinite outright, or merely
+ * noise. Both tests matter, a state may become infinite outright, or merely
  * grow past the point from which the loop cannot return. */
 static sox_bool sdm_simple_state_valid(const sdm_t *p)
 {
@@ -1336,19 +1396,19 @@ static sox_bool sdm_simple_state_valid(const sdm_t *p)
  *
  * Everything the caller needs to resume is passed in and updated: the
  * integrator state, the last output, and the partly filled byte with its bit
- * count.  Nothing is read from an sdm_t, so several channels can run through
+ * count. Nothing is read from an sdm_t, so several channels can run through
  * this at once from different threads, each with its own state; the strides
  * are what let each read and write its own channel of an interleaved buffer.
  *
  * The three loops are one packing problem: finish the byte a previous call
  * left partial, then run whole bytes at a time, then start a new partial byte
- * with whatever is left.  Only the middle loop is on the fast path.
+ * with whatever is left. Only the middle loop is on the fast path.
  *
  * The order-8 case is written out with the state in locals and the loop body
- * in a macro.  It is the common case, and keeping the eight integrators in
- * registers across the byte -- rather than reading and writing an array each
- * sample -- is most of the difference in speed.  Every other order goes
- * through the general routine, whose shape is otherwise identical. */
+ * in a macro. It is the common case, and most of the speed comes from keeping
+ * the eight integrators in registers across the byte instead of reading and
+ * writing an array each sample. Every other order goes through the general
+ * routine, whose shape is otherwise identical. */
 static size_t sdm_process_simple_packed(const sdm_filter_t *f,
                                         double *state, double *prev_y,
                                         uint8_t *packet,
@@ -1373,24 +1433,27 @@ static size_t sdm_process_simple_packed(const sdm_filter_t *f,
     double s5 = state[5];
     double s6 = state[6];
     double s7 = state[7];
+    SDM_FEEDFORWARD_COEFFS(8);
 
 #define SDM_PACKED_ORDER8_STEP(target) do {                                 \
       double x = *ibuf * scale;                                             \
-      double d0 = s0 - g[0] * s1 + x - y;                                  \
-      double d1 = s1 + s0 - g[1] * s2;                                     \
-      double d2 = s2 + s1 - g[2] * s3;                                     \
-      double d3 = s3 + s2 - g[3] * s4;                                     \
-      double d4 = s4 + s3 - g[4] * s5;                                     \
-      double d5 = s5 + s4 - g[5] * s6;                                     \
-      double d6 = s6 + s5 - g[6] * s7;                                     \
-      double d7 = s7 + s6;                                                  \
-      double v01 = a[0] * d0 + a[1] * d1;                                  \
-      double v23 = a[2] * d2 + a[3] * d3;                                  \
-      double v45 = a[4] * d4 + a[5] * d5;                                  \
-      double v67 = a[6] * d6 + a[7] * d7;                                  \
-      double v = x + (v01 + v23) + (v45 + v67);                            \
+      double yp = y;                                                        \
+      double u = c0 * x + (w[0] * s0 + w[1] * s1 + w[2] * s2 + w[3] * s3) +        \
+          (w[4] * s4 + w[5] * s5 + w[6] * s6 + w[7] * s7);                         \
+      double v = u - a[0] * yp;                                             \
+      double p;                                                             \
+      double d0, d1, d2, d3, d4, d5, d6, d7;                               \
       y = signbit(v) ? -1.0 : 1.0;                                         \
       (target) = (uint8_t)(((target) << 1) | (y > 0));                      \
+      p = x - yp;                                                           \
+      d0 = s0 - g[0] * s1 + p;                                             \
+      d1 = s1 + s0 - g[1] * s2;                                            \
+      d2 = s2 + s1 - g[2] * s3;                                            \
+      d3 = s3 + s2 - g[3] * s4;                                            \
+      d4 = s4 + s3 - g[4] * s5;                                            \
+      d5 = s5 + s4 - g[5] * s6;                                            \
+      d6 = s6 + s5 - g[6] * s7;                                            \
+      d7 = s7 + s6;                                                         \
       s0 = d0, s1 = d1, s2 = d2, s3 = d3;                                 \
       s4 = d4, s5 = d5, s6 = d6, s7 = d7;                                 \
       ibuf += input_stride;                                                  \
@@ -1437,12 +1500,28 @@ static size_t sdm_process_simple_packed(const sdm_filter_t *f,
     state[6] = s6;
     state[7] = s7;
   } else {
+    /* Every order other than eight, in the same rearranged form. The two
+     * state buffers alternate instead of one being copied over the other. */
+    const double *a = f->a;
+    const double *g = f->g;
+    const int order = f->order;
     double next[MAX_FILTER_ORDER];
+    double *current = state;
+    double *following = next;
+
+    SDM_FEEDFORWARD_COEFFS(order);
 
     while (len--) {
       double x = *ibuf * scale;
-      double v = sdm_filter_calc(state, next, f, x, y);
+      double yp = y;
+      double u = c0 * x;
+      double v;
+      double q;
+      int i;
 
+      for (i = 0; i < order; ++i)
+        u += w[i] * current[i];
+      v = u - a[0] * yp;
       y = signbit(v) ? -1.0 : 1.0;
       *packet = (uint8_t)((*packet << 1) | (y > 0));
       if (++packet_bits == 8) {
@@ -1452,9 +1531,21 @@ static size_t sdm_process_simple_packed(const sdm_filter_t *f,
         *packet = 0;
         emitted++;
       }
-      memcpy(state, next, (size_t)f->order * sizeof(*next));
+      q = x - yp;
+      following[0] = current[0] - g[0] * current[1] + q;
+      for (i = 1; i < order - 1; ++i)
+        following[i] = current[i] + current[i - 1] - g[i] * current[i + 1];
+      following[order - 1] = current[order - 1] + current[order - 2];
+      {
+        double *swap = current;
+
+        current = following;
+        following = swap;
+      }
       ibuf += input_stride;
     }
+    if (current != state)
+      memcpy(state, current, (size_t)order * sizeof(*state));
   }
 
   *prev_y = y;
@@ -1696,6 +1787,10 @@ typedef struct sdm_effect {
   uint32_t      trellis_order;
   uint32_t      trellis_num;
   uint32_t      trellis_lat;
+  /* Set by the `sdm-vulkan' handler only. `sdm' stays on the CPU even under
+   * --vulkan-*: the two are different modulators, not two precisions of
+   * one. */
+  sox_bool      want_vulkan;
 #if HAVE_VULKAN
   lsx_sdm_vulkan_t *vulkan;
   lsx_vulkan_context_t *vulkan_engine;
@@ -1724,14 +1819,14 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
 /*
  * The logical modulator batch follows whoever feeds it, so the context is
  * built on first use: the resident producer's declared block when the chain
- * pairs up, the default host batch otherwise.  The backend owns the small
+ * pairs up, the default host batch otherwise. The backend owns the small
  * carry area needed for a partial FSM block between producer slices.
  */
 /* Build the modulator on first use, sized to the producer's block.
  *
  * It cannot be built at start: the batch size should match what the upstream
  * effect actually hands over, and that is only known when the first resident
- * block arrives.  Sizing it to anything else would either waste device memory
+ * block arrives. Sizing it to anything else would either waste device memory
  * or force every block to be split. */
 static int ensure_vulkan_context(sdm_effect_t *p, size_t batch_frames)
 {
@@ -1772,7 +1867,7 @@ static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf, size_t *osam
    * The GPU output is planar because DSF stores channels in separate blocks.
    * A SoX sample carries one complete 32-bit DSD word in this packed mode --
    * as the word's numeric value, not as its four bytes laid into the sample's
-   * storage.  The two used to be the same thing, when a sample was an int32
+   * storage. The two used to be the same thing, when a sample was an int32
    * and a memcpy of the whole block did the job; a double has neither the
    * same width nor the same representation, so each word is loaded and
    * converted on its own.
@@ -1813,12 +1908,12 @@ static int process_vulkan_input(sdm_effect_t *p, size_t frames)
 
 /* Act as the tail of a resident chain: take resident PCM and emit packed DSD.
  *
- * The modulator is always the end of a chain -- nothing downstream of it can
- * take DSD as a resident buffer -- so this effect registers only the consumer
+ * The modulator is always the end of a chain (nothing downstream of it can
+ * take DSD as a resident buffer) so this effect registers only the consumer
  * endpoint and no producer or transform.
  *
  * Output already held is emitted before any new input is taken, so the two
- * can never both be outstanding.  *active tells the caller that something is
+ * can never both be outstanding. *active tells the caller that something is
  * still pending here, which is what keeps it calling after its own input has
  * ended. */
 static int consume_vulkan_resident_effect(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active)
@@ -1991,6 +2086,14 @@ static int getopts(sox_effect_t *effp, int argc, char **argv)
   return argc != optstate.ind ? lsx_usage(effp) : SOX_SUCCESS;
 }
 
+static int getopts_vulkan(sox_effect_t *effp, int argc, char **argv)
+{
+  sdm_effect_t *p = effp->priv;
+
+  p->want_vulkan = sox_true;
+  return getopts(effp, argc, argv);
+}
+
 static int start(sox_effect_t *effp)
 {
   sdm_effect_t *p = effp->priv;
@@ -1999,8 +2102,14 @@ static int start(sox_effect_t *effp)
 
   p->channels = effp->in_signal.channels;
 #if HAVE_VULKAN
-  if (sox_globals.vulkan_profile != sox_vulkan_profile_none) {
+  if (p->want_vulkan) {
     lsx_vulkan_context_t *vulkan;
+
+    if (sox_globals.vulkan_profile == sox_vulkan_profile_none) {
+      lsx_fail("sdm-vulkan needs a Vulkan profile; add --vulkan-fast, "
+               "--vulkan-precise or --vulkan-reference");
+      return SOX_EOF;
+    }
 
     /*
      * The modulator does not resample: it consumes whatever arrives at the
@@ -2037,6 +2146,11 @@ static int start(sox_effect_t *effp)
     effp->out_signal.rate = sdm_rate;
     effp->out_signal.packing = SOX_DSD_PACKING_WORD;
     return SOX_SUCCESS;
+  }
+#else
+  if (p->want_vulkan) {
+    lsx_fail("sdm-vulkan needs a build with Vulkan support");
+    return SOX_EOF;
   }
 #endif
   p->sdm = lsx_calloc(p->channels, sizeof(*p->sdm));
@@ -2240,6 +2354,25 @@ const sox_effect_handler_t *lsx_sdm_effect_fn(void)
     "\n  -l       Override trellis latency",
     SOX_EFF_PREC | SOX_EFF_RATE | SOX_EFF_MCHAN,
     getopts, start, flow, drain, stop, 0, sizeof(sdm_effect_t),
+  };
+  return &handler;
+}
+
+/* A separate name rather than a flag on `sdm': the two are different
+ * modulators, `sdm' the selectable high-order loops and `sdm-vulkan' the fixed
+ * MASH-2/FSM, and no option carries between them. It is also what makes the
+ * hybrid chain expressible, `rate' on the device with `sdm' on the host. */
+const sox_effect_handler_t *lsx_sdmvulkan_effect_fn(void)
+{
+  static sox_effect_handler_t handler = {
+    "sdm-vulkan", ""
+    "\n  Fixed MASH-2/FSM modulator on the Vulkan device."
+    "\n  Needs --vulkan-fast, --vulkan-precise or --vulkan-reference."
+    "\n  Modulates at its input rate; put a rate effect ahead of it to"
+    "\n  reach the DSD rate (DSD64..DSD1024 is 2822400 to 45158400)."
+    "\n  Second-order shaping: lower quality than sdm, use at DSD256 or above.",
+    SOX_EFF_PREC | SOX_EFF_RATE | SOX_EFF_MCHAN,
+    getopts_vulkan, start, flow, drain, stop, 0, sizeof(sdm_effect_t),
   };
   return &handler;
 }

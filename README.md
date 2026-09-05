@@ -4,21 +4,22 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 
 - Functional OpenMP-backed `--multi-threaded` processing across independent effect channels and CPU SDM channels; `--single-threaded` forces single-thread execution.
 - Optional Vulkan acceleration for resampling, FIR filtering, and PCM-to-DSD conversion, with `fast`, `precise`, and `reference` numerical profiles and device-resident effect chains.
-- Extended PCM-to-DSD conversion from DSD64 through DSD1024, with selectable high-order CPU modulators and an experimental parallel Vulkan MASH-2/FSM backend.
+- Extended PCM-to-DSD conversion from DSD64 through DSD1024, with selectable high-order CPU modulators (`sdm`) and a parallel Vulkan MASH-2/FSM modulator (`sdm-vulkan`) that trades noise performance for an order of magnitude in speed.
 - FFmpeg-backed AC-3, E-AC-3, AAC, ALAC, TrueHD, MLP, DTS, DTS-HD, and xHE-AAC/USAC support.
 - Reproducible static release builds for Windows, macOS, Linux, and FreeBSD; bundled codec libraries are linked statically.
 
 ---
 
-## Table of Contents
+## Table of contents
 
 1. [Dependencies](#dependencies)
-2. [Build Instructions](#build-instructions)
-3. [Default Options](#default-options)
-4. [Build Options](#build-options)
-5. [The Sample Pipeline](#the-sample-pipeline)
-6. [Vulkan Profiles](#vulkan-profiles)
-7. [Verification](#verification)
+2. [Build instructions](#build-instructions)
+3. [Default options](#default-options)
+4. [Build options](#build-options)
+5. [The sample pipeline](#the-sample-pipeline)
+6. [Runtime options](#runtime-options)
+7. [Vulkan profiles](#vulkan-profiles)
+8. [Verification](#verification)
 
 ---
 
@@ -172,9 +173,9 @@ Running a Vulkan-enabled binary requires a Vulkan Runtime to be installed: the V
 
 ---
 
-## Build Instructions
+## Build instructions
 
-### Quick Start
+### Quick start
 
 **Windows**, from a Developer Command Prompt for VS:
 ```bat
@@ -196,7 +197,7 @@ Output:
 - Windows: `output\sox.exe`
 - Linux/macOS/BSD: `output/sox`
 
-### Build with Custom Options
+### Build with custom options
 
 **Windows:**
 ```powershell
@@ -236,15 +237,18 @@ Output:
 # Add the shared-only PulseAudio client driver (Linux)
 ./build_static_libs.sh --with-pulseaudio
 
+# Keep dependency sources and build directories for incremental rebuilds
+./build_static_libs.sh --keep-build
+
 # Clean build directories
 ./build_static_libs.sh --clean
 ```
 
 ---
 
-## Default Options
+## Default options
 
-### Codecs (Enabled by Default)
+### Codecs (enabled by default)
 
 | Codec | Description | Libraries |
 |-------|-------------|-----------|
@@ -268,14 +272,14 @@ Output:
 | ID3 Tag | MP3 metadata support | libid3tag |
 | PNG | Spectrogram output | libpng, zlib |
 
-### Additional Codecs (Linux/macOS/BSD Only)
+### Additional codecs (Linux/macOS/BSD only)
 
 | Codec | Description |
 |-------|-------------|
 | AMR | Adaptive Multi-Rate audio |
 | libmagic | File type detection |
 
-### Audio Drivers by Platform
+### Audio drivers by platform
 
 | Platform | Default Drivers |
 |----------|-----------------|
@@ -286,7 +290,7 @@ Output:
 
 ---
 
-## Build Options
+## Build options
 
 ### Windows (PowerShell)
 
@@ -297,7 +301,7 @@ Output:
 | `-KeepBuild` | Keep dependency sources, static libraries, and build directories |
 | `-Help` | Show help message |
 
-**Codec Exclusion:**
+**Codec exclusion:**
 
 | Argument | Description |
 |----------|-------------|
@@ -312,7 +316,7 @@ Output:
 | `-NoId3tag` | Exclude ID3 tag support |
 | `-NoPng` | Exclude PNG spectrogram support |
 
-**Vulkan Backend:**
+**Vulkan backend:**
 
 | Argument | Description |
 |----------|-------------|
@@ -332,7 +336,7 @@ Output:
 | `--clean` | Remove all build and output directories |
 | `--help`, `-h` | Show help message |
 
-**Codec Exclusion:**
+**Codec exclusion:**
 
 | Argument | Description |
 |----------|-------------|
@@ -349,14 +353,14 @@ Output:
 | `--no-png` | Exclude PNG spectrogram support |
 | `--no-magic` | Exclude libmagic support |
 
-**Vulkan Backend:**
+**Vulkan backend:**
 
 | Argument | Description |
 |----------|-------------|
 | `--vulkan` | Enable the Vulkan rate, FIR, and DSD backends (needs a Vulkan loader, `glslc` and the glslang headers) |
 | `--no-vulkan` | Disable them (default) |
 
-**Audio Driver Exclusion:**
+**Audio driver exclusion:**
 
 | Argument | Description |
 |----------|-------------|
@@ -365,7 +369,7 @@ Output:
 | `--no-coreaudio` | Exclude CoreAudio driver (macOS) |
 | `--no-oss` | Exclude OSS driver |
 
-**Audio Driver Inclusion:**
+**Audio driver inclusion:**
 
 | Argument | Description |
 |----------|-------------|
@@ -376,7 +380,7 @@ Output:
 
 ---
 
-## The Sample Pipeline
+## The sample pipeline
 
 Samples travel through SoX as `double`, normalised to the half-open range
 `[-1, +1)`. `SOX_SAMPLE_MAX` is `1.0` and is a limit, not a scale factor.
@@ -395,7 +399,7 @@ A chain of neutral effects is now the exact identity. It was not before: each
 link rounded to the 32-bit grid, so ten `gain 0` in a row cost ten roundings.
 
 **This is an ABI break.** `SOVERSION` goes from 3 to 4, and every program that
-links libsox has to be recompiled — `sox_sample_t` is in the signature of
+links libsox has to be recompiled: `sox_sample_t` is in the signature of
 `sox_read`, `sox_write`, the packed-DSD entry points and every effect handler.
 An `int32_t *` is not a `double *` under any cast, so there is no compatibility
 shim and none is planned.
@@ -412,73 +416,56 @@ Two things to know before upgrading:
 
 ---
 
-## Vulkan Profiles
+## Runtime options
 
-- Linux/macOS/BSD build: `./build_static_libs.sh --vulkan`
-- Windows build: `.\build_static_libs.ps1 -Vulkan`
-- Runtime: select one profile
-- No runtime `--vulkan` option
+`sox --help` lists every global option. These are the ones that decide where the
+work runs and how much of it moves per call.
 
-| Runtime option | Numerical family | Device requirement | Intended use |
-|----------------|------------------|--------------------|--------------|
-| omitted | CPU implementation | None | CPU execution |
-| `--vulkan-fast` | FP32 FFT and accumulation | Vulkan compute | Highest GPU throughput and lowest memory use |
-| `--vulkan-precise` | FP64 when available; double-single FP32 otherwise | Vulkan compute | High numerical accuracy with an FP32-device fallback |
-| `--vulkan-reference` | FP64 double-double | Hardware `shaderFloat64` | Numerical reference and qualification |
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--multi-threaded`, `--single-threaded` | single | OpenMP across the effect's channels. Pays off only when a call carries enough frames, see [Buffer size](#buffer-size). |
+| `--buffer N` | 8192 | Frames per processing call, counted in samples, so each channel gets `N` divided by the channel count. The option with the largest effect on device throughput, see [Buffer size](#buffer-size). (The usage line says BYTES. It's samples.) |
+| `--input-buffer N` | as `--buffer` | The same, input side only. |
+| `--vulkan-fast`, `--vulkan-precise`, `--vulkan-reference` | none | Picks a device profile. Mutually exclusive. Omit them and everything runs on the CPU. |
 
-FIR and rate depend on the selected execution profile:
+Two more worth knowing. `--diagnostics DIR` writes a machine-readable `run.txt`
+with the backend each effect actually took and the phase timings. `--dft-min N`
+sets the smallest DFT the FIR and rate stages will use, as a power of two,
+default 10.
 
-| Backend/profile | Performance | FIR SNR, pre-quantization |
-|-----------------|-------------|---------------------------|
-| CPU | Lowest startup cost | 309–313 dB |
-| Vulkan fast | Highest GPU throughput; lowest GPU memory | 139–140 dB |
-| Vulkan precise | Between fast and reference | 288–311 dB |
-| Vulkan reference | Highest setup and arithmetic cost | 624.77 dB in the qualified double-double case |
+---
 
-### DSD modulation
+## Vulkan profiles
 
-- CPU: selectable `sdm-*` and `clans-*` modulators; options `-f`, `-t`, `-n`, and `-l` apply.
-- Vulkan: DSD64 through DSD1024, one to six channels, fixed MASH-2/FSM, −3 dB gain.
-- Vulkan ignores CPU-only `sdm` options `-f`, `-t`, `-n`, and `-l`.
+Build with `./build_static_libs.sh --vulkan` on Linux, macOS and BSD, or
+`.\build_static_libs.ps1 -Vulkan` on Windows. Then pick one profile at runtime.
+There's no plain `--vulkan`.
 
-The Vulkan SDM backend is experimental. It is much faster than the CPU modulators, but its second-order noise shaping provides lower quality. Use it only at DSD256 or higher.
+| Profile | Arithmetic | Device requirement | Use for |
+|---------|------------|--------------------|---------|
+| omitted | CPU | None | CPU execution |
+| `--vulkan-fast` | FP32 FFT and accumulation | Vulkan compute | Throughput, lowest device memory |
+| `--vulkan-precise` | FP64 where the device has it, double-single FP32 otherwise | Vulkan compute | Accuracy on any device |
+| `--vulkan-reference` | FP64 double-double | Hardware `shaderFloat64` | Qualification |
 
-| Backend | Modulator | Performance | Quality |
-|---------|-----------|-------------|---------|
-| CPU | Selectable high-order `sdm-*` and `clans-*` | Lower throughput; OpenMP across channels | Recommended for maximum quality |
-| Vulkan, all profiles | Fixed MASH-2/FSM | Highly parallel GPU backend | Experimental; use at DSD256 or higher |
+The profile decides where `rate`, `fir` and DSD decoding run. The modulator goes
+by name instead:
 
-PCM-to-DSD throughput on M5 Pro, stereo, 10-second input:
+| Effect | Runs on |
+|--------|---------|
+| `rate`, `fir`, DSD decode | The device under a profile, the CPU without one |
+| `sdm` | The CPU, always |
+| `sdm-vulkan` | The device, and it needs a profile |
 
-| Rate | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
-|------|-----------|-------------|----------------|------------------|
-| DSD64 | 17.32× | 96.41× | 42.53× | Not available |
-| DSD128 | 8.32× | 49.95× | 22.99× | Not available |
-| DSD256 | 4.03× | 29.32× | 13.54× | Not available |
-| DSD512 | 2.36× | 16.75× | 7.43× | Not available |
-| DSD1024 | 1.16× | 8.24× | 3.76× | Not available |
+In v15 `sdm` under a Vulkan flag quietly became the device modulator. It doesn't
+any more, and that's the one incompatibility to watch for in old command lines.
 
-PCM-to-DSD throughput on Ryzen 7 5700X3D and RTX 3080, stereo, 10-second input:
+### Rate
 
-| Rate | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
-|------|-----------|-------------|----------------|------------------|
-| DSD64 | 8.38× | 24.45× | 27.17× | 12.41× |
-| DSD128 | 4.28× | 20.04× | 21.46× | 8.06× |
-| DSD256 | 2.21× | 14.99× | 15.46× | 4.74× |
-| DSD512 | 1.14× | 10.80× | 10.07× | 2.68× |
-| DSD1024 | 0.56× | 5.99× | 6.60× | 1.41× |
-
-| Rate | Vulkan SDM SNR, 20 Hz–20 kHz | Use |
-|------|-------------------------------|-----|
-| DSD64 | ~70 dB | Not recommended |
-| DSD128 | ~85 dB | Not recommended |
-| DSD256 | ~100 dB | Minimum useful rate |
-| DSD512 | ~115 dB | Supported use |
-| DSD1024 | ~130 dB | Supported use |
-
-- The Vulkan SDM modulator is identical for `fast`, `precise`, and `reference`; the profile affects the preceding rate/FIR processing only.
-- Vulkan reference was unavailable on the measured M5 Pro because it requires hardware `shaderFloat64`.
-- Noise shaping is stable only at second order. Higher-order FSM variants were rejected because their state space explodes and truncation destroys quality.
+- The CPU planner owns coefficients, topology, quality, phase, bandwidth, aliasing, length, latency and drain.
+- Vulkan runs the DFT, polyphase and half-band stages it supports: `medium`, `high`, `very-high`, exact ratios, the 44.1/48 kHz family, DSD rates.
+- Everything else falls back to the CPU. `-V3` shows the route taken.
+- `-R` and `-d` keep working on the CPU. Under a profile they're ignored with a warning: they'd exclude the effect from the device, and they say nothing about where the work should run.
 
 ### FIR
 
@@ -493,69 +480,227 @@ fir 1-6=room-correction.txt
 - Repeated channel assignments cascade in command-line order.
 - Different coefficient lengths retain their relative alignment.
 
-### Rate
+### What the profiles cost and buy
 
-- CPU planner remains authoritative for coefficients, topology, quality, phase, bandwidth, aliasing, length, latency, and drain.
-- Vulkan executes supported DFT, polyphase, and half-band stages.
-- Supported plans include `medium`, `high`, `very-high`, exact ratios, 44.1/48 kHz family conversion, and DSD rates.
-- Unsupported stages fall back to CPU.
-- Vulkan ignores `-R` and `-d`, with a warning: they are the only options that
-  would exclude the effect from the device, and they say nothing about where
-  the work should run. On CPU both continue to apply.
-- Use `-V3` to inspect the selected route.
+Twelve FIR configurations, `--buffer 262144`, on an M5 Pro and on a Ryzen 7
+5700X3D with an RTX 3080: 8192 to 131072 taps, 48 to 384 kHz, 1 to 16 channels,
+one shared filter or one filter per channel. SNR is against the same
+convolution computed in exact rational arithmetic, so the figures are the
+distance from the correct answer, not from each other.
+
+| Profile | FIR SNR, M5 Pro | FIR SNR, RTX 3080 | Median throughput, M5 Pro / RTX 3080 |
+|---------|-----------------|-------------------|--------------------------------------|
+| CPU single | 282–310 dB | 278–310 dB | 286× / 105× |
+| CPU multi | 282–310 dB | 278–310 dB | 400× / 132× |
+| `--vulkan-fast` | 112–135 dB | 112–135 dB | 166× / 41× |
+| `--vulkan-precise` | 263–288 dB | 279–311 dB | 98× / 40× |
+| `--vulkan-reference` | Not available | 280–630 dB | n/a / 16× |
+
+Same code, 16 to 25 dB apart on `precise`: the 3080 has `shaderFloat64` and gets
+real FP64, Apple silicon falls back to double-single FP32 through MoltenVK.
+`reference` needs `shaderFloat64` outright, so it does not run on the Mac at
+all.
+
+The CPU wins the median case on both machines. The device pulls ahead on
+long filters and high channel counts, so measure the chain you actually run.
+
+One configuration sits outside those ranges, and it is worth knowing why:
+
+```text
+fir a.txt fir b.txt          # two effects, chained
+fir 1-2=a.txt 1-2=b.txt      # one effect, the two responses convolved first
+```
+
+These are not the same computation. Each `fir` emits as many samples as it
+reads and aligns them on the peak of its response, which means it discards the
+part of the convolution that comes before the peak: 8191 samples of leading
+ringing for a 16384-tap filter. Chained, that ringing is thrown away before the
+second filter can use it, so the second filter starts from an input that is
+missing its first 8191 samples.
+
+With two 16384-tap filters the damage is confined to the first 2728 output
+samples and is exactly zero afterwards, but inside that stretch it is large,
+about 4% of the level there. Measured over the first second the chained route
+lands 34.3 dB from the correct answer, where the one-effect form is at 282 dB.
+
+Under a `--vulkan-*` profile the question does not arise. `fir.c` convolves two
+adjacent `fir` effects into a single response before anything runs, so there is
+one alignment and the result is the exact one: 112 dB on `fast`, 263 to 279 on
+`precise`, 605 on `reference`.
+
+If you cascade filters, write them as one effect.
+
+### DSD modulation
+
+Three ways to reach DSD. The flag picks the rate stage, the effect name picks
+the modulator.
+
+| Path | Command | Rate stage | Modulator |
+|------|---------|------------|-----------|
+| CPU | `rate R sdm` | CPU | CPU, selectable `sdm-*` or `clans-*` |
+| Hybrid | `--vulkan-P … rate R sdm` | Device | CPU |
+| Device MASH | `--vulkan-P … rate R sdm-vulkan` | Device | Device, fixed MASH-2/FSM |
+
+`sdm` takes `-f` (`sdm-4` to `sdm-8`, `clans-4` to `clans-8`) plus the trellis
+overrides `-t`, `-n` and `-l`. It modulates at its input rate, so `rate` has to
+reach the DSD rate first.
+
+`sdm-vulkan` takes no options, applies −3 dB, and covers DSD64 to DSD1024 on 1
+to 6 channels. Its shaping is fixed at second order. Higher-order FSM variants
+blow up their state space, and truncating it costs more than the extra order
+buys.
+
+PCM to DSD, stereo, 10-second input, `--buffer 262144`. M5 Pro:
+
+| Rate | CPU single | CPU multi | Hybrid fast | Hybrid precise | MASH fast | MASH precise |
+|------|-----------|-----------|-------------|----------------|-----------|--------------|
+| DSD64 | 18.15× | 30.32× | 29.97× | 22.15× | 108.61× | 47.67× |
+| DSD128 | 9.10× | 15.50× | 16.74× | 12.20× | 60.68× | 26.71× |
+| DSD256 | 4.52× | 7.73× | 8.67× | 6.51× | 33.33× | 14.84× |
+| DSD512 | 2.63× | 4.38× | 5.35× | 3.82× | 17.95× | 7.90× |
+| DSD1024 | 1.23× | 2.05× | 2.52× | 1.96× | 9.17× | 4.01× |
+
+Ryzen 7 5700X3D with RTX 3080, same input and buffer. This machine has
+`shaderFloat64`, so the reference columns exist here:
+
+| Rate | CPU single | CPU multi | Hybrid fast | Hybrid precise | Hybrid reference | MASH fast | MASH precise | MASH reference |
+|------|-----------|-----------|-------------|----------------|------------------|-----------|--------------|----------------|
+| DSD64 | 8.63× | 10.99× | 9.74× | 9.86× | 5.80× | 43.48× | 41.49× | 12.17× |
+| DSD128 | 4.38× | 5.49× | 5.44× | 5.32× | 3.13× | 37.04× | 32.05× | 8.00× |
+| DSD256 | 2.18× | 2.78× | 2.76× | 2.79× | 1.66× | 25.19× | 22.62× | 4.67× |
+| DSD512 | 1.12× | 1.35× | 1.49× | 1.48× | 0.85× | 15.95× | 14.06× | 2.57× |
+| DSD1024 | 0.58× | 0.73× | 0.73× | 0.71× | 0.42× | 8.83× | 7.79× | 1.34× |
+
+Those Windows figures use 262144 because every table here does, and that value
+is the Mac's optimum, not this machine's. Read [Buffer size](#buffer-size)
+before taking them as this hardware's ceiling.
+
+The hybrid path buys little. The modulator stays on the host and it's the larger
+half of the work, so moving `rate` onto the device gets you 8.67× against 7.73×
+at DSD256 on the M5 Pro, and nothing at all on the Windows box.
+
+The device modulator is where the order of magnitude is, and it costs 30 dB:
+
+| Rate | CPU `sdm` in-band SNR | Device MASH in-band SNR | Use |
+|------|----------------------|-------------------------|-----|
+| DSD64 | 122.4 dB | 70.4 dB | Not recommended |
+| DSD128 | 125.7 dB | 85.5 dB | Not recommended |
+| DSD256 | 129.1 dB | 100.5 dB | Minimum useful rate |
+| DSD512 | 147.5 dB | 116.0 dB | Supported use |
+| DSD1024 | 159.6 dB | 129.7 dB | Supported use |
+
+Measured 20 Hz to 20 kHz on the default `sdm` filter. The two machines agree
+within 0.6 dB.
+
+The three MASH columns differ in speed only. Same shaping under `fast`,
+`precise` and `reference`, because the profile changes the rate stage in front
+of the modulator, not the modulator.
+
+On the hybrid path `fast` does bite, high up: 139.2 dB against 147.5 at DSD512,
+139.7 against 159.6 at DSD1024. Below DSD512 the three profiles agree within a
+few tenths of a dB. Use `precise` above DSD256.
 
 ### DSD decoding
 
-With a Vulkan profile selected, DSD is decoded on the device from the file's own packed bits: no bit is expanded into a sample on the host, and the half-band cascade becomes one fused filter that decimates in a single pass. Without a profile the CPU path is unchanged.
+Under a profile, DSD is decoded on the device from the file's own packed bits.
+No bit is expanded into a sample on the host, and the half-band cascade becomes
+one fused filter that decimates in a single pass. Without a profile the CPU path
+is unchanged.
 
 | Rule | Detail |
 |------|--------|
 | Conversion comes first | `vol`, `gain`, `trim` apply to the PCM, after `rate`. An effect in front of the conversion is an error, with or without a Vulkan flag. DSD-to-DSD chains are untouched. |
-| Band ceiling | 20 kHz at DSD64, 30 kHz at DSD128, 60 kHz at DSD256, 90 kHz above. Beyond it a DSD stream holds shaped noise, not signal. |
+| Band ceiling | 20 kHz at DSD64, 30 kHz at DSD128, 60 kHz at DSD256, 90 kHz above. Past it a DSD stream holds shaped noise. |
 | One DSD64 filter | The ceiling binds at every output rate: flat to 19.5 kHz, stopped at 20 kHz, from 44.1 kHz to 384 kHz. DSD64 decoded to 96 or 192 kHz is empty above 20 kHz. |
 | Stop-band depth | The requested quality, capped by the profile's own SNR. Only the `fast` cap binds, and only from `-v` up. |
-| Buffer                 | Decode with `--buffer 524288` or larger. One dispatch per call: at the 8 KiB default DSD512 runs at 4.1× instead of 19.2×. |
+| Buffer | `--buffer 524288` or larger. One dispatch per call, so the default costs almost everything the device gains: DSD512 to 44.1 kHz on `--vulkan-fast` runs at 7.2× at the default and 69.7× at `524288`, same M5 Pro. |
 
-DSD-to-PCM throughput, stereo, 10-second input, to 44.1 kHz, `--buffer 524288`. M5 Pro:
+DSD to PCM, stereo, 10-second input, to 44.1 kHz, `--buffer 524288`. M5 Pro:
 
 | Rate | CPU single | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
 |------|-----------|-----------|-------------|----------------|------------------|
-| DSD64 | 58.37× | 89.42× | 30.67× | 3.67× | Not available |
-| DSD128 | 30.00× | 46.18× | 56.20× | 8.63× | Not available |
-| DSD256 | 15.07× | 23.70× | 94.14× | 24.16× | Not available |
-| DSD512 | 7.65× | 11.71× | 68.22× | 13.11× | Not available |
-| DSD1024 | 3.80× | 6.01× | 39.26× | 6.67× | Not available |
+| DSD64 | 58.52× | 93.51× | 30.62× | 3.61× | Not available |
+| DSD128 | 30.44× | 46.62× | 62.46× | 8.54× | Not available |
+| DSD256 | 15.34× | 24.14× | 98.74× | 23.99× | Not available |
+| DSD512 | 7.73× | 12.15× | 66.38× | 12.99× | Not available |
+| DSD1024 | 3.90× | 6.12× | 39.90× | 6.55× | Not available |
 
 Ryzen 7 5700X3D with RTX 3080:
 
 | Rate | CPU single | CPU multi | Vulkan fast | Vulkan precise | Vulkan reference |
 |------|-----------|-----------|-------------|----------------|------------------|
-| DSD64 | 38.38× | 59.36× | 20.19× | 8.75× | 1.42× |
-| DSD128 | 19.97× | 31.08× | 22.29× | 14.79× | 2.98× |
-| DSD256 | 10.17× | 15.94× | 22.21× | 21.79× | 6.28× |
-| DSD512 | 5.14× | 8.06× | 19.68× | 16.64× | 4.20× |
-| DSD1024 | 2.57× | 4.05× | 15.10× | 11.20× | 2.51× |
+| DSD64 | 27.78× | 36.63× | 34.72× | 9.79× | 1.47× |
+| DSD128 | 13.77× | 18.69× | 38.46× | 18.18× | 3.18× |
+| DSD256 | 7.17× | 9.52× | 38.76× | 28.25× | 7.09× |
+| DSD512 | 3.61× | 4.76× | 32.36× | 20.58× | 4.61× |
+| DSD1024 | 1.82× | 2.41× | 23.75× | 12.84× | 2.63× |
 
-DSD64 is the one case the CPU wins, for an arithmetic reason: the cascade halves its rate at every stage and spends about ten multiplies per output sample. Above DSD64 the ceiling shortens the response and the GPU leads by three to eight times.
+DSD64 is the one rate the CPU wins, and the reason is arithmetic: the cascade
+halves its rate at every stage and spends about ten multiplies per output
+sample. Above DSD64 the ceiling shortens the response and the device leads by
+three to eight times.
 
-Accuracy of the whole decode, scored against the exact rational convolution of the plan sox built:
+Accuracy of the whole decode, scored against the exact rational convolution of
+the plan sox built, on DSD64 and DSD256 to 44.1 and 88.2 kHz:
 
-| Path | SNR |
-|------|-----|
-| CPU | 182 dB |
-| Vulkan fast | 113–123 dB |
-| Vulkan precise | 260–269 dB on the FP32 fallback, 290–308 dB with `shaderFloat64` |
-| Vulkan reference | 640.7 dB |
+| Path | SNR, M5 Pro | SNR, RTX 3080 |
+|------|-------------|---------------|
+| CPU | 182–197 dB | 182–197 dB |
+| Vulkan fast | 113–123 dB | 113–123 dB |
+| Vulkan precise | 260–269 dB (double-single fallback) | 287–296 dB (`shaderFloat64`) |
+| Vulkan reference | Not available | Bit-exact |
 
-On a build whose samples are normalised the reference profile is exact: the captured pairs equal the exact rational sum in every bit. On a build that scales samples to `SOX_SAMPLE_MAX` the exact product no longer fits a pair, so the stage applies the factor on the device, before collapsing, and the sample written is the correctly rounded one, checked frame by frame against the exact product.
+On a build whose samples are normalised, `reference` is exact: the captured
+pairs equal the exact rational sum in every bit, which is what the RTX 3080
+column reports. On a build that scales samples to `SOX_SAMPLE_MAX` the exact
+product no longer fits a pair, so the stage applies the factor on the device
+before collapsing, and the sample written is the correctly rounded one, checked
+frame by frame against the exact product.
 
-`rate -v` on DSD64 is the one measured plan whose response is too wide to fit a double-double: it reads 640.7 dB.
+`rate -v` on DSD64 is the one measured plan whose response is too wide for a
+double-double. It reads 630.1 dB.
 
-### Runtime examples
+### Buffer size
+
+The default is conservative and unchanged. On the Vulkan paths one dispatch goes
+out per call, so a small buffer means many small dispatches and far more
+host-device synchronisation than the work needs.
+
+Starting points, measured on the two machines above:
+
+| Workload | Buffer |
+|----------|--------|
+| DSD decoding (DSD to PCM) | `524288` or larger |
+| PCM to DSD, stereo, Apple silicon | `262144` |
+| PCM to DSD, stereo, Ryzen 7 5700X3D with RTX 3080 | `65536` |
+| More than two channels | Multiply the stereo value by half the channel count: `786432` for 5.1 |
+
+The two platforms don't share an optimum. On the M5 Pro throughput keeps
+improving up to `262144`. On the Windows machine the Vulkan path degrades past
+`65536`, by 13% at `262144` and 21% at `1048576`. Measure yours, with `-V3` to
+see the submit count.
+
+Scaling the buffer with the channel count keeps a multichannel run at the same
+frames per channel as a stereo one, and it matters most with
+`--multi-threaded`. On 5.1 DSD256 with `sdm -f sdm-8`, at the default buffer
+`--multi-threaded` is *slower* than single-threaded, 7.79 s against 4.66 s: each
+call is too short for the fork and join to repay themselves. At `--buffer
+786432` the same run takes 1.21 s, 3.9 times faster than single-threaded.
+
+### Examples
 
 ```bash
-# PCM to DSD512
-./output/sox --vulkan-precise --multi-threaded --buffer 524288 input.wav -r 22579200 output.dsf rate -v 22579200 sdm
+# PCM to DSD512, hybrid: rate on the device, modulator on the CPU
+./output/sox --vulkan-precise --multi-threaded --buffer 262144 input.wav -r 22579200 output.dsf rate -v 22579200 sdm
+
+# PCM to DSD512, all on the device: an order of magnitude faster, 31 dB noisier
+./output/sox --vulkan-precise --multi-threaded --buffer 262144 input.wav -r 22579200 output.dsf rate -v 22579200 sdm-vulkan
+
+# PCM to DSD512 on the CPU alone, highest quality
+./output/sox --multi-threaded --buffer 262144 input.wav -r 22579200 output.dsf rate -v 22579200 sdm -f sdm-8
+
+# DSD to PCM
+./output/sox --vulkan-fast --buffer 524288 input.dsf output.wav rate 44100
 
 # Long FIR
 ./output/sox --vulkan-fast input.wav output.wav fir impulse.txt
@@ -567,7 +712,7 @@ On a build whose samples are normalised the reference profile is exact: the capt
 
 After the build completes, verify the installation. The build scripts reject executables that dynamically import bundled codec libraries. Platform, OpenMP, and Vulkan infrastructure dependencies are allowed to remain dynamic.
 
-### 1. Check Version
+### 1. Check version
 
 ```bash
 # Windows
@@ -579,10 +724,10 @@ After the build completes, verify the installation. The build scripts reject exe
 
 Expected output:
 ```
-sox:      SoX v16.1.1
+sox:      SoX v16.2.0
 ```
 
-### 2. Check Supported Formats
+### 2. Check supported formats
 
 ```bash
 # Windows
@@ -613,7 +758,7 @@ This lists all formats enabled in the current build. Look for:
 - `dsf`, `dff` - DSD stream read and write
 - `wsd` - WSD stream read
 
-### 3. Check Audio Devices
+### 3. Check audio devices
 
 ```bash
 # Windows
@@ -623,7 +768,7 @@ This lists all formats enabled in the current build. Look for:
 ./output/sox --help-device all
 ```
 
-### 4. Test Conversion
+### 4. Test conversion
 
 ```bash
 # Convert a WAV file to MP3
@@ -695,7 +840,7 @@ Dolby Atmos and DTS:X object metadata is reported but not rendered; decoding ret
 
 ---
 
-## Library Versions
+## Library versions
 
 The build scripts download and compile the following library versions:
 
@@ -728,7 +873,7 @@ The build scripts download and compile the following library versions:
 
 SoX is distributed under the GNU General Public License (GPL) and GNU Lesser General Public License (LGPL). See `LICENSE.GPL` and `LICENSE.LGPL` for details.
 
-## LLM Disclaimer
+## LLM disclaimer
 
 This project uses AI-assisted development tools.
 
@@ -737,7 +882,7 @@ This project uses AI-assisted development tools.
 - Codex `gpt5.6-sol`
 - Claude `opus5`
 
-### Contribution Profile
+### Contribution profile
 
 ```
 Phase                               Human│ AI

@@ -9,7 +9,7 @@
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
  * Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
@@ -21,6 +21,7 @@
 #include "rate_polyphase_vulkan.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "rate_polyphase_f64_spv.inc"
@@ -30,13 +31,32 @@
 #include "rate_polyphase_reference_dd_normalized_f32_spv.inc"
 #include "rate_polyphase_normalized_f32_spv.inc"
 
-#define RATE_POLYPHASE_BLOCK_FRAMES 16384u
+/* Frames of input per dispatch. One block per submit, each waited on, so this
+ * sets how often the host and the device synchronise; the submit count, not
+ * the kernels, was the cost. The ceiling follows --buffer and has to clear
+ * what rate.c asks for, or the min() there caps every stage back down.
+ *
+ * Read once and kept: it sizes the device buffers at create time and is
+ * compared against them later, so it must not move under a running stage. */
+static uint32_t rate_polyphase_block_frames(void)
+{
+  static uint32_t cached;
+
+  if (!cached) {
+    size_t derived = sox_globals.bufsiz;
+
+    cached = derived > 65536u ? (uint32_t)min(derived, (size_t)(1L << 22)) : 65536u;
+  }
+  return cached;
+}
+
+#define RATE_POLYPHASE_BLOCK_FRAMES rate_polyphase_block_frames()
 #define RATE_POLYPHASE_BINDINGS 3u
 #define RATE_POLYPHASE_LOCAL_SIZE 128u
 
-/* Push constants.  The phase counter advances by phase_step and wraps at
+/* Push constants. The phase counter advances by phase_step and wraps at
  * phase_count; its whole quotient is the input frame and its remainder the
- * sub-filter, which is how one counter carries both.  phase_start is where
+ * sub-filter, which is how one counter carries both. phase_start is where
  * this batch begins, so the counter continues across calls. */
 typedef struct {
   uint32_t output_frames;
@@ -56,6 +76,10 @@ struct lsx_rate_polyphase_vulkan {
   lsx_vulkan_buffer_t coefficients;
   lsx_vulkan_buffer_t input;
   lsx_vulkan_buffer_t output;
+  /* Host-side staging for the two device-local buffers above. A DMA copy
+   * moves each across, so the shader never reaches over the bus. */
+  lsx_vulkan_buffer_t input_staging;
+  lsx_vulkan_buffer_t output_staging;
   lsx_vulkan_buffer_t normalized_output;
   lsx_vulkan_buffer_t resident_upload[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   lsx_vulkan_buffer_t resident_input[2];
@@ -72,14 +96,14 @@ struct lsx_rate_polyphase_vulkan {
   uint32_t phase_start;
   uint32_t max_output_frames;
   uint32_t valid_output_frames;
-  /* Resident-input state.  The stage keeps its own device-side input across
+  /* Resident-input state. The stage keeps its own device-side input across
    * calls, since the window margin of the previous block is needed for this
    * one: an arriving block is appended to what was retained, and the two
    * buffers alternate so the copy never reads and writes the same one while
    * the device is still using it. */
   uint32_t resident_input_index;
   uint32_t resident_bank_index;
-  /* Frames already in the current input buffer.  Starts at the caller's
+  /* Frames already in the current input buffer. Starts at the caller's
    * preload, which is the margin the first block has no history for and
    * which is zero-filled on first use, so the stream begins against silence
    * rather than against uninitialised memory. */
@@ -121,7 +145,7 @@ static lsx_vulkan_resident_format_t sample_format(lsx_rate_polyphase_vulkan_t co
       lsx_vulkan_resident_format_f32;
 }
 
-/* Convert host doubles into the element form this profile's buffers use.  The
+/* Convert host doubles into the element form this profile's buffers use. The
  * paired forms store a high word and a correction: exact zero for the
  * double-double, whose input already fits one double, and the rounding
  * remainder for the split-float, where it is what carries the bits a single
@@ -154,7 +178,7 @@ static void upload_samples(lsx_rate_polyphase_vulkan_t const *context, void *tar
     ((float *)target)[index] = (float)source[index];
 }
 
-/* The inverse: a pointer to count output samples as host doubles.  Plain FP64
+/* The inverse: a pointer to count output samples as host doubles. Plain FP64
  * is returned in place, the mapping already being doubles; the other forms
  * are converted into the scratch buffer, the paired ones collapsing through
  * the shared routine so that every collapse in the engine agrees. */
@@ -164,28 +188,28 @@ static double const *host_samples(lsx_rate_polyphase_vulkan_t *context, size_t c
 
   if (context->reference_dd) {
     for (index = 0; index < count; ++index) {
-      double const *value = (double const *)context->output.mapped + 2u * index;
+      double const *value = (double const *)context->output_staging.mapped + 2u * index;
 
       context->host_output[index] = lsx_vulkan_collapse_pair(value[0], value[1]);
     }
     return context->host_output;
   }
   if (context->double_precision)
-    return context->output.mapped;
+    return context->output_staging.mapped;
   if (context->precise_fp32) {
     for (index = 0; index < count; ++index) {
-      float const *value = (float const *)context->output.mapped + 2u * index;
+      float const *value = (float const *)context->output_staging.mapped + 2u * index;
 
       context->host_output[index] = (double)value[0] + (double)value[1];
     }
     return context->host_output;
   }
   for (index = 0; index < count; ++index)
-    context->host_output[index] = (double)((float const *)context->output.mapped)[index];
+    context->host_output[index] = (double)((float const *)context->output_staging.mapped)[index];
   return context->host_output;
 }
 
-static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *coefficients, double const *coefficient_lows)
+static int create_buffers(lsx_rate_polyphase_vulkan_t *context)
 {
   VkMemoryPropertyFlags memory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   VkDeviceSize sample_bytes = sample_size(context);
@@ -198,11 +222,19 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
       (context->precise_fp32 ?
        2u * sizeof(float) : sizeof(float));
   VkDeviceSize resident_input_size = input_size;
-  uint32_t phase;
-  uint32_t tap;
   uint32_t index;
 
-  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->input, input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->normalized_output, normalized_output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[0], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS || lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[1], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+  /* Everything the shader touches is device-local. The host reaches the
+   * input and the output through the staging buffers above, and the
+   * coefficients through a one-time copy in upload_coefficients(). */
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->input, input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->input_staging, input_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->output_staging, output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->normalized_output, normalized_output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[0], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[1], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index) {
     if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_upload[index], input_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS)
@@ -212,13 +244,38 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
     context->host_output = lsx_malloc(
         (size_t)context->max_output_frames *
         context->parameters.channels * sizeof(*context->host_output));
+  return SOX_SUCCESS;
+}
+
+/* Lay the coefficients out for the shader and hand them to the device. This
+ * runs after the command buffers exist because device-local memory is reached
+ * only through a copy, and the copy needs one to be recorded in. */
+static int upload_coefficients(lsx_rate_polyphase_vulkan_t *context, double const *coefficients, double const *coefficient_lows)
+{
+  VkCommandBufferBeginInfo begin = {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL
+  };
+  VkBufferMemoryBarrier barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+  lsx_vulkan_buffer_t staging;
+  VkBufferCopy copy;
+  VkDeviceSize size = context->coefficients.size;
+  uint32_t phase;
+  uint32_t tap;
+  int result = SOX_EOF;
+
+  if (lsx_vulkan_buffer_create(
+      context->vulkan, &staging, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
   for (tap = 0; tap < context->parameters.taps; ++tap)
     for (phase = 0; phase < context->parameters.phase_count; ++phase) {
       size_t target = (size_t)tap * context->parameters.phase_count + phase;
       double value = coefficients[(size_t)phase * context->parameters.taps + tap];
 
       if (context->reference_dd) {
-        double *target_values = (double *)context->coefficients.mapped + 2u * target;
+        double *target_values = (double *)staging.mapped + 2u * target;
         size_t source = (size_t)phase * context->parameters.taps + tap;
 
         target_values[0] = value;
@@ -226,17 +283,36 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context, double const *co
       }
       else if (context->precise_fp32) {
         float high = (float)value;
-        float *target_values = (float *)context->coefficients.mapped + 2u * target;
+        float *target_values = (float *)staging.mapped + 2u * target;
 
         target_values[0] = high;
         target_values[1] = (float)(value - (double)high);
       }
       else if (context->double_precision)
-        ((double *)context->coefficients.mapped)[target] = value;
+        ((double *)staging.mapped)[target] = value;
       else
-        ((float *)context->coefficients.mapped)[target] = (float)value;
+        ((float *)staging.mapped)[target] = (float)value;
     }
-  return SOX_SUCCESS;
+  copy.srcOffset = copy.dstOffset = 0;
+  copy.size = size;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.buffer = context->coefficients.buffer;
+  barrier.offset = 0;
+  barrier.size = size;
+  if (vk_result(vkResetCommandBuffer(context->command_buffers[0], 0), "vkResetCommandBuffer rate polyphase coefficients") != SOX_SUCCESS ||
+      vk_result(vkBeginCommandBuffer(context->command_buffers[0], &begin), "vkBeginCommandBuffer rate polyphase coefficients") != SOX_SUCCESS)
+    goto done;
+  vkCmdCopyBuffer(context->command_buffers[0], staging.buffer, context->coefficients.buffer, 1, &copy);
+  vkCmdPipelineBarrier(context->command_buffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 1, &barrier, 0, NULL);
+  if (vk_result(vkEndCommandBuffer(context->command_buffers[0]), "vkEndCommandBuffer rate polyphase coefficients") != SOX_SUCCESS ||
+      lsx_vulkan_submit_and_wait(context->vulkan, context->command_buffers[0], context->fence, lsx_vulkan_wait_rate_synchronous) != SOX_SUCCESS)
+    goto done;
+  result = SOX_SUCCESS;
+done:
+  lsx_vulkan_buffer_destroy(context->vulkan, &staging);
+  return result;
 }
 
 static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
@@ -275,15 +351,15 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   if (vk_result(vkCreatePipelineLayout(context->vulkan->device, &layout_info, NULL, &context->pipeline_layout), "vkCreatePipelineLayout rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   /* Pick each kernel once, so its SPIR-V blob and the size passed with it can
-   * never disagree.  Only the first test is order-sensitive: reference_dd is
+   * never disagree. Only the first test is order-sensitive: reference_dd is
    * set as double_precision && profile == reference, so it has to come before
    * the plain FP64 family; precise_fp32 is set only when double precision is
    * unavailable.
    *
-   * The two selections are deliberately not the same mapping.  The normalized
+   * The two selections are deliberately not the same mapping. The normalized
    * kernel writes host-scaled FP32 samples, so above FP32 it uses a dedicated
-   * shader -- reference_dd_normalized_f32 for the reference profile and
-   * normalized_f32 for plain FP64 -- while precise shares the kernel it
+   * shader (reference_dd_normalized_f32 for the reference profile and
+   * normalized_f32 for plain FP64) while precise shares the kernel it
    * already uses for the resident path. */
   if (context->reference_dd) {
     kernel_spirv = rate_polyphase_reference_dd_spv;
@@ -350,10 +426,10 @@ static int create_commands(lsx_rate_polyphase_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-/* The one body behind both entry points.  coefficient_lows is the low half of
+/* The one body behind both entry points. coefficient_lows is the low half of
  * a double-double response and is used only where the device arithmetic can
  * hold it: outside the reference profile the pair has nowhere to go, so it is
- * ignored rather than refused.  Passing NULL is what every other profile
+ * ignored rather than refused. Passing NULL is what every other profile
  * does, and leaves the low halves zero as before. */
 static lsx_rate_polyphase_vulkan_t *polyphase_create(lsx_vulkan_context_t *vulkan, double const *coefficients, double const *coefficient_lows, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum)
 {
@@ -385,7 +461,10 @@ static lsx_rate_polyphase_vulkan_t *polyphase_create(lsx_vulkan_context_t *vulka
   context->phase_start = phase_start;
   context->max_output_frames = (uint32_t)max_output_frames;
   context->resident_occupancy_frames = resident_preload_frames;
-  if (create_buffers(context, coefficients, coefficient_lows) != SOX_SUCCESS || create_pipeline(context) != SOX_SUCCESS || create_commands(context) != SOX_SUCCESS)
+  if (create_buffers(context) != SOX_SUCCESS ||
+      create_pipeline(context) != SOX_SUCCESS ||
+      create_commands(context) != SOX_SUCCESS ||
+      upload_coefficients(context, coefficients, coefficient_lows) != SOX_SUCCESS)
     goto error;
   lsx_report(
       "Vulkan rate polyphase: %u/%u, %u taps/phase, "
@@ -441,7 +520,9 @@ void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context)
       lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_upload[index]);
   }
   lsx_vulkan_buffer_destroy(context->vulkan, &context->normalized_output);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->output_staging);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->output);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->input_staging);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->input);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->coefficients);
   free(context->host_output);
@@ -462,7 +543,11 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
 {
   VkCommandBuffer command_buffer;
   VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
-  VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
+  VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT};
+  VkMemoryBarrier upload_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
+  VkMemoryBarrier host_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
+  VkBufferCopy input_copy;
+  VkBufferCopy output_copy;
   uint64_t limit;
   uint64_t count;
   uint64_t end_position;
@@ -472,10 +557,10 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
     return SOX_EOF;
   command_buffer = context->command_buffers[0];
   /* How many output frames the phase counter can produce before it runs past
-   * the processable input.  Everything is in counter units -- an input frame
-   * being phase_count of them -- so the division is a ceiling of the number
+   * the processable input. Everything is in counter units, an input frame
+   * being phase_count of them, so the division is a ceiling of the number
    * of steps that fit, and the remainder afterwards is the phase to resume
-   * from.  Working in the counter's own units is what keeps the ratio exact:
+   * from. Working in the counter's own units is what keeps the ratio exact:
    * nothing here rounds. */
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
@@ -485,18 +570,26 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
   /* The response's window is uploaded as well as the frames to be consumed:
    * the last output frame reads taps - 1 samples past its own position. */
   input_frames = processable_frames + context->parameters.taps - 1u;
-  upload_samples(context, context->input.mapped, input, input_frames * context->parameters.channels);
+  upload_samples(context, context->input_staging.mapped, input, input_frames * context->parameters.channels);
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_start = context->phase_start;
   context->parameters.normalize = 0;
   if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate polyphase");
+  input_copy.srcOffset = input_copy.dstOffset = 0;
+  input_copy.size = (VkDeviceSize)input_frames * context->parameters.channels * sample_size(context);
+  output_copy.srcOffset = output_copy.dstOffset = 0;
+  output_copy.size = (VkDeviceSize)count * context->parameters.channels * sample_size(context);
+  vkCmdCopyBuffer(command_buffer, context->input_staging.buffer, context->input.buffer, 1, &input_copy);
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &upload_barrier, 0, NULL, 0, NULL);
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline_layout, 0, 1, &context->descriptor_sets[0], 0, NULL);
   vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
   vkCmdDispatch(command_buffer, (dispatch_items(context, (uint32_t)count) + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
-  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
+  vkCmdCopyBuffer(command_buffer, context->output.buffer, context->output_staging.buffer, 1, &output_copy);
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host_barrier, 0, NULL, 0, NULL);
   lsx_vulkan_label_end(context->vulkan, command_buffer);
   if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer rate polyphase") != SOX_SUCCESS || lsx_vulkan_submit_and_wait(context->vulkan, command_buffer, context->fence, lsx_vulkan_wait_rate_synchronous) != SOX_SUCCESS)
     return SOX_EOF;
@@ -530,10 +623,10 @@ int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vul
   append_offset = context->resident_occupancy_frames;
   append_frames = available_frames - append_offset;
   /* How many output frames the phase counter can produce before it runs past
-   * the processable input.  Everything is in counter units -- an input frame
-   * being phase_count of them -- so the division is a ceiling of the number
+   * the processable input. Everything is in counter units, an input frame
+   * being phase_count of them, so the division is a ceiling of the number
    * of steps that fit, and the remainder afterwards is the phase to resume
-   * from.  Working in the counter's own units is what keeps the ratio exact:
+   * from. Working in the counter's own units is what keeps the ratio exact:
    * nothing here rounds. */
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
@@ -637,10 +730,10 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   next = &context->resident_input[context->resident_input_index ^ 1u];
   processable_frames = min((size_t)RATE_POLYPHASE_BLOCK_FRAMES, available_frames - (context->parameters.taps - 1u));
   /* How many output frames the phase counter can produce before it runs past
-   * the processable input.  Everything is in counter units -- an input frame
-   * being phase_count of them -- so the division is a ceiling of the number
+   * the processable input. Everything is in counter units, an input frame
+   * being phase_count of them, so the division is a ceiling of the number
    * of steps that fit, and the remainder afterwards is the phase to resume
-   * from.  Working in the counter's own units is what keeps the ratio exact:
+   * from. Working in the counter's own units is what keeps the ratio exact:
    * nothing here rounds. */
   limit = (uint64_t)processable_frames * context->parameters.phase_count;
   count = limit > context->phase_start ? (limit - context->phase_start + context->parameters.phase_step - 1u) / context->parameters.phase_step : 0;
@@ -650,7 +743,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   consumed_frames = (size_t)(end_position / context->parameters.phase_count);
   remaining_frames = available_frames - consumed_frames;
 
-  /* Phase 2: describe both transfers.  append extends the current window;
+  /* Phase 2: describe both transfers. append extends the current window;
    * retain moves its still-needed suffix to the alternate buffer after the
    * dispatch, avoiding overlap with data the queued shader is reading. */
   append.srcOffset = input->offset;
@@ -693,9 +786,9 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate resident polyphase");
   /* Phase 4: initialise history if needed, append, filter, then preserve the
-   * suffix.  Barriers make each step visible to the next within this queue. */
+   * suffix. Barriers make each step visible to the next within this queue. */
   /* Zero the preload on the first block only: those frames stand in for the
-   * history the first output has none of, so they must be silence.  Done
+   * history the first output has none of, so they must be silence. Done
    * inside the first recorded block rather than at creation, since it must
    * be ordered before the append that follows it. */
   if (!context->resident_initialized) {
@@ -713,12 +806,23 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
   vkCmdDispatch(command_buffer, (dispatch_items(context, (uint32_t)count) + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
   vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &output_barrier, 0, NULL, 0, NULL);
-  /* Retain the tail -- the window margin the next block will read behind
-   * itself -- by copying it to the other buffer, which is then swapped in.
+  /* Retain the tail (the window margin the next block will read behind
+   * itself) by copying it to the other buffer, which is then swapped in.
    * Moving it down within this buffer would overwrite samples the dispatch
    * just queued is still reading. */
   if (remaining_frames)
     vkCmdCopyBuffer(command_buffer, current->buffer, next->buffer, 1, &retain);
+  /* A caller that wants the samples on the host reads them from the staging
+   * buffer, so the copy that fills it has to be in this same batch. */
+  if (!resident) {
+    VkBufferCopy output_copy;
+    VkMemoryBarrier host_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
+
+    output_copy.srcOffset = output_copy.dstOffset = 0;
+    output_copy.size = (VkDeviceSize)count * context->parameters.channels * sample_size(context);
+    vkCmdCopyBuffer(command_buffer, output_buffer->buffer, context->output_staging.buffer, 1, &output_copy);
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host_barrier, 0, NULL, 0, NULL);
+  }
   lsx_vulkan_label_end(context->vulkan, command_buffer);
   if (vk_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer resident rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
@@ -729,7 +833,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   *output_frames = (size_t)count;
 
   /* Phase 5: resident publication queues the command without waiting and
-   * transfers its dependency metadata to the next effect.  The host form
+   * transfers its dependency metadata to the next effect. The host form
    * waits on the same command and converts the mapped output to doubles. */
   if (resident) {
     memset(resident, 0, sizeof(*resident));

@@ -25,10 +25,9 @@ __pycache__/
 .DS_Store
 /.idea/
 
-# Directory di lavoro della migrazione fp64 e dipendenze statiche
-build-fp64/
-build-wv/
+# Directory di lavoro (build-vk, build-fp64, build-hybrid, ...) e librerie statiche
+build-*/
+cmake-build-debug/
+ffbuild/
 static_libs
 static_libs_keep/
-build-vk/
-build-vk-asan/

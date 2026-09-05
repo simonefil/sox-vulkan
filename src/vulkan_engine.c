@@ -9,7 +9,7 @@
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
  * Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
@@ -109,18 +109,31 @@ static sox_bool extension_available(VkExtensionProperties const *extensions, uin
   return sox_false;
 }
 
-/* First memory type that is both allowed for this buffer, per the bit mask
- * Vulkan returned, and has every property asked for.  First rather than best:
- * Vulkan orders the types so that the earliest match is the most suitable.
+/* First memory type allowed for this buffer that has every property asked for,
+ * except that a HOST_CACHED type beats an uncached one. A discrete card lists
+ * host-visible memory uncached first, and the host reads every one of these
+ * buffers back; uncached reads are a fraction of the speed.
  * UINT32_MAX means no type qualifies. */
 static uint32_t memory_type(lsx_vulkan_context_t const *context, uint32_t bits, VkMemoryPropertyFlags required)
 {
   uint32_t index;
+  uint32_t chosen = UINT32_MAX;
 
-  for (index = 0; index < context->memory_properties.memoryTypeCount; ++index)
-    if ((bits & (1u << index)) && (context->memory_properties.memoryTypes[index].propertyFlags & required) == required)
-      return index;
-  return UINT32_MAX;
+  for (index = 0; index < context->memory_properties.memoryTypeCount; ++index) {
+    VkMemoryPropertyFlags flags = context->memory_properties.memoryTypes[index].propertyFlags;
+
+    if (!(bits & (1u << index)) || (flags & required) != required)
+      continue;
+    if (chosen == UINT32_MAX) {
+      chosen = index;
+      continue;
+    }
+    if ((required & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+        (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) &&
+        !(context->memory_properties.memoryTypes[chosen].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+      chosen = index;
+  }
+  return chosen;
 }
 
 int lsx_vulkan_buffer_create(
@@ -164,7 +177,7 @@ int lsx_vulkan_buffer_create(
       "vkBindBufferMemory") != SOX_SUCCESS)
     return SOX_EOF;
   /* Host-visible memory is mapped once here and stays mapped for the life of
-   * the buffer.  Vulkan permits that, and it keeps the upload and download
+   * the buffer. Vulkan permits that, and it keeps the upload and download
    * paths from paying for a map and unmap on every block. */
   if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
       lsx_vulkan_result(vkMapMemory(
@@ -202,7 +215,7 @@ VkDeviceSize lsx_vulkan_resident_element_size(lsx_vulkan_resident_format_t forma
 /* The extent is computed from the last element the strides can reach, not
  * from a count times a stride: with a planar layout the two strides describe
  * a region far larger than the number of samples in it, and sizing by count
- * would let a copy or a barrier stop short of the data.  Every step is
+ * would let a copy or a barrier stop short of the data. Every step is
  * guarded against overflow, since the values come from a caller's description
  * and a wrapped size would pass the bounds check that follows. */
 VkDeviceSize lsx_vulkan_resident_buffer_size(lsx_vulkan_resident_buffer_t const *resident)
@@ -255,7 +268,7 @@ int lsx_vulkan_resident_buffer_validate(lsx_vulkan_resident_buffer_t const *resi
   }
   /* Format, domain and packing have to agree in both directions: a packed
    * word is 32 DSD frames and nothing else, and any other format is one PCM
-   * frame per element.  Checked as a pair so that neither a PCM buffer
+   * frame per element. Checked as a pair so that neither a PCM buffer
    * claiming DSD nor a DSD buffer claiming one frame per element can reach a
    * shader, where the mismatch would silently misread every sample. */
   if (resident->format == lsx_vulkan_resident_format_dsd_u32 &&
@@ -275,10 +288,10 @@ int lsx_vulkan_resident_buffer_validate(lsx_vulkan_resident_buffer_t const *resi
   return SOX_SUCCESS;
 }
 
-/* Make sure the staging buffer can hold size bytes, growing it if not.  It is
+/* Make sure the staging buffer can hold size bytes, growing it if not. It is
  * kept on the context and only ever grows, so a stream of equal blocks
  * allocates once; the command buffer and fence are allocated with it and
- * survive a regrow, since neither depends on the buffer.  Host-cached memory
+ * survive a regrow, since neither depends on the buffer. Host-cached memory
  * is asked for because the host reads every byte of this buffer, which is the
  * case cached memory exists for. */
 static int create_resident_download(lsx_vulkan_context_t *context, VkDeviceSize size)
@@ -351,6 +364,7 @@ int lsx_vulkan_download_resident_pcm(
   size_t element_size;
   size_t frame;
   uint32_t channel;
+  double deinterleave_started;
 
   if (!context || !resident || !output ||
       lsx_vulkan_resident_buffer_validate(resident) != SOX_SUCCESS ||
@@ -405,11 +419,12 @@ int lsx_vulkan_download_resident_pcm(
     return SOX_EOF;
   /* De-interleave on the host rather than in a shader: the copy is over the
    * whole region, strides included, so this walks it with the source strides
-   * and writes plain interleaved output.  The paired formats collapse here,
-   * which is the last point at which both halves exist -- f32x2 by plain
+   * and writes plain interleaved output. The paired formats collapse here,
+   * which is the last point at which both halves exist: f32x2 by plain
    * addition, f64x2 through the shared collapse, which is where the pair can
    * still be captured whole. */
   element_size = lsx_vulkan_resident_element_size(resident->format);
+  deinterleave_started = monotonic_seconds();
   for (frame = 0; frame < resident->valid_elements; ++frame)
     for (channel = 0; channel < resident->channels; ++channel) {
       size_t source = frame * resident->frame_stride_elements + channel * resident->channel_stride_elements;
@@ -431,6 +446,8 @@ int lsx_vulkan_download_resident_pcm(
         value = ((float const *) context->resident_download.mapped)[source];
       output[frame * resident->channels + channel] = value;
     }
+  context->resident_download_deinterleave_seconds +=
+      monotonic_seconds() - deinterleave_started;
   return SOX_SUCCESS;
 }
 
@@ -468,9 +485,9 @@ int lsx_vulkan_create_compute_pipeline(
   return result;
 }
 
-/* Submit a batch to the queue and count it.  The fence is reset first, since
+/* Submit a batch to the queue and count it. The fence is reset first, since
  * it is reused across submissions and a fence still signalled from last time
- * would let the next wait return at once.  The frame boundary structure is
+ * would let the next wait return at once. The frame boundary structure is
  * attached only when a capture tool asked for it; it marks each submission as
  * a frame so a GPU profiler can separate them, and has no other effect. */
 static int submit(lsx_vulkan_context_t *context, VkCommandBuffer const *command_buffers, uint32_t command_buffer_count, VkFence fence)
@@ -511,6 +528,7 @@ int lsx_vulkan_submit_and_wait(lsx_vulkan_context_t *context, VkCommandBuffer co
    * one fence is needed for the lot. */
   VkCommandBuffer command_buffers[sizeof(context->pending_command_buffers) / sizeof(context->pending_command_buffers[0]) + 1u];
   uint32_t command_buffer_count = context->pending_command_buffer_count;
+  double started;
 
   memcpy(command_buffers, context->pending_command_buffers, command_buffer_count * sizeof(command_buffers[0]));
   command_buffers[command_buffer_count++] = command_buffer;
@@ -522,8 +540,11 @@ int lsx_vulkan_submit_and_wait(lsx_vulkan_context_t *context, VkCommandBuffer co
   ++context->host_wait_count;
   if ((unsigned)reason < lsx_vulkan_wait_reason_count)
     ++context->wait_reason_counts[reason];
+  started = monotonic_seconds();
   if (lsx_vulkan_result(vkWaitForFences(context->device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences") != SOX_SUCCESS)
     return SOX_EOF;
+  if ((unsigned)reason < lsx_vulkan_wait_reason_count)
+    context->wait_reason_seconds[reason] += monotonic_seconds() - started;
   return SOX_SUCCESS;
 }
 
@@ -534,9 +555,9 @@ uint32_t lsx_vulkan_resident_batch_depth(lsx_vulkan_context_t const *context)
 
 /* The depth is currently the same for every device and every chain shape; the
  * duration and work estimates are computed and reported but do not yet feed
- * back into the choice.  They are here because the report is what a
+ * back into the choice. They are here because the report is what a
  * calibration run reads: the model can only be fitted once the work each
- * configuration actually represents is on record beside its timings.  The
+ * configuration actually represents is on record beside its timings. The
  * device name is matched so that a measurement taken on the reference machine
  * says so, rather than being mistaken for a value that generalises. */
 int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox_rate_t input_rate, sox_rate_t output_rate, uint32_t channels, uint64_t input_samples, lsx_vulkan_resident_topology_t topology)
@@ -561,10 +582,10 @@ int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox
 }
 
 /* Pick the physical device and compute queue to run on, and note whether a
- * graphics queue exists for capture tools.  Scored rather than taking the
+ * graphics queue exists for capture tools. Scored rather than taking the
  * first match: a discrete GPU beats an integrated one by a wide margin for
  * this work, and within a device a compute-only queue family is preferred
- * because it does not contend with the display.  The vendor term only breaks
+ * because it does not contend with the display. The vendor term only breaks
  * ties between otherwise equal devices, that being the vendor the numerical
  * profiles were qualified on. */
 static int choose_device(lsx_vulkan_context_t *context)
@@ -650,13 +671,13 @@ static int choose_device(lsx_vulkan_context_t *context)
 }
 
 /* The device as it actually is, which is half of what makes one tester's
- * report comparable with another's.  Everything here is read back from
+ * report comparable with another's. Everything here is read back from
  * Vulkan rather than from an external tool, so it describes the device this
  * run used and not the one the machine happens to have.
  *
  * Validation is reported as not observed rather than as clean: sox installs
  * no debug messenger, so a layer's findings go to stderr and nothing here
- * has seen them.  "No errors" and "nobody looked" are different facts. */
+ * has seen them. "No errors" and "nobody looked" are different facts. */
 static void write_device_diagnostics(lsx_vulkan_context_t const *context)
 {
   VkPhysicalDeviceProperties const *properties = &context->properties;
@@ -701,13 +722,13 @@ static void write_device_diagnostics(lsx_vulkan_context_t const *context)
  * pipeline cache, plus whatever optional instrumentation is available.
  *
  * Every extension is probed before being asked for, so a device lacking any
- * of them still works with that feature switched off.  Two are load-bearing
+ * of them still works with that feature switched off. Two are load-bearing
  * rather than diagnostic: portability enumeration, without which a
  * MoltenVK-style implementation is not listed at all, and the portability
  * subset device extension, which such an implementation requires be enabled.
  *
  * The profile is settled here and then fixed, because the shaders, buffer
- * formats and precision an effect selects all follow from it.  The reference
+ * formats and precision an effect selects all follow from it. The reference
  * profile fails outright without hardware double precision: emulating it
  * would produce numbers that are not what the profile promises. */
 static lsx_vulkan_context_t *create_context(void)
@@ -744,9 +765,15 @@ static lsx_vulkan_context_t *create_context(void)
   uint32_t device_extension_count = 0;
   uint32_t enabled_device_extension_count = 0;
   lsx_vulkan_context_t *context = lsx_calloc(1, sizeof(*context));
+  char const *capture;
   double started = monotonic_seconds();
 
   context->resident_batch_depth = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
+  /* A profiler needs a graphics queue and the frame-boundary extension to see
+   * a compute-only program. Both cost something on every run, so they are off
+   * unless asked for. */
+  capture = getenv("SOX_VULKAN_CAPTURE");
+  context->graphics_capture = capture && *capture ? sox_true : sox_false;
   if (lsx_vulkan_result(vkEnumerateInstanceExtensionProperties(NULL, &instance_extension_count, NULL), "vkEnumerateInstanceExtensionProperties") != SOX_SUCCESS)
     goto error;
   instance_extensions = lsx_calloc(instance_extension_count, sizeof(*instance_extensions));
@@ -777,7 +804,7 @@ static lsx_vulkan_context_t *create_context(void)
   queue_infos[0].pQueuePriorities = &priority;
   device_info.queueCreateInfoCount = 1;
   /* A capture tool expects a graphics queue to exist even for pure compute
-   * work, so one is created alongside when asked for.  Nothing is ever
+   * work, so one is created alongside when asked for. Nothing is ever
    * submitted to it. */
   if (context->graphics_capture && context->graphics_queue_family != UINT32_MAX && context->graphics_queue_family != context->queue_family) {
     queue_infos[1] = queue_infos[0];
@@ -870,7 +897,7 @@ error: free(instance_extensions);
 }
 
 /* The context is created lazily, on the first Vulkan effect in a chain, so a
- * run that never reaches one pays nothing for the device.  It then lives on
+ * run that never reaches one pays nothing for the device. It then lives on
  * the effects globals and is shared by the rest of the chain.
  *
  * A later effect finding a different profile than the context was built with
@@ -922,6 +949,8 @@ void lsx_vulkan_context_destroy(void *opaque_context)
     lsx_report("Vulkan submit batch histogram: 1=%llu 2=%llu 3=%llu 4=%llu 5=%llu 6=%llu 7=%llu 8=%llu 9+=%llu", (unsigned long long)context->submit_batch_counts[1], (unsigned long long)context->submit_batch_counts[2], (unsigned long long)context->submit_batch_counts[3], (unsigned long long)context->submit_batch_counts[4], (unsigned long long)context->submit_batch_counts[5], (unsigned long long)context->submit_batch_counts[6], (unsigned long long)context->submit_batch_counts[7], (unsigned long long)context->submit_batch_counts[8], (unsigned long long)context->submit_batch_counts[9]);
   if (context->host_wait_count)
     lsx_report("Vulkan wait reasons: fir_setup=%llu fir_sync=%llu fir_resident_flush=%llu rate_sync=%llu sdm_setup=%llu sdm_sync=%llu sdm_resident_flush=%llu packed_output=%llu resident_output=%llu", (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_fir_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_rate_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_setup], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_synchronous], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_sdm_resident_flush], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_packed_output], (unsigned long long)context->wait_reason_counts[lsx_vulkan_wait_resident_output]);
+  if (context->host_wait_count)
+    lsx_report("Vulkan wait seconds: fir_setup=%.3f fir_sync=%.3f fir_resident_flush=%.3f rate_sync=%.3f sdm_setup=%.3f sdm_sync=%.3f sdm_resident_flush=%.3f packed_output=%.3f resident_output=%.3f, host de-interleave=%.3f", context->wait_reason_seconds[lsx_vulkan_wait_fir_setup], context->wait_reason_seconds[lsx_vulkan_wait_fir_synchronous], context->wait_reason_seconds[lsx_vulkan_wait_fir_resident_flush], context->wait_reason_seconds[lsx_vulkan_wait_rate_synchronous], context->wait_reason_seconds[lsx_vulkan_wait_sdm_setup], context->wait_reason_seconds[lsx_vulkan_wait_sdm_synchronous], context->wait_reason_seconds[lsx_vulkan_wait_sdm_resident_flush], context->wait_reason_seconds[lsx_vulkan_wait_packed_output], context->wait_reason_seconds[lsx_vulkan_wait_resident_output], context->resident_download_deinterleave_seconds);
   if (context->device && context->pipeline_cache)
     vkDestroyPipelineCache(context->device, context->pipeline_cache, NULL);
   if (context->device && context->command_pool)

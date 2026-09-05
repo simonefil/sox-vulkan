@@ -9,7 +9,7 @@
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
  * Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
@@ -32,7 +32,7 @@
 #define RATE_CUBIC_BINDINGS 2u
 #define RATE_CUBIC_LOCAL_SIZE 128u
 
-/* Push constants.  The 32.32 step is passed as two words because GLSL has no
+/* Push constants. The 32.32 step is passed as two words because GLSL has no
  * 64-bit integer without an extension, and the shader reconstructs the
  * position from them; phase_fraction is where in the current input frame the
  * batch begins, which is what carries the phase across calls. */
@@ -50,6 +50,10 @@ struct lsx_rate_cubic_vulkan {
   lsx_vulkan_context_t *vulkan;
   lsx_vulkan_buffer_t input;
   lsx_vulkan_buffer_t output;
+  /* Host-side staging for the two device-local buffers above. A DMA copy
+   * moves each across, so the shader never reaches over the bus. */
+  lsx_vulkan_buffer_t input_staging;
+  lsx_vulkan_buffer_t output_staging;
   double *host_output;
   VkDescriptorSetLayout descriptor_layout;
   VkDescriptorPool descriptor_pool;
@@ -61,7 +65,7 @@ struct lsx_rate_cubic_vulkan {
   parameters_t parameters;
   uint64_t step;                 /* 32.32; the whole value, unlike the split above. */
   /* Position within the input frame the next batch starts on, 0.32 fixed
-   * point.  Carried between calls, which is what keeps the resampling phase
+   * point. Carried between calls, which is what keeps the resampling phase
    * exact over an arbitrarily long stream. */
   uint32_t phase_fraction;
   uint32_t pre_post;
@@ -76,9 +80,9 @@ static int vk_result(VkResult result, char const *operation)
   return lsx_vulkan_result(result, operation);
 }
 
-/* Bytes one sample occupies in the input and output buffers.  The two emulated
+/* Bytes one sample occupies in the input and output buffers. The two emulated
  * profiles carry a high and a low component per sample, so they need twice the
- * room of the plain type they are built from.  reference_dd is set as
+ * room of the plain type they are built from. reference_dd is set as
  * double_precision && profile == reference, so it has to be tested first;
  * precise_fp32 is set only when double_precision is false. */
 static size_t sample_size(lsx_rate_cubic_vulkan_t const *context)
@@ -98,13 +102,19 @@ static int create_buffers(lsx_rate_cubic_vulkan_t *context)
 
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->input, input_size,
-          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) !=
-          SOX_SUCCESS)
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(
+          context->vulkan, &context->input_staging, input_size,
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->output, output_size,
-          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) !=
-          SOX_SUCCESS)
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
+      lsx_vulkan_buffer_create(
+          context->vulkan, &context->output_staging, output_size,
+          VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS)
     return SOX_EOF;
   if (context->reference_dd || !context->double_precision)
     context->host_output = lsx_malloc(
@@ -172,7 +182,7 @@ static int create_pipeline(lsx_rate_cubic_vulkan_t *context)
           SOX_SUCCESS)
     return SOX_EOF;
   /* Pick the kernel once, so its SPIR-V blob and the size passed with it can
-   * never disagree.  Only the first test is order-sensitive: reference_dd
+   * never disagree. Only the first test is order-sensitive: reference_dd
    * implies double_precision, while precise_fp32 is set only when double
    * precision is unavailable. */
   if (context->reference_dd) {
@@ -318,7 +328,9 @@ void lsx_rate_cubic_vulkan_destroy(lsx_rate_cubic_vulkan_t *context)
     vkDestroyDescriptorPool(context->vulkan->device, context->descriptor_pool, NULL);
   if (context->descriptor_layout)
     vkDestroyDescriptorSetLayout(context->vulkan->device, context->descriptor_layout, NULL);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->output_staging);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->output);
+  lsx_vulkan_buffer_destroy(context->vulkan, &context->input_staging);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->input);
   free(context->host_output);
   free(context);
@@ -345,8 +357,18 @@ int lsx_rate_cubic_vulkan_process(
   };
   VkMemoryBarrier barrier = {
     VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
-    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT
+    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT
   };
+  VkMemoryBarrier upload_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT
+  };
+  VkMemoryBarrier host_barrier = {
+    VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT
+  };
+  VkBufferCopy input_copy;
+  VkBufferCopy output_copy;
   uint64_t limit;
   uint64_t count;
   uint64_t end_position;
@@ -361,7 +383,7 @@ int lsx_rate_cubic_vulkan_process(
    * be the centre of an interpolation this call. */
   processable_frames = min((size_t)RATE_CUBIC_BLOCK_FRAMES, input_frames - context->pre_post);
   /* How many output frames fit before the read position leaves the
-   * processable range.  All of it in 32.32: limit is that range as a
+   * processable range. All of it in 32.32: limit is that range as a
    * position, and the division is the count of steps that stay below it,
    * the -1/+1 making the bound exclusive without a floating-point ceiling. */
   limit = (uint64_t)processable_frames << 32;
@@ -375,32 +397,32 @@ int lsx_rate_cubic_vulkan_process(
    * centre frame, so those samples must be on the device even though no
    * output is produced from them.
    *
-   * Each profile stores its own element form on the way in -- a pair with a
+   * Each profile stores its own element form on the way in, a pair with a
    * zero low word for double-double, a split pair for the precise profile,
-   * or a plain value.  The conversion is done here rather than in the shader
+   * or a plain value. The conversion is done here rather than in the shader
    * so that the buffer's layout is fixed by the profile alone. */
   copied_frames = processable_frames + context->pre_post;
   sample_count = copied_frames * context->parameters.channels;
   if (context->reference_dd)
     for (index = 0; index < sample_count; ++index) {
-      double *target = (double *)context->input.mapped + 2u * index;
+      double *target = (double *)context->input_staging.mapped + 2u * index;
 
       target[0] = input[index];
       target[1] = 0.;
     }
   else if (context->double_precision)
-    memcpy(context->input.mapped, input, sample_count * sizeof(*input));
+    memcpy(context->input_staging.mapped, input, sample_count * sizeof(*input));
   else if (context->precise_fp32)
     for (index = 0; index < sample_count; ++index) {
       float high = (float)input[index];
-      float *target = (float *)context->input.mapped + 2u * index;
+      float *target = (float *)context->input_staging.mapped + 2u * index;
 
       target[0] = high;
       target[1] = (float)(input[index] - (double)high);
     }
   else
     for (index = 0; index < sample_count; ++index)
-      ((float *)context->input.mapped)[index] = (float)input[index];
+      ((float *)context->input_staging.mapped)[index] = (float)input[index];
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_fraction = context->phase_fraction;
   if (vk_result(
@@ -416,6 +438,15 @@ int lsx_rate_cubic_vulkan_process(
           "vkBeginCommandBuffer rate cubic") != SOX_SUCCESS)
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "Rate cubic");
+  input_copy.srcOffset = input_copy.dstOffset = 0;
+  input_copy.size = (VkDeviceSize)sample_count * sample_size(context);
+  output_copy.srcOffset = output_copy.dstOffset = 0;
+  output_copy.size = (VkDeviceSize)count * context->parameters.channels * sample_size(context);
+  vkCmdCopyBuffer(context->command_buffer, context->input_staging.buffer, context->input.buffer, 1, &input_copy);
+  vkCmdPipelineBarrier(
+      context->command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+      1, &upload_barrier, 0, NULL, 0, NULL);
   vkCmdBindPipeline(context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
   vkCmdBindDescriptorSets(
       context->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -433,8 +464,13 @@ int lsx_rate_cubic_vulkan_process(
   vkCmdPipelineBarrier(
       context->command_buffer,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_PIPELINE_STAGE_HOST_BIT, 0,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
       1, &barrier, 0, NULL, 0, NULL);
+  vkCmdCopyBuffer(context->command_buffer, context->output.buffer, context->output_staging.buffer, 1, &output_copy);
+  vkCmdPipelineBarrier(
+      context->command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_HOST_BIT, 0,
+      1, &host_barrier, 0, NULL, 0, NULL);
   lsx_vulkan_label_end(context->vulkan, context->command_buffer);
   if (vk_result(
           vkEndCommandBuffer(context->command_buffer),
@@ -447,17 +483,17 @@ int lsx_rate_cubic_vulkan_process(
   sample_count = (size_t)count * context->parameters.channels;
   if (context->reference_dd) {
     for (index = 0; index < sample_count; ++index) {
-      double const *value = (double const *)context->output.mapped + 2u * index;
+      double const *value = (double const *)context->output_staging.mapped + 2u * index;
 
       context->host_output[index] = lsx_vulkan_collapse_pair(value[0], value[1]);
     }
     *output = context->host_output;
   }
   else if (context->double_precision)
-    *output = context->output.mapped;
+    *output = context->output_staging.mapped;
   else if (context->precise_fp32) {
     for (index = 0; index < sample_count; ++index) {
-      float const *value = (float const *)context->output.mapped + 2u * index;
+      float const *value = (float const *)context->output_staging.mapped + 2u * index;
 
       context->host_output[index] = (double)value[0] + (double)value[1];
     }
@@ -465,7 +501,7 @@ int lsx_rate_cubic_vulkan_process(
   }
   else {
     for (index = 0; index < sample_count; ++index)
-      context->host_output[index] = (double)((float const *)context->output.mapped)[index];
+      context->host_output[index] = (double)((float const *)context->output_staging.mapped)[index];
     *output = context->host_output;
   }
   *output_frames = (size_t)count;

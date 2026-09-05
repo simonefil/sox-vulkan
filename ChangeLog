@@ -4,6 +4,72 @@ Change History
 This file contains a list of all changes starting after the release of
 sox-11gamma, followed by a list of prior authors and features.
 
+SoX-16.2.0
+----------
+
+The DSD modulator is now two effects, and the Vulkan rate backends keep their
+working buffers in device memory.
+
+  o New effect `sdm-vulkan': the fixed MASH-2/FSM modulator that runs on the
+    Vulkan device. It requires one of `--vulkan-fast', `--vulkan-precise' or
+    `--vulkan-reference' and fails with a message when none is given, or when
+    the build has no Vulkan support.
+
+  o `sdm' now always runs the CPU modulator. In 16.1.1 it silently became the
+    device modulator under a `--vulkan-*' option, which made the two
+    modulators indistinguishable on the command line and left no way to ask
+    for `rate' on the device with `sdm' on the host. That chain is now
+    written out: the effect names pick the backend, the global option only
+    picks the precision.
+
+  o The CPU modulator loops were rewritten in a feedforward form:
+    s_n = A s_(n-1) + e0 (x_n - y_(n-1)), v_n = (1 + a0) x_n + w . s_(n-1)
+    - a0 y_(n-1) with w = A' a. The dot product reads the previous state, so
+    only one multiply-add and the sign test remain waiting on the previous
+    output. This is 1.2 to 1.3 times faster at orders 4 to 8, packed output
+    included. In exact arithmetic the two forms agree; in floating point the
+    roundings differ, so the bit stream is not identical to 16.1.1 while the
+    in-band SNR is unchanged.
+
+  o The Vulkan polyphase, cubic and fused DSD rate backends allocate their
+    input, output and coefficient buffers in device-local memory and move data
+    through host-visible staging buffers with a DMA copy, instead of having
+    the shader reach across the bus for every sample. On a discrete card this
+    is the difference between the rate stage costing 12.83 s and 0.75 s; on
+    unified memory it is neutral.
+
+  o Host-visible allocations now prefer a cached memory type over an uncached
+    one. A discrete card offers host-visible system memory twice, uncached
+    first, and every one of these buffers is read back by the host, so taking
+    the first match landed on write-combining memory.
+
+  o The Vulkan polyphase block size follows `--buffer' instead of being fixed
+    at 16384 frames, with 65536 as its floor and 4194304 as its ceiling. The
+    block decides how often the host and the device synchronise, and the
+    submit count, not the kernels, was the cost. At the default buffer
+    nothing changes.
+
+  o Two adjacent Vulkan polyphase stages now hand the intermediate signal over
+    in device memory rather than through a host FIFO, as the FFT stage and the
+    polyphase stage after it already did.
+
+  o `--diagnostics' now reports the seconds spent in each fence wait and in
+    the host de-interleave, next to the counts that were already there. The
+    counts say how often the host stops, the seconds say how long for.
+
+  o Setting SOX_VULKAN_CAPTURE in the environment enables the graphics queue
+    and the frame-boundary extension that a GPU profiler needs to recognise a
+    compute-only program. Both cost something on every run, so they stay off
+    unless asked for.
+
+  o build_static_libs.sh takes `--keep-build', which keeps the downloaded
+    sources, static libraries and build trees so a rebuild is incremental.
+    The Windows script spells the same option -KeepBuild.
+
+  o The README documents the global options, the three Vulkan profiles, which
+    effect runs where under each of them, and what the profiles cost and buy,
+    with measurements from an M5 Pro and an RTX 3080.
+
 SoX-16.1.1
 ----------
 
@@ -18,7 +84,7 @@ SoX-16.1.0
 The rate effect can now extrapolate PCM signal boundaries.
 
   o `rate -E' predicts the signal before its first sample and after its last
-    instead of presenting silence to the resampling filter.  This suppresses
+    instead of presenting silence to the resampling filter. This suppresses
     boundary transients without changing the output length.
 
   o The predictor runs in 64-bit floating point on the CPU, uses Burg
@@ -35,34 +101,34 @@ SoX-16.0.0
 The sample pipeline is now 64-bit floating point.
 
   o sox_sample_t is a double normalised to [-1, +1) where it was a 32-bit
-    integer.  This is an ABI break, and SOVERSION goes from 3 to 4: the type
+    integer. This is an ABI break, and SOVERSION goes from 3 to 4: the type
     appears in the signature of sox_read, sox_write, the packed-DSD entry
-    points and every effect handler's flow and drain.  An int32_t* is not a
+    points and every effect handler's flow and drain. An int32_t* is not a
     double* under any cast, so every consumer of libsox must be recompiled.
     There is no compatibility path and none is planned.
 
-  o A sample is no longer requantised between effects.  A chain of ten neutral
+  o A sample is no longer requantised between effects. A chain of ten neutral
     effects used to accumulate ten roundings to the 32-bit grid and is now the
-    exact identity.  The internal resolution goes from 32 bits to 53.
+    exact identity. The internal resolution goes from 32 bits to 53.
 
-  o 64-bit float input survives the pipeline.  Reading an -e float -b 64 file
+  o 64-bit float input survives the pipeline. Reading an -e float -b 64 file
     and writing it back used to lose 22 bits; it is now exact.
 
-  o Two public macros are gone.  SOX_SAMPLE_NEG was the sign bit of the integer
+  o Two public macros are gone. SOX_SAMPLE_NEG was the sign bit of the integer
     a sample used to be, and flipping it now negates a sample instead of
     shifting its range by half; the offset it stood for is written as an offset
-    in SOX_UNSIGNED_TO_SAMPLE and SOX_SAMPLE_TO_UNSIGNED.  SOX_ROUND_CLIP_COUNT
+    in SOX_UNSIGNED_TO_SAMPLE and SOX_SAMPLE_TO_UNSIGNED. SOX_ROUND_CLIP_COUNT
     rounded a double to that integer and clipped on the way, and there is
-    nothing left for it to round to.  Third-party effects that called it should
+    nothing left for it to round to. Third-party effects that called it should
     assign the value.
 
 Observable changes in behaviour:
 
-  o Fewer clips are reported.  Clipping happens only where a sample leaves for
+  o Fewer clips are reported. Clipping happens only where a sample leaves for
     a file, not at every link, so material that sat at or a little over 0 dBFS
     inside the chain no longer counts a clip at each effect.
 
-  o The Windows audio driver builds again.  `waveaudio' expands 32-bit device
+  o The Windows audio driver builds again. `waveaudio' expands 32-bit device
     samples through a macro that stopped being a plain cast when the sample
     type changed, and one of its three cases was missing the temporaries the
     macro now needs; nothing outside Windows compiles that file, so no other
@@ -73,25 +139,25 @@ Observable changes in behaviour:
     so a chain like `compand ... vol 0.5' now keeps what the compander pushed
     past full scale instead of squaring it off in the middle: on a noise test
     the old build wrote 134 samples pinned to exactly half scale and the new
-    one writes none, the worst of them recovering from 0.500 to 0.698.  With
+    one writes none, the worst of them recovering from 0.500 to 0.698. With
     nothing after the effect the written file does not change, because the
-    writer clips what the effect no longer does.  The limiter branches of
+    writer clips what the effect no longer does. The limiter branches of
     `vol -l' and `dcshift -l' still clip, which is what the option asks for.
 
   o `stat' prints "Scaled by: 1.0" where it printed "2147483647.0", and the
     sample values `stat -s' emits are on the normalised scale.
 
   o The temporary file `reverse' writes is twice the size it was, as are the
-    chain's own buffers.  Nothing else about memory use changed.
+    chain's own buffers. Nothing else about memory use changed.
 
 Compatibility note, for files SoX itself wrote:
 
   o CAF, W64 and MAT files written at -b 32 by SoX 15.x and earlier contain
-    integer sample magnitudes inside a 32-bit float subtype.  They are wrong,
+    integer sample magnitudes inside a 32-bit float subtype. They are wrong,
     and no other program reads them correctly; SoX read them back "correctly"
-    only because it made the matching mistake in the other direction.  This
+    only because it made the matching mistake in the other direction. This
     release writes and reads them properly, which means such a file written by
-    an older SoX now reads at its true, very loud, value.  Rewrite the affected
+    an older SoX now reads at its true, very loud, value. Rewrite the affected
     files with the older SoX to a lossless integer format first.
 
 $ox-14.4.2	2015-02-22
@@ -122,8 +188,8 @@ File formats:
 
 Effects:
 
-  o 'Deemph' can now also be used at 48kHz sample rate.  (robs)
-  o 'Rate' now much faster in many cases.  (robs)
+  o 'Deemph' can now also be used at 48kHz sample rate. (robs)
+  o 'Rate' now much faster in many cases. (robs)
   o Allow sending spectrograms to stdout. (Ulrich Klauer)
   o Allow use of Dolph window with spectrograms. (robs)
   o Allow mixing time and sample-count arguments for the delay

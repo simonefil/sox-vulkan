@@ -189,6 +189,32 @@ function Download-File($url, $output) {
     }
 }
 
+# bsdtar su Windows e' compilato senza liblzma, quindi per i .tar.xz delega a
+# un eseguibile xz esterno e ci parla via pipe. Quella pipe va in stallo: tar
+# scrive l'intero archivio senza drenare l'output di xz, e xz smette di leggere
+# appena la sua pipe di uscita si riempie. Serve quindi xz come programma a se'.
+function Find-Xz {
+    $onPath = Get-Command xz.exe -ErrorAction SilentlyContinue
+    if ($onPath) {
+        return $onPath.Source
+    }
+
+    $candidates = @(
+        "C:\msys64\mingw64\bin\xz.exe",
+        "C:\msys32\mingw32\bin\xz.exe",
+        "C:\msys64\usr\bin\xz.exe",
+        "C:\msys32\usr\bin\xz.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
 function Extract-Archive($archive, $dest) {
     Write-Info "Extracting: $(Split-Path -Leaf $archive)"
 
@@ -231,9 +257,28 @@ function Extract-Archive($archive, $dest) {
         }
     }
     elseif ($archive -match "\.tar\.xz$") {
+        $xz = Find-Xz
+        if (-not $xz) {
+            throw "xz not found: install it with MSYS2 (pacman -S mingw-w64-x86_64-xz) or put xz.exe on PATH"
+        }
+
         Push-Location $destWin
         try {
-            & "C:\Windows\System32\tar.exe" -xJf "$archiveWin"
+            # Due passaggi, mai -xJf: la redirezione su file evita la pipe che
+            # blocca tar e xz a vicenda. Start-Process, non l'operatore >, che
+            # in PowerShell passa dal testo e corromperebbe il .tar.
+            $tarPath = Join-Path $destWin ([System.IO.Path]::GetFileNameWithoutExtension($archiveWin))
+            $proc = Start-Process -FilePath $xz -ArgumentList "-d", "-c", "`"$archiveWin`"" `
+                -RedirectStandardOutput $tarPath -NoNewWindow -Wait -PassThru
+            if ($proc.ExitCode -ne 0) {
+                throw "xz failed to decompress $archiveWin"
+            }
+
+            & "C:\Windows\System32\tar.exe" -xf "$tarPath"
+            if ($LASTEXITCODE -ne 0) {
+                throw "tar failed to extract $tarPath"
+            }
+            Remove-Item $tarPath -ErrorAction SilentlyContinue
         }
         finally {
             Pop-Location

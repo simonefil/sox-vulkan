@@ -205,9 +205,11 @@ static int create_buffers(lsx_rate_dsd_vulkan_t *context)
   VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_bytes;
   uint32_t index;
 
-  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->output_staging, output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS)
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->output_staging, output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS)
     return SOX_EOF;
   for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
     if (lsx_vulkan_buffer_create(context->vulkan, &context->input[index], input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS)

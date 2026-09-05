@@ -227,14 +227,21 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context)
   /* Everything the shader touches is device-local. The host reaches the
    * input and the output through the staging buffers above, and the
    * coefficients through a one-time copy in upload_coefficients(). */
-  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->input, input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->input_staging, input_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->output_staging, output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->normalized_output, normalized_output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[0], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[1], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->coefficients, coefficient_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->input, input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->input_staging, input_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->output_staging, output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->normalized_output, normalized_output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[0], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[1], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index) {
     if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_upload[index], input_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS)

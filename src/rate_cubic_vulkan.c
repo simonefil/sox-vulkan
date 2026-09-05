@@ -102,17 +102,17 @@ static int create_buffers(lsx_rate_cubic_vulkan_t *context)
 
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->input, input_size,
-          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(
           context->vulkan, &context->input_staging, input_size,
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory) != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_buffer_create(
           context->vulkan, &context->output, output_size,
-          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS ||
-      lsx_vulkan_buffer_create(
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
+    return SOX_EOF;
+  if (lsx_vulkan_buffer_create(
           context->vulkan, &context->output_staging, output_size,
           VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS)
     return SOX_EOF;

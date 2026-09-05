@@ -69,6 +69,10 @@ ENABLE_FFMPEG=ON
 # a Unix host is not guaranteed to provide a loader, glslang and glslc.  Opt in
 # with --vulkan once those are installed.
 ENABLE_VULKAN=OFF
+# Whether the downloaded sources, static libraries and build trees survive the
+# build, so a rebuild is incremental rather than starting over.  The Windows
+# script spells the same option -KeepBuild.
+KEEP_BUILD=OFF
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS (platform-specific defaults)
@@ -945,6 +949,8 @@ show_help() {
     echo "  --vulkan              Enable the Vulkan FIR/DSD backend (needs a"
     echo "                        Vulkan loader, glslc and glslang headers)"
     echo "  --no-vulkan           Disable the Vulkan FIR/DSD backend (default)"
+    echo "  --keep-build          Keep downloaded sources, static libraries, and"
+    echo "                        build directories, for incremental rebuilds"
     echo ""
     echo "Audio Driver Options:"
     echo "  Platform defaults:"
@@ -1029,6 +1035,10 @@ main() {
                 ;;
             --no-vulkan)
                 ENABLE_VULKAN=OFF
+                shift
+                ;;
+            --keep-build)
+                KEEP_BUILD=ON
                 shift
                 ;;
             --no-amr)
@@ -1296,12 +1306,16 @@ main() {
     log_success "Binary copied to: ${OUTPUT_DIR}/sox"
 
     # Cleanup temporary files
-    log_info "Cleaning up temporary files..."
-    rm -rf "${BUILD_DIR}"
-    rm -rf "${STATIC_LIBS_DIR}"
-    rm -rf "${SOX_BUILD_DIR}"
+    if [ "${KEEP_BUILD}" = "OFF" ]; then
+        log_info "Cleaning up temporary files..."
+        rm -rf "${BUILD_DIR}"
+        rm -rf "${STATIC_LIBS_DIR}"
+        rm -rf "${SOX_BUILD_DIR}"
 
-    log_success "Cleanup complete!"
+        log_success "Cleanup complete!"
+    else
+        log_info "Keeping ${BUILD_DIR}, ${STATIC_LIBS_DIR} and ${SOX_BUILD_DIR}"
+    fi
 
     echo ""
     echo "=============================================="

@@ -1133,36 +1133,6 @@ static size_t rate_extrapolation_initial_frames(sox_rate_t rate)
   return min(max(input_rate / 10, (size_t)2048), (size_t)65536);
 }
 
-static int rate_extrapolation_ensure_buffer(sox_effect_t *effp)
-{
-  size_t frames = rate_extrapolation_initial_frames(effp->in_signal.rate);
-  size_t channels = effp->in_signal.channels;
-  size_t required;
-  size_t adjusted = 1;
-
-  if (channels > SIZE_MAX / frames) {
-    lsx_fail("rate -E processing buffer size overflow");
-    return SOX_EOF;
-  }
-  required = frames * channels;
-  if (sox_globals.bufsiz >= required)
-    return SOX_SUCCESS;
-  while (adjusted < required) {
-    if (adjusted > SIZE_MAX / 2) {
-      adjusted = required;
-      break;
-    }
-    adjusted <<= 1;
-  }
-  lsx_report("rate -E increased processing buffer from %" PRIuPTR
-      " to %" PRIuPTR " samples for %g Hz, %u channel%s",
-      sox_globals.bufsiz, adjusted, effp->in_signal.rate,
-      effp->in_signal.channels,
-      effp->in_signal.channels == 1 ? "" : "s");
-  sox_globals.bufsiz = adjusted;
-  return SOX_SUCCESS;
-}
-
 static void rate_extrapolation_init(sox_effect_t *effp, size_t channels)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -2153,10 +2123,6 @@ static int start(sox_effect_t * effp)
   if (!p->rate.plan.num_stages) {
     lsx_warn("input and output rates too close, skipping resampling");
     return SOX_EFF_NULL;
-  }
-  if (p->extrapolate && rate_extrapolation_ensure_buffer(effp) != SOX_SUCCESS) {
-    rate_plan_destroy(&p->rate.plan);
-    return SOX_EOF;
   }
   if (dsd_rate > 0 && p->rate.plan.stages[0].kind != rate_stage_dsd_fir) {
     /* Only a plan that halves at all has a cascade to fuse, and only a fused
@@ -3253,6 +3219,12 @@ static int flow(sox_effect_t *effp, sox_sample_t const *ibuf,
       return status;
     }
   }
+  /* The loop leaves behind whatever its last iteration produced, which on a
+   * normal exit is nothing: the drop count swallowed it.  What follows needs
+   * the room that was offered, not that zero, or it would be handed a buffer
+   * it believes to be full, take no input and emit none, and the chain would
+   * read the standstill as the end of the stream. */
+  *osamp = capacity;
   if (!p->extrapolation_started) {
     size_t channels = p->extrapolation_channels;
     size_t offered_frames = offered / channels;
@@ -3305,13 +3277,27 @@ static int flow(sox_effect_t *effp, sox_sample_t const *ibuf,
     return SOX_SUCCESS;
   }
   {
-    int status = flow_core(effp, ibuf, obuf, isamp, osamp);
+    int status;
 
-    if (*isamp) {
-      rate_extrapolation_remember(p, ibuf, *isamp);
-      p->extrapolation_real_samples += *isamp;
-    }
-    rate_extrapolation_filter_output(p, obuf, osamp, UINT64_MAX);
+    /* The chain reads an effect that takes no input and emits none, with both
+     * available, as a stream that has ended.  While the head extrapolation is
+     * being discarded this effect looks exactly like that: the filled output
+     * buffer leaves flow_core no reason to read input, and then the whole of
+     * that output falls inside the drop count.  The chain now survives that,
+     * but there is no reason to hand it the standstill in the first place.
+     * The loop ends: a turn that moves nothing has thrown away its entire
+     * output, and the drop count is that much smaller for the next one. */
+    do {
+      *isamp = offered;
+      *osamp = capacity;
+      status = flow_core(effp, ibuf, obuf, isamp, osamp);
+      if (*isamp) {
+        rate_extrapolation_remember(p, ibuf, *isamp);
+        p->extrapolation_real_samples += *isamp;
+      }
+      rate_extrapolation_filter_output(p, obuf, osamp, UINT64_MAX);
+    } while (status == SOX_SUCCESS && !*isamp && !*osamp &&
+        p->extrapolation_drop_samples);
     return status;
   }
 }

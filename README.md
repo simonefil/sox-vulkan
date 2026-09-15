@@ -710,7 +710,7 @@ After the build completes, verify the installation. The build scripts reject exe
 
 Expected output:
 ```
-sox:      SoX v16.2.0
+sox:      SoX v16.2.1
 ```
 
 ### 2. Check supported formats

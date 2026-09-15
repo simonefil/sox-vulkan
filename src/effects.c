@@ -869,6 +869,12 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
   size_t e, source_e = 0;               /* effect indices */
   size_t max_flows = 0;
   sox_bool draining = sox_true;
+  /* The state of the source's buffer the last time it was found with no room
+   * to read into, and how many times it has been found that way without
+   * having moved since.  A chain that is working drains that buffer, so the
+   * pair changes; one that is not says so by leaving it alone. */
+  size_t source_held_obeg = SOX_SIZE_MAX, source_held_oend = SOX_SIZE_MAX;
+  size_t source_held_turns = 0;
 #if HAVE_VULKAN
   lsx_vulkan_resident_buffer_t resident;
   size_t resident_producer = SOX_SIZE_MAX;
@@ -937,6 +943,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
   while (source_e < chain->length) {
 #define have_imin (e > 0 && e < chain->length && chain->effects[e - 1]->oend - chain->effects[e - 1]->obeg >= chain->effects[e]->imin)
     size_t osize = chain->effects[e]->oend - chain->effects[e]->obeg;
+    sox_bool source_held = sox_false;
 #if HAVE_VULKAN
     sox_bool resident_handled = sox_false;
     sox_bool resident_progress = sox_false;
@@ -1169,14 +1176,51 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
     }
 #endif
     if (e == source_e && (draining || !have_imin)) {
-      int status = drain_effect(chain, e);
-      if (status != SOX_SUCCESS && status != SOX_EOF) {
-        flow_status = status;
-        break;
+      sox_effect_t *effp = chain->effects[e];
+      size_t wide = max(effp->out_signal.channels, 1u);
+
+      if (effp->obeg == effp->oend) /* Read to the end and taken: rewind. */
+        effp->obeg = effp->oend = 0;
+
+      /* A source with no room left would be asked for zero samples, and a
+       * read of zero is also how it reports the end of its input: the two
+       * are the same answer, and reading this one as the end retires the
+       * source with the file half read.  So leave it alone and go on to the
+       * rest of the chain, which is what empties that buffer.  Only the
+       * count below tells this apart from a chain that has stopped moving
+       * altogether, where there is nothing to wait for. */
+      if (e + 1 < chain->length &&
+          sox_globals.bufsiz - effp->oend < wide &&
+          effp->oend > effp->obeg) {
+        source_held = sox_true;
+        if (effp->obeg == source_held_obeg && effp->oend == source_held_oend) {
+          if (++source_held_turns > 64 + 16 * chain->length) {
+            /* Not SOX_EOF: that reads as a stream that ended, which is the
+             * very mistake this guard exists to prevent, and it would leave
+             * the exit status saying the run went well. */
+            lsx_fail("effects chain stalled: `%s' has a full buffer that "
+                "`%s' is not taking", effp->handler.name,
+                chain->effects[e + 1]->handler.name);
+            flow_status = SOX_EINVAL;
+            break;
+          }
+        }
+        else {
+          source_held_obeg = effp->obeg;
+          source_held_oend = effp->oend;
+          source_held_turns = 0;
+        }
       }
-      if (status == SOX_EOF) {
-        ++source_e;
-        draining = sox_false;
+      else {
+        int status = drain_effect(chain, e);
+        if (status != SOX_SUCCESS && status != SOX_EOF) {
+          flow_status = status;
+          break;
+        }
+        if (status == SOX_EOF) {
+          ++source_e;
+          draining = sox_false;
+        }
       }
     } else if (have_imin) {
       int status = flow_effect(chain, e);
@@ -1191,7 +1235,9 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         draining = sox_true;
       }
     }
-    if (e < chain->length && chain->effects[e]->oend - chain->effects[e]->obeg > osize) /* False for output */
+    if (source_held) /* Onwards, so the buffer that is full gets emptied. */
+      ++e;
+    else if (e < chain->length && chain->effects[e]->oend - chain->effects[e]->obeg > osize) /* False for output */
       ++e;
     else if (e == source_e)
       draining = sox_true;

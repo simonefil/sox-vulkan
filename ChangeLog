@@ -4,6 +4,43 @@ Change History
 This file contains a list of all changes starting after the release of
 sox-11gamma, followed by a list of prior authors and features.
 
+SoX-16.2.1
+----------
+
+  o `rate -E' no longer truncates the output, and no longer depends on the
+    size of the processing buffer to come out whole. While the extrapolated
+    head is being discarded the effect could return having taken no input and
+    emitted none, with both available: the output buffer was filled from the
+    resampler's own queue, which leaves the flow no reason to read input, and
+    the whole of that output then fell inside the count of samples to drop.
+    The effects chain reads such a standstill as the end of the input and
+    retires the source in mid-stream. A ten second 48 kHz to 44.1 kHz
+    conversion under `--vulkan-precise --buffer 8192' wrote 4410 samples, a
+    tenth of a second, and stopped; under `--vulkan-fast' it wrote none at
+    all. The flow now runs until something has moved, which terminates
+    because a turn that moves nothing has dropped its whole output and
+    shortens what is left to drop.
+
+  o `rate -E' also lost the output room it had been given once it finished
+    flushing the extrapolated head, and handed the step after it a buffer it
+    believed to be full.
+
+  o The effects chain no longer retires a source whose buffer is full. Asked
+    to read into no room at all, a source returns zero samples, which is also
+    how it reports the end of its input; the chain took the one for the other
+    and stopped reading the file in the middle. It now leaves such a source
+    alone and goes on to the effects that empty the buffer. Any effect that
+    came to a standstill with a full buffer behind it could trip this, not
+    only `rate -E', and the outcome was a truncated file with no diagnostic.
+
+  o A chain that really has stopped moving now says so and fails, where the
+    symptom before was a file that ended early and an exit status saying all
+    was well. The two are told apart by whether the full buffer ever changes.
+
+  o The buffer floor that 16.1.1 added for `rate -E' is gone: it was sized
+    after the wrong quantity, and none is needed now. `rate -E' runs at any
+    `--buffer', down to 4096, and its output is identical at every size.
+
 SoX-16.2.0
 ----------
 

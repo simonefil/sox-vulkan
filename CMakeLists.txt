@@ -30,7 +30,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.31)
 endif()
 
 project(SoX
-    VERSION 16.2.0
+    VERSION 16.2.1
     DESCRIPTION "Sound eXchange - audio processing tool"
     LANGUAGES C
 )

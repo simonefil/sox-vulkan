@@ -215,6 +215,29 @@ function Find-Xz {
     return $null
 }
 
+# Il bsdtar incluso in Windows legge i nomi delle voci nella codepage ANSI:
+# quelli UTF-8 non rappresentabili li salta con "empty or unreadable filename"
+# e poi esce con codice 1, anche quando tutto il resto e' stato estratto. Il
+# tarball di FLAC contiene tre file di test con nomi ebraici, norvegesi ed
+# emoji, e basta quello a far fallire il build. GNU tar non ha il problema, e
+# MSYS2 c'e' gia' per forza: da li' viene xz. Ordine invertito rispetto a
+# Find-Xz, perche' su PATH tar.exe e' proprio quello di Windows.
+function Find-Tar {
+    $candidates = @(
+        "C:\msys64\usr\bin\tar.exe",
+        "C:\msys32\usr\bin\tar.exe",
+        "C:\Program Files\Git\usr\bin\tar.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return "C:\Windows\System32\tar.exe"
+}
+
 function Extract-Archive($archive, $dest) {
     Write-Info "Extracting: $(Split-Path -Leaf $archive)"
 
@@ -274,7 +297,10 @@ function Extract-Archive($archive, $dest) {
                 throw "xz failed to decompress $archiveWin"
             }
 
-            & "C:\Windows\System32\tar.exe" -xf "$tarPath"
+            # Il nome nudo, non $tarPath: GNU tar legge i due punti di "C:\" come
+            # separatore di un host remoto, e la directory corrente e' gia'
+            # quella giusta.
+            & "$(Find-Tar)" -xf ([System.IO.Path]::GetFileName($tarPath))
             if ($LASTEXITCODE -ne 0) {
                 throw "tar failed to extract $tarPath"
             }

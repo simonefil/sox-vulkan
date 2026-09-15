@@ -1133,13 +1133,48 @@ static size_t rate_extrapolation_initial_frames(sox_rate_t rate)
   return min(max(input_rate / 10, (size_t)2048), (size_t)65536);
 }
 
+/* How much runway the plan's filters need, counted in the effect's own input
+ * frames.
+ *
+ * Each stage's preload is in that stage's input frames, so the running scale
+ * carries every earlier stage's ratio and converts them back.  This is the
+ * quantity the leading extension has to cover: whatever it leaves short, the
+ * first filter reads as the silence in front of the file. */
+static size_t rate_extrapolation_plan_preload_frames(priv_t *p)
+{
+  double scale = 1., frames = 0.;
+  int index;
+
+  for (index = 0; index < p->rate.plan.num_stages; ++index) {
+    stage_t const *stage = &p->rate.plan.stages[index];
+    double ratio;
+
+    if (stage->preload > 0)
+      frames += (double)stage->preload / scale;
+    ratio = stage->kind == rate_stage_half_fir ? .5 :
+        stage->L > 0 && stage->M > 0 ? (double)stage->L / stage->M :
+        stage->out_in_ratio;
+    if (!(ratio > 0.))
+      break;
+    scale *= ratio;
+  }
+  return frames > 0. ? (size_t)(frames + .5) : (size_t)0;
+}
+
 static void rate_extrapolation_init(sox_effect_t *effp, size_t channels)
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t input_rate = (size_t)(effp->in_signal.rate + .5);
 
   p->extrapolation_channels = channels;
-  p->extrapolation_extension_frames = max(input_rate, (size_t)1);
+  /* One second of input was runway enough while the responses were short.
+   * A near-full bandwidth filter runs to hundreds of thousands of taps, and
+   * the part of its half-length the extension does not reach is read as the
+   * silence before the file: a start-up transient that lands in the band next
+   * to Nyquist and eats the stop-band the filter was designed for. */
+  p->extrapolation_extension_frames = max(
+      max(input_rate, (size_t)1),
+      rate_extrapolation_plan_preload_frames(p));
   p->extrapolation_initial_frames =
       rate_extrapolation_initial_frames(effp->in_signal.rate);
   p->extrapolation_prime_frames =
@@ -1951,10 +1986,10 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     GETOPT_NUMERIC(optstate, 'i', coef_interp, -1, 2)
     GETOPT_NUMERIC(optstate, 'c', max_coefs_size, 100, INT_MAX)
     GETOPT_NUMERIC(optstate, 'p', phase, 0, 100)
-    GETOPT_NUMERIC(optstate, 'B', bw_0dB_pc, 53, 99.5)
+    GETOPT_NUMERIC(optstate, 'B', bw_0dB_pc, 53, 99.88)
     GETOPT_NUMERIC(optstate, 'A', anti_aliasing_pc, 85, 100)
     GETOPT_NUMERIC(optstate, 'd', bit_depth, 15, 46)
-    GETOPT_LOCAL_NUMERIC(optstate, 'b', bw_3dB_pc, 74, 99.7)
+    GETOPT_LOCAL_NUMERIC(optstate, 'b', bw_3dB_pc, 74, 99.9)
     GETOPT_LOCAL_NUMERIC(optstate, 'R', rej, 90, 200)
     GETOPT_LOCAL_NUMERIC(optstate, 'Q', quality, 0, 7)
     case 'E': p->extrapolate = sox_true; break;
@@ -3335,11 +3370,27 @@ static int drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
       rate_extrapolation_prepare_end(p);
       continue;
     }
-    *osamp = capacity;
     {
-      int status = drain_core(effp, obuf, osamp);
+      int status;
+      size_t produced;
 
-      rate_extrapolation_filter_output(p, obuf, osamp, target);
+      /* One turn is not enough: the drop count can swallow everything
+       * drain_core just produced, and a drain that returns nothing is how an
+       * effect says it has finished, so the chain would stop with the file
+       * still unwritten.  Whether it does depends on how much room the chain
+       * offers, which is why this only ever showed on small --buffer values.
+       *
+       * The loop is bounded.  A turn either keeps some of its output, or has
+       * all of it dropped -- and then the drop count is smaller by exactly
+       * what was produced, which is not zero -- or produces nothing at all,
+       * and there is nothing left to drain. */
+      do {
+        *osamp = capacity;
+        status = drain_core(effp, obuf, osamp);
+        produced = *osamp;
+        rate_extrapolation_filter_output(p, obuf, osamp, target);
+      } while (status == SOX_SUCCESS && produced && !*osamp &&
+          p->extrapolation_drop_samples);
       return status;
     }
   }
@@ -3416,7 +3467,7 @@ sox_effect_handler_t const * lsx_rate_effect_fn(void)
     " -M/-I/-L     Phase response = minimum/intermediate/linear(default)",
     " -s           Steep filter (band-width = 99%)",
     " -a           Allow aliasing above the pass-band",
-    " -b 74-99.7   Any band-width %",
+    " -b 74-99.9   Any band-width %",
     " -p 0-100     Any phase response (0 = minimum, 25 = intermediate,",
     "              50 = linear, 100 = maximum)",
   };

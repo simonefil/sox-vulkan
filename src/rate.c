@@ -2073,8 +2073,17 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     lsx_fail("minimum allowed 3dB bandwidth with aliasing is %g%%", 85.);
     return SOX_EOF;
   }
-  else if (p->bw_0dB_pc && p->bw_0dB_pc < 74 && allow_aliasing) {
-    lsx_fail("minimum allowed bandwidth with aliasing is %g%%", 74.);
+  /* Aliasing hands the anti-aliasing point the 3dB bandwidth, and the design
+   * asserts that is at least 85%.  Converting that floor back through the
+   * rejection is what this bound is: the 74 that used to stand here is the
+   * same expression evaluated at about 126 dB, and TO_3dB is a parabola with
+   * its minimum near 234 dB, so a rejection far to either side of that -- -m
+   * and -h below it, -z above -- left the bound too low and reached the
+   * assertion instead of this message. */
+  else if (p->bw_0dB_pc && allow_aliasing &&
+      p->bw_0dB_pc < 100 - 15 / TO_3dB(rej)) {
+    lsx_fail("minimum allowed bandwidth with aliasing is %g%%",
+        100 - 15 / TO_3dB(rej));
     return SOX_EOF;
   }
   if (bw_3dB_pc)
@@ -3313,6 +3322,7 @@ static int flow(sox_effect_t *effp, sox_sample_t const *ibuf,
   }
   {
     int status;
+    size_t produced;
 
     /* The chain reads an effect that takes no input and emits none, with both
      * available, as a stream that has ended.  While the head extrapolation is
@@ -3321,17 +3331,23 @@ static int flow(sox_effect_t *effp, sox_sample_t const *ibuf,
      * that output falls inside the drop count.  The chain now survives that,
      * but there is no reason to hand it the standstill in the first place.
      * The loop ends: a turn that moves nothing has thrown away its entire
-     * output, and the drop count is that much smaller for the next one. */
+     * output, and the drop count is that much smaller for the next one.
+     *
+     * That is also what bounds the loop, so the turn has to have produced
+     * something for it to go round again: a turn that produced nothing has
+     * taken nothing off the drop count, and repeating it would only ask the
+     * same question for ever. */
     do {
       *isamp = offered;
       *osamp = capacity;
       status = flow_core(effp, ibuf, obuf, isamp, osamp);
+      produced = *osamp;
       if (*isamp) {
         rate_extrapolation_remember(p, ibuf, *isamp);
         p->extrapolation_real_samples += *isamp;
       }
       rate_extrapolation_filter_output(p, obuf, osamp, UINT64_MAX);
-    } while (status == SOX_SUCCESS && !*isamp && !*osamp &&
+    } while (status == SOX_SUCCESS && !*isamp && produced && !*osamp &&
         p->extrapolation_drop_samples);
     return status;
   }

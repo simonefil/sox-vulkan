@@ -17,9 +17,9 @@ SoX-16.2.1
     retires the source in mid-stream. A ten second 48 kHz to 44.1 kHz
     conversion under `--vulkan-precise --buffer 8192' wrote 4410 samples, a
     tenth of a second, and stopped; under `--vulkan-fast' it wrote none at
-    all. The flow now runs until something has moved, which terminates
-    because a turn that moves nothing has dropped its whole output and
-    shortens what is left to drop.
+    all. The flow now runs until something has moved. It is bounded: a
+    turn goes round again only when it produced output that was dropped
+    whole, and what is left to drop is then smaller by exactly that much.
 
   o `rate -E' also lost the output room it had been given once it finished
     flushing the extrapolated head, and handed the step after it a buffer it
@@ -69,6 +69,17 @@ SoX-16.2.1
     keeps the exposed options clear of that by a wide margin. The cap is on
     the filter length, not on anything audible: 99.9% is 85157 taps at
     96 kHz to 44.1 kHz.
+
+  o `rate -a' with a 0 dB band-width given no longer aborts on an assertion.
+    Aliasing hands the anti-aliasing point the 3 dB band-width, which the
+    design requires to be at least 85%, and the 74% floor that guarded it was
+    a constant: the same bound evaluated at about 126 dB of rejection, while
+    the conversion between the two scales is a parabola with its minimum near
+    234 dB. A rejection far to either side of that left the floor too low and
+    reached the assertion instead of the message meant for it -- `-m' and
+    `-h' below it, `-z' above. The floor now follows the rejection in force,
+    so `-z -a -B 74' reports a minimum of 81.5%, and `-v -a -B 73.5', which
+    the constant refused and the design accepts, runs.
 
 SoX-16.2.0
 ----------

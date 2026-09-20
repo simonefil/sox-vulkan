@@ -887,7 +887,10 @@ endif()
 # Windows-specific settings
 if(IS_WINDOWS)
     set(HAVE_WIN32_GLOB_H TRUE)
-    set(HAVE_WIN32_LTDL_H TRUE)
+    # Release builds link all format handlers statically.  Do not enable the
+    # legacy ltdl-compatible format-plugin discovery, which otherwise scans
+    # the process working directory and attempts to load every entry as a DLL.
+    set(HAVE_WIN32_LTDL_H FALSE)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     if(MSVC)
         add_definitions(-D_CRT_NONSTDC_NO_DEPRECATE)

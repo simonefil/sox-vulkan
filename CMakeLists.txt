@@ -353,8 +353,8 @@ endif()
 
 # ZLIB (needed by several libraries) - prefer static library on Windows
 if(IS_WINDOWS)
-    # Prefer zlibstatic.lib for static linking
-    find_library(ZLIB_LIBRARY_STATIC zlibstatic PATHS ${CMAKE_PREFIX_PATH}/lib NO_DEFAULT_PATH)
+    # Prefer libzs.lib, zlib's static library under MSVC, for static linking
+    find_library(ZLIB_LIBRARY_STATIC libzs PATHS ${CMAKE_PREFIX_PATH}/lib NO_DEFAULT_PATH)
     if(ZLIB_LIBRARY_STATIC)
         set(ZLIB_LIBRARIES ${ZLIB_LIBRARY_STATIC})
         find_path(ZLIB_INCLUDE_DIR zlib.h)

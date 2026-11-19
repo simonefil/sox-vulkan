@@ -875,25 +875,25 @@ The build scripts download and compile the following library versions:
 
 | Library | Version |
 |---------|---------|
-| zlib | 1.3.1 |
-| libpng | 1.6.43 |
-| libogg | 1.3.5 |
+| zlib | 1.4 |
+| libpng | 1.6.59 |
+| libogg | 1.3.6 |
 | libvorbis | 1.3.7 |
-| FLAC | 1.4.3 |
-| opus | 1.5.2 |
+| FLAC | 1.5.0 |
+| opus | 1.6.1 |
 | libmad | 0.15.1b |
-| LAME | 3.100 |
+| LAME | 4.0 |
 | TwoLAME | 0.4.0 |
 | libid3tag | 0.15.1b |
-| WavPack | 5.7.0 |
+| WavPack | 5.9.0 |
 | Monkey's Audio SDK | 13.47 |
 | Musepack | r475 |
 | libsndfile | 1.2.2 |
 | opencore-amr | 0.1.6 |
-| file/libmagic | 5.45 |
-| libtool/libltdl | 2.4.7 |
+| file/libmagic | 5.48 |
+| libtool/libltdl | 2.6.2 |
 | libao | 1.2.2 |
-| FFmpeg | 8.1.2 |
+| FFmpeg | 8.1.3 |
 | VkFFT | 1.3.4 |
 
 ---

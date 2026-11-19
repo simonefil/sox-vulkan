@@ -102,23 +102,23 @@ case "${PLATFORM}" in
 esac
 
 # Library versions
-ZLIB_VERSION="1.3.1"
-LIBPNG_VERSION="1.6.43"
-LIBOGG_VERSION="1.3.5"
+ZLIB_VERSION="1.4"
+LIBPNG_VERSION="1.6.59"
+LIBOGG_VERSION="1.3.6"
 LIBVORBIS_VERSION="1.3.7"
-FLAC_VERSION="1.4.3"
-OPUS_VERSION="1.5.2"
+FLAC_VERSION="1.5.0"
+OPUS_VERSION="1.6.1"
 LIBMAD_VERSION="0.15.1b"
-LAME_VERSION="3.100"
+LAME_VERSION="4.0"
 TWOLAME_VERSION="0.4.0"
 LIBID3TAG_VERSION="0.15.1b"
-WAVPACK_VERSION="5.7.0"
+WAVPACK_VERSION="5.9.0"
 LIBSNDFILE_VERSION="1.2.2"
 OPENCORE_AMR_VERSION="0.1.6"
-FILE_VERSION="5.45"
-LIBTOOL_VERSION="2.4.7"
+FILE_VERSION="5.48"
+LIBTOOL_VERSION="2.6.2"
 LIBAO_VERSION="1.2.2"
-FFMPEG_VERSION="8.1.2"
+FFMPEG_VERSION="8.1.3"
 # Monkey's Audio SDK and Musepack publish no checksums of their own: these are
 # the digests of the archives SoX's APE and Musepack support was verified
 # with, kept identical to the ones in build_static_libs.ps1.
@@ -468,7 +468,7 @@ build_flac() {
 build_opus() {
     log_info "========== Building opus ${OPUS_VERSION} =========="
 
-    local url="https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz"
+    local url="https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz"
     local archive="${DOWNLOAD_DIR}/opus-${OPUS_VERSION}.tar.gz"
     local src="${SRC_DIR}/opus-${OPUS_VERSION}"
 

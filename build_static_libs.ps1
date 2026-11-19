@@ -46,6 +46,9 @@ $DownloadDir = Join-Path $BuildDir "downloads"
 $SrcDir = Join-Path $BuildDir "src"
 $SoxBuildDir = Join-Path $ScriptDir "build"
 $OutputDir = Join-Path $ScriptDir "output"
+# zlib's CMake build names its MSVC static library libzs.lib, a name CMake's
+# FindZLIB does not search for, so the libraries that link zlib get its path.
+$ZlibLibrary = Join-Path $StaticLibsDir "lib\libzs.lib"
 
 # ------------------------------------------------------------------------------
 # CODEC OPTIONS (default: all ON)
@@ -72,19 +75,19 @@ $EnableWaveaudio = -not $NoWaveaudio
 
 # Library versions
 $Versions = @{
-    zlib = "1.3.1"
-    libpng = "1.6.43"
-    libogg = "1.3.5"
+    zlib = "1.4"
+    libpng = "1.6.59"
+    libogg = "1.3.6"
     libvorbis = "1.3.7"
-    flac = "1.4.3"
-    opus = "1.5.2"
-    lame = "3.100"
+    flac = "1.5.0"
+    opus = "1.6.1"
+    lame = "4.0"
     twolame = "0.4.0"
-    wavpack = "5.7.0"
+    wavpack = "5.9.0"
     libsndfile = "1.2.2"
     libmad = "0.15.1b"
     libid3tag = "0.15.1b"
-    ffmpeg = "8.1.2"
+    ffmpeg = "8.1.3"
     mac = "13.47"
     musepack = "r475"
     vkfft = "1.3.4"
@@ -410,7 +413,8 @@ function Build-Zlib {
     }
 
     Build-CMakeProject $src @(
-        "-DZLIB_BUILD_EXAMPLES=OFF"
+        "-DZLIB_BUILD_SHARED=OFF"
+        "-DZLIB_BUILD_TESTING=OFF"
     )
 
     Write-Success "zlib installed"
@@ -434,6 +438,7 @@ function Build-Libpng {
         "-DPNG_STATIC=ON"
         "-DPNG_TESTS=OFF"
         "-DZLIB_ROOT=$StaticLibsDir"
+        "-DZLIB_LIBRARY=$ZlibLibrary"
     )
 
     Write-Success "libpng installed"
@@ -509,7 +514,7 @@ function Build-Flac {
 function Build-Opus {
     Write-Info "========== Building opus $($Versions.opus) =========="
 
-    $url = "https://github.com/xiph/opus/releases/download/v$($Versions.opus)/opus-$($Versions.opus).tar.gz"
+    $url = "https://downloads.xiph.org/releases/opus/opus-$($Versions.opus).tar.gz"
     $archive = Join-Path $DownloadDir "opus-$($Versions.opus).tar.gz"
     $src = Join-Path $SrcDir "opus-$($Versions.opus)"
 
@@ -670,7 +675,9 @@ endif()
 
 add_library(mp3lame STATIC `${LAME_SOURCES})
 
+# The source root is on the path for mpglib_interface.c's "mpglib/mpglib.h"
 target_include_directories(mp3lame PUBLIC
+    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}>
     `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/include>
     `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/libmp3lame>
     `$<BUILD_INTERFACE:`${CMAKE_CURRENT_BINARY_DIR}>
@@ -905,7 +912,9 @@ install(FILES id3tag.h DESTINATION include)
 "@
     Set-Content -Path $cmakeFile -Value $cmakeContent -Force
 
-    Build-CMakeProject $src
+    Build-CMakeProject $src @(
+        "-DZLIB_LIBRARY=$ZlibLibrary"
+    )
 
     Write-Success "libid3tag installed"
 }
@@ -925,7 +934,7 @@ function Build-Wavpack {
 
     Build-CMakeProject $src @(
         "-DWAVPACK_BUILD_PROGRAMS=OFF"
-        "-DWAVPACK_BUILD_DOCS=OFF"
+        "-DWAVPACK_INSTALL_DOCS=OFF"
         "-DBUILD_TESTING=OFF"
     )
 

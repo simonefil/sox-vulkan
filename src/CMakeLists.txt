@@ -154,6 +154,11 @@ set(LIBSOX_FORMAT_SOURCES
     hcom.c
     htk.c
     maud.c
+    matroska.c
+    container.c
+    codec.c
+    codec-pcm.c
+    ebml.c
     prc.c
     sf.c
     smp.c
@@ -179,6 +184,9 @@ set(LIBSOX_FORMAT_SOURCES
 
 set(LIBSOX_FORMAT_HEADERS
     adpcm.h
+    codec.h
+    container.h
+    ebml.h
     ima_rw.h
     ffmpeg-codec.h
 )
@@ -1089,7 +1097,7 @@ endif()
 
 # FLAC format
 if(HAVE_FLAC)
-    target_sources(libsox PRIVATE flac.c)
+    target_sources(libsox PRIVATE flac.c codec-flac.c)
     target_link_libraries(libsox PRIVATE ${FLAC_LIBRARIES})
     target_include_directories(libsox PRIVATE ${FLAC_INCLUDE_DIRS})
     target_compile_definitions(libsox PRIVATE STATIC_FLAC FLAC__NO_DLL)

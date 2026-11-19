@@ -1195,6 +1195,7 @@ if clipping occurs.
 #define SOX_FILE_QUAD    0x0400 /**< Client API: Do channel restrictions allow quad? */
 #define SOX_FILE_CODEC_OPTIONS 0x0800 /**< Client API: Accepts implementation-specific codec options */
 #define SOX_FILE_CHANNEL_LAYOUT 0x1000 /**< Client API: Accepts an explicit output channel layout */
+#define SOX_FILE_CONTAINER 0x2000 /**< Client API: Container whose codec is named in the type, as in mka:flac */
 
 #define SOX_FILE_CHANS   (SOX_FILE_MONO | SOX_FILE_STEREO | SOX_FILE_QUAD) /**< Client API: No channel restrictions */
 #define SOX_FILE_LIT_END (SOX_FILE_ENDIAN | 0)                             /**< Client API: File is little-endian */

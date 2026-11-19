@@ -20,6 +20,8 @@
 
 #define _GNU_SOURCE
 #include "sox_i.h"
+#include "codec.h"
+#include "ebml.h"
 
 #ifdef STATIC_FFMPEG_CODECS
 #include "ffmpeg-codec.h"
@@ -248,6 +250,14 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(sndt  , 0, 0, ""     , 0,  6, "SOUND\x1a")
   CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
   CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
+  /* Ahead of the FFmpeg probes, some of which scan the whole window and
+   * could find their signature by chance inside a Matroska header. */
+  {
+    char const * matroska_type = lsx_matroska_detect((unsigned char const *)data, len);
+
+    if (matroska_type)
+      return matroska_type;
+  }
 #ifdef HAVE_FFMPEG_CODECS
   /* These probes run before the CHECK lines that follow rather than after,
    * because a bitstream with no magic number at offset zero can happen to
@@ -772,6 +782,46 @@ static void UNUSED rewind_pipe(FILE * fp)
 #endif
 }
 
+/* What a handler can write.  A container leaves that to the codec named
+ * after the colon in its type, and without one can write nothing. */
+static unsigned const * handler_write_formats(sox_format_handler_t const * handler, char const * type)
+{
+  lsx_codec_handler_t const * codec;
+
+  if (!(handler->flags & SOX_FILE_CONTAINER))
+    return handler->write_formats;
+  codec = lsx_codec_find(lsx_type_codec(type));
+  return codec? codec->write_formats : NULL;
+}
+
+/* A codec may be named only after a container type, and must be one this
+ * build has; on output a container needs one, since what to encode with is
+ * not the container's to choose.  Checked before the file is opened, so a
+ * refused output does not truncate an existing file. */
+static int check_type_codec(sox_format_handler_t const * handler, char const * type, sox_bool writing)
+{
+  char const * codec = lsx_type_codec(type);
+
+  if (!(handler->flags & SOX_FILE_CONTAINER)) {
+    if (codec) {
+      lsx_fail("file type `%s' does not take a codec", handler->names[0]);
+      return SOX_EOF;
+    }
+  }
+  else if (codec) {
+    if (!lsx_codec_find(codec)) {
+      lsx_fail("unknown codec `%s'; codecs: %s", codec, lsx_codec_names());
+      return SOX_EOF;
+    }
+  }
+  else if (writing) {
+    lsx_fail("output file type `%s' needs a codec, as in `-t %s:CODEC'; codecs: %s",
+        handler->names[0], handler->names[0], lsx_codec_names());
+    return SOX_EOF;
+  }
+  return SOX_SUCCESS;
+}
+
 static sox_format_t * open_read(
     char               const * path,
     void                     * buffer UNUSED,
@@ -793,6 +843,8 @@ static sox_format_t * open_read(
       lsx_fail("no handler for given file type `%s'", filetype);
       goto error;
     }
+    if (check_type_codec(handler, filetype, sox_false) != SOX_SUCCESS)
+      goto error;
     ft->handler = *handler;
   }
 
@@ -973,9 +1025,10 @@ sox_bool sox_format_supports_encoding(
     char               const * filetype,
     sox_encodinginfo_t const * encoding)
 {
-  #define enc_arg(T) (T)handler->write_formats[i++]
+  #define enc_arg(T) (T)write_formats[i++]
   sox_bool is_file_extension = filetype == NULL;
   sox_format_handler_t const * handler;
+  unsigned const * write_formats;
   unsigned i = 0, s;
   sox_encoding_t e;
 
@@ -985,7 +1038,7 @@ sox_bool sox_format_supports_encoding(
     filetype = lsx_find_file_extension(path);
 
   if (!filetype || !(handler = sox_find_format(filetype, is_file_extension)) ||
-      !handler->write_formats)
+      !(write_formats = handler_write_formats(handler, filetype)))
     return sox_false;
   while ((e = enc_arg(sox_encoding_t))) {
     if (e == encoding->encoding) {
@@ -1212,10 +1265,12 @@ static sox_format_t * open_write(
     goto error;
   }
 
-  if (!(handler = sox_write_handler(path, filetype, &filetype)))
+  if (!(handler = sox_write_handler(path, filetype, &filetype)) ||
+      check_type_codec(handler, filetype, sox_true) != SOX_SUCCESS)
     goto error;
 
   ft->handler = *handler;
+  ft->handler.write_formats = handler_write_formats(handler, filetype);
   /* Both are refused rather than ignored when the handler cannot use them,
    * so that an option aimed at the wrong format is not silently dropped. */
   ft->codec_options = codec_options;
@@ -1767,6 +1822,8 @@ sox_format_handler_t const * sox_find_format(char const * name0, sox_bool no_dev
     char * name = lsx_strdup(name0);
     char * pos = strchr(name, ';');
     if (pos) /* Use only the 1st clause of a mime string */
+      *pos = '\0';
+    if ((pos = strchr(name, ':'))) /* A container's codec, as in mka:flac */
       *pos = '\0';
     for (f = 0; f < nformats; ++f) {
       sox_format_handler_t const * handler = s_sox_format_fns[f].fn();

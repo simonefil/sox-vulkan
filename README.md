@@ -749,7 +749,7 @@ After the build completes, verify the installation. The build scripts reject exe
 
 Expected output:
 ```
-sox:      SoX v16.2.2
+sox:      SoX v16.2.3
 ```
 
 ### 2. Check supported formats

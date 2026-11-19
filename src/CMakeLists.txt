@@ -54,6 +54,7 @@ set(LIBSOX_EFFECTS_SOURCES
     compand.c
     compandt.c
     contrast.c
+    crossfeed.c
     dcshift.c
     delay.c
     dft_filter.c

@@ -179,8 +179,8 @@ lsx_codec_handler_t const * lsx_pcm_codec_fn(void)
     SOX_ENCODING_FLOAT, 32, 64, 0,
     0};
   static lsx_codec_handler_t const handler = {
-    "pcm", write_formats, sizeof(priv_t),
-    start_decode, decode, NULL,
+    "pcm", write_formats, NULL, sizeof(priv_t),
+    start_decode, decode, NULL, NULL,
     start_encode, encode, stop_encode
   };
   return &handler;

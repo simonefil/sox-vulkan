@@ -25,17 +25,138 @@ static void release(lsx_container_t * p)
   free(p->codec.samples);
   free(p->codec.params.private_data);
   free(p->priv);
+  memset(p, 0, sizeof(*p));
+}
+
+/* Comments the codec finds are the file's only for the stream that begins
+ * it; a codec started on a later one, or again after a seek, keeps them to
+ * itself. */
+int lsx_codec_start_decode(lsx_codec_t * codec, sox_bool comments)
+{
+  sox_comments_t kept = codec->ft->oob.comments;
+  int status;
+
+  if (comments)
+    return codec->handler->start_decode(codec);
+  codec->ft->oob.comments = NULL;
+  status = codec->handler->start_decode(codec);
+  sox_delete_comments(&codec->ft->oob.comments);
+  codec->ft->oob.comments = kept;
+  return status;
+}
+
+/* The codec stopped, and started again on params, which it takes over: at
+ * the start of a stream chained after the last, whose delay is then dropped
+ * as at the start of the file, or after a seek, which counts it in. */
+int lsx_container_restart(sox_format_t * ft, lsx_codec_params_t const * params, sox_bool stream_start)
+{
+  lsx_container_t * p = ft->priv;
+  lsx_codec_t * c = &p->codec;
+
+  if (c->handler->stop_decode)
+    c->handler->stop_decode(c);
+  p->codec_started = sox_false;
+  free(c->params.private_data);
+  c->params = *params;
+  memset(c->priv, 0, c->handler->priv_size);
+  c->samples_start = c->samples_end = 0;
+  p->stream_ended = p->eof = sox_false;
+  if (lsx_codec_start_decode(c, sox_false) != SOX_SUCCESS) {
+    p->eof = sox_true;
+    return SOX_EOF;
+  }
+  p->codec_started = sox_true;
+  p->skip = stream_start? c->params.delay : 0;
+  return SOX_SUCCESS;
+}
+
+/* A stream chained after the first must go on as the first began: the
+ * output's rate and channels are fixed. */
+int lsx_container_check_chained(sox_format_t * ft, lsx_codec_params_t const * first,
+    lsx_codec_params_t const * chained)
+{
+  if (chained->rate != first->rate) {
+    lsx_fail_errno(ft, SOX_EFMT, "chained streams with different sample rates are unsupported");
+    return SOX_EOF;
+  }
+  if (chained->channels != first->channels) {
+    lsx_fail_errno(ft, SOX_EFMT, "chained streams with different channel counts are unsupported");
+    return SOX_EOF;
+  }
+  return SOX_SUCCESS;
+}
+
+/* The stream chained after the one that has ended, if the container has one. */
+static int next_stream(sox_format_t * ft)
+{
+  lsx_container_t * p = ft->priv;
+  lsx_codec_t * c = &p->codec;
+  lsx_codec_params_t params, first = c->params;
+  int status;
+
+  memset(&params, 0, sizeof(params));
+  if (!p->ops->next_stream || (status = p->ops->next_stream(ft, p->priv, c, &params)) == SOX_EOF) {
+    p->eof = sox_true;
+    return SOX_SUCCESS;
+  }
+  if (status != SOX_SUCCESS || lsx_container_restart(ft, &params, sox_true) != SOX_SUCCESS)
+    return SOX_EOF;
+  return lsx_container_check_chained(ft, &first, &c->params);
+}
+
+/* Decode one more packet into the codec's empty output, or drain the codec
+ * at the end of a stream, and drop what the packet marks as preceding the
+ * signal or as padding.  After a drain, the stream chained next, if any, is
+ * taken up. */
+static int decode_packet(sox_format_t * ft)
+{
+  lsx_container_t * p = ft->priv;
+  lsx_codec_t * c = &p->codec;
+  size_t channels = c->params.channels;
+  lsx_packet_t packet;
+  int status;
+
+  c->samples_start = c->samples_end = 0;
+  if (p->stream_ended) {
+    if (next_stream(ft) != SOX_SUCCESS) {
+      p->eof = sox_true;
+      return SOX_EOF;
+    }
+    if (p->eof)
+      return SOX_SUCCESS;
+  }
+  status = p->ops->read_packet(ft, p->priv, c, &packet);
+  if (status == SOX_EOF) {
+    p->stream_ended = sox_true;
+    status = c->handler->decode(c, NULL, 0);
+  }
+  else if (status == SOX_SUCCESS) {
+    status = c->handler->decode(c, packet.data, packet.size);
+    if (status == SOX_SUCCESS) {
+      c->samples_end -= min(packet.discard * channels, c->samples_end);
+      c->samples_start += min(packet.skip * channels, c->samples_end);
+    }
+  }
+  if (status != SOX_SUCCESS) {
+    p->eof = sox_true;
+    return SOX_EOF;
+  }
+  return SOX_SUCCESS;
 }
 
 /* The codec comes from the file; a codec named in the type only has to
- * agree with it.  The length is left unknown: the container's duration is
- * rounded, and a length that was off by a sample would cut the signal. */
+ * agree with it.  The first packet is decoded here, so that what a codec
+ * learns only from its packets is known when the format is reported.  The
+ * length is the container's own count of frames where it has an exact one,
+ * and is otherwise left unknown: a duration is rounded, and a length that
+ * was off by a sample would cut the signal. */
 int lsx_container_startread(sox_format_t * ft, lsx_container_ops_t const * ops)
 {
   lsx_container_t * p = ft->priv;
   lsx_codec_t * c = &p->codec;
-  char const * requested = lsx_type_codec(ft->filetype);
+  char const * requested = lsx_container_requested(ft->filetype);
   char const * codec_name;
+  sox_uint64_t length = 0;
 
   p->ops = ops;
   p->priv = lsx_calloc(1, ops->priv_size);
@@ -51,11 +172,18 @@ int lsx_container_startread(sox_format_t * ft, lsx_container_ops_t const * ops)
     goto error;
   }
   c->priv = lsx_calloc(1, c->handler->priv_size);
-  if (c->handler->start_decode(c) != SOX_SUCCESS)
+  if (lsx_codec_start_decode(c, sox_true) != SOX_SUCCESS)
     goto error;
+  p->codec_started = sox_true;
+  if ((decode_packet(ft) != SOX_SUCCESS && ft->sox_errno) ||
+      (ops->length && ops->length(ft, p->priv, c, &length) != SOX_SUCCESS)) {
+    if (c->handler->stop_decode && p->codec_started)
+      c->handler->stop_decode(c);
+    goto error;
+  }
   ft->signal.rate = c->params.rate;
   ft->signal.channels = c->params.channels;
-  ft->signal.length = SOX_UNSPEC;
+  ft->signal.length = length? length * c->params.channels : SOX_UNSPEC;
   ft->encoding.encoding = c->params.encoding;
   ft->encoding.bits_per_sample = c->params.bits_per_sample;
   p->skip = c->params.delay;
@@ -67,40 +195,8 @@ error:
   return SOX_EOF;
 }
 
-/* Decode one more packet into the codec's empty output, or drain the codec
- * at the end, and drop what is delay or padding. */
-static int decode_packet(sox_format_t * ft)
-{
-  lsx_container_t * p = ft->priv;
-  lsx_codec_t * c = &p->codec;
-  size_t channels = c->params.channels;
-  lsx_packet_t packet;
-  int status;
-
-  c->samples_start = c->samples_end = 0;
-  status = p->ops->read_packet(ft, p->priv, &packet);
-  if (status == SOX_EOF) {
-    p->eof = sox_true;
-    status = c->handler->decode(c, NULL, 0);
-  }
-  else if (status == SOX_SUCCESS) {
-    status = c->handler->decode(c, packet.data, packet.size);
-    if (status == SOX_SUCCESS)
-      c->samples_end -= min(packet.discard * channels, c->samples_end);
-  }
-  if (status != SOX_SUCCESS) {
-    p->eof = sox_true;
-    return SOX_EOF;
-  }
-  if (p->skip) {
-    size_t drop = min(p->skip, (c->samples_end - c->samples_start) / channels);
-
-    c->samples_start += drop * channels;
-    p->skip -= drop;
-  }
-  return SOX_SUCCESS;
-}
-
+/* The delay is dropped as the samples are handed out, which leaves the
+ * codec until the end of the first packet to settle it. */
 size_t lsx_container_read(sox_format_t * ft, sox_sample_t * buf, size_t len)
 {
   lsx_container_t * p = ft->priv;
@@ -108,8 +204,16 @@ size_t lsx_container_read(sox_format_t * ft, sox_sample_t * buf, size_t len)
   size_t done = 0;
 
   while (done < len) {
-    size_t n = min(len - done, c->samples_end - c->samples_start);
+    size_t n = c->samples_end - c->samples_start;
 
+    if (p->skip && n) {
+      size_t drop = min(p->skip, n / c->params.channels);
+
+      c->samples_start += drop * c->params.channels;
+      p->skip -= drop;
+      continue;
+    }
+    n = min(len - done, n);
     if (n) {
       memcpy(buf + done, c->samples + c->samples_start, n * sizeof(*buf));
       c->samples_start += n;
@@ -121,11 +225,19 @@ size_t lsx_container_read(sox_format_t * ft, sox_sample_t * buf, size_t len)
   return done;
 }
 
+/* The container finds the place and restarts the codec there. */
+int lsx_container_seek(sox_format_t * ft, sox_uint64_t offset)
+{
+  lsx_container_t * p = ft->priv;
+
+  return p->ops->seek(ft, p->priv, &p->codec, offset / p->codec.params.channels);
+}
+
 int lsx_container_stopread(sox_format_t * ft)
 {
   lsx_container_t * p = ft->priv;
 
-  if (p->codec.handler->stop_decode)
+  if (p->codec.handler->stop_decode && p->codec_started)
     p->codec.handler->stop_decode(&p->codec);
   p->ops->close_read(ft, p->priv);
   release(p);
@@ -139,7 +251,75 @@ static int write_packet(lsx_codec_t * codec, lsx_packet_t const * packet)
   return p->ops->write_packet(codec->ft, p->priv, packet);
 }
 
-/* The type names the codec; open_write in formats.c has made sure of it. */
+static sox_bool big_endian(sox_format_t const * ft)
+{
+  return (ft->encoding.reverse_bytes == sox_option_yes) != MACHINE_IS_BIGENDIAN;
+}
+
+/* The container's identifier for what is to be written, or NULL if it has
+ * none.  8-bit integer PCM is unsigned under the signed identifiers. */
+static lsx_codec_tag_t const * write_tag(sox_format_t const * ft)
+{
+  sox_encoding_t encoding = ft->encoding.encoding;
+
+  if (encoding == SOX_ENCODING_UNSIGNED && ft->encoding.bits_per_sample == 8)
+    encoding = SOX_ENCODING_SIGN2;
+  return lsx_codec_tag_by_codec(lsx_container_family(ft->filetype),
+      lsx_container_codec(ft->filetype), encoding, big_endian(ft));
+}
+
+/* Whether the container can hold the codec and the sample layout settled
+ * for the output, and the encoder started, before the output file is opened,
+ * so that a refused output does not leave behind or truncate a file.  The
+ * type names the codec, or the container has a default; open_write in
+ * formats.c has made sure of it.  MP3, having no precision to be chosen by,
+ * is left unsettled, and is the codec's own encoding. */
+int lsx_container_prepare_write(sox_format_t * ft)
+{
+  lsx_container_t * p = ft->priv;
+  lsx_codec_t * c = &p->codec;
+
+  c->handler = lsx_codec_find(lsx_container_codec(ft->filetype));
+  if (!ft->encoding.encoding)
+    ft->encoding.encoding = c->handler->write_formats[0];
+  if (!write_tag(ft)) {
+    if (ft->encoding.encoding == SOX_ENCODING_SIGN2 || ft->encoding.encoding == SOX_ENCODING_UNSIGNED ||
+        ft->encoding.encoding == SOX_ENCODING_FLOAT)
+      lsx_fail_errno(ft, SOX_EFMT, "file type `%s' can't hold %s-endian %s as `%s'", ft->filetype,
+          big_endian(ft)? "big" : "little", sox_encodings_info[ft->encoding.encoding].desc,
+          lsx_container_codec(ft->filetype));
+    else lsx_fail_errno(ft, SOX_EFMT, "file type `%s' can't hold codec `%s'", ft->filetype,
+        lsx_container_codec(ft->filetype));
+    return SOX_EOF;
+  }
+  c->ft = ft;
+  c->priv = lsx_calloc(1, c->handler->priv_size);
+  c->params.rate = ft->signal.rate;
+  c->params.channels = ft->signal.channels;
+  c->params.encoding = ft->encoding.encoding;
+  c->params.bits_per_sample = ft->encoding.bits_per_sample;
+  c->params.big_endian = big_endian(ft);
+  c->write_packet = write_packet;
+  if (c->handler->start_encode(c) != SOX_SUCCESS) {
+    release(p);
+    return SOX_EOF;
+  }
+  p->codec_started = sox_true;
+  return SOX_SUCCESS;
+}
+
+/* What lsx_container_prepare_write started, when the output then fails to
+ * open. */
+void lsx_container_cancel_write(sox_format_t * ft)
+{
+  lsx_container_t * p = ft->priv;
+
+  if (p->codec_started)
+    p->codec.handler->stop_encode(&p->codec);
+  release(p);
+}
+
+/* The encoder was started before the file was opened. */
 int lsx_container_startwrite(sox_format_t * ft, lsx_container_ops_t const * ops)
 {
   lsx_container_t * p = ft->priv;
@@ -147,22 +327,8 @@ int lsx_container_startwrite(sox_format_t * ft, lsx_container_ops_t const * ops)
 
   p->ops = ops;
   p->priv = lsx_calloc(1, ops->priv_size);
-  c->ft = ft;
-  c->handler = lsx_codec_find(lsx_type_codec(ft->filetype));
-  c->priv = lsx_calloc(1, c->handler->priv_size);
-  c->params.rate = ft->signal.rate;
-  c->params.channels = ft->signal.channels;
-  c->params.encoding = ft->encoding.encoding;
-  c->params.bits_per_sample = ft->encoding.bits_per_sample;
-  c->params.big_endian = (ft->encoding.reverse_bytes == sox_option_yes) != MACHINE_IS_BIGENDIAN;
-  c->write_packet = write_packet;
-  if (c->handler->start_encode(c) != SOX_SUCCESS) {
-    release(p);
-    return SOX_EOF;
-  }
-  if (ops->open_write(ft, p->priv, c) != SOX_SUCCESS) {
-    c->handler->stop_encode(c);
-    release(p);
+  if (ops->open_write(ft, p->priv, c, write_tag(ft)) != SOX_SUCCESS) {
+    lsx_container_cancel_write(ft);
     return SOX_EOF;
   }
   return SOX_SUCCESS;

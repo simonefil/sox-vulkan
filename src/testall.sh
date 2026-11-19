@@ -150,7 +150,7 @@ t vox -r 8130
 t wav
 t wve
 
-if ${bindir}/sox${EXEEXT} --help-format opus 2>/dev/null | grep -q '^Writes:$'; then
+if ${bindir}/sox${EXEEXT} -n -r 48000 -t opus /dev/null synth .01 2>/dev/null; then
 	echo "Format: opus   Options: -C 96"
 	${bindir}/sox${EXEEXT} ${srcdir}/monkey.wav -C 96 /tmp/monkey.opus $effect
 	${bindir}/sox${EXEEXT} /tmp/monkey.opus /tmp/monkey1.wav $effect

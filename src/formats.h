@@ -96,9 +96,6 @@
 #if defined HAVE_MP3 && (defined STATIC_MP3 || !defined HAVE_LIBLTDL)
   FORMAT(mp3)
 #endif
-#if defined HAVE_OPUS && (defined STATIC_OPUS || !defined HAVE_LIBLTDL)
-  FORMAT(opus)
-#endif
 #if defined HAVE_FFMPEG_CODECS && \
     (defined STATIC_FFMPEG_CODECS || !defined HAVE_LIBLTDL)
   FORMAT(aac)
@@ -143,8 +140,8 @@
 #if defined HAVE_SUN_AUDIO && (defined STATIC_SUN_AUDIO || !defined HAVE_LIBLTDL)
   FORMAT(sunau)
 #endif
-#if defined HAVE_OGG_VORBIS && (defined STATIC_OGG_VORBIS || !defined HAVE_LIBLTDL)
-  FORMAT(vorbis)
+#if (defined HAVE_OGG_VORBIS || defined HAVE_OPUS) && (defined STATIC_OGG || !defined HAVE_LIBLTDL)
+  FORMAT(ogg)
 #endif
 #if defined HAVE_WAVPACK && (defined STATIC_WAVPACK || !defined HAVE_LIBLTDL)
   FORMAT(wavpack)

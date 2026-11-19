@@ -1,4 +1,4 @@
-/* libSoX container format: Matroska audio, and WebM for reading.
+/* libSoX container format: Matroska audio, and WebM.
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -15,7 +15,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* Only the framing is done here; container.c binds it to the codec.
+/* Only the framing is done here; container.c binds it to the codec.  WebM
+ * is Matroska with fewer codecs and its own document type.
  *
  * Reading goes front to back without seeking, so that a pipe reads like a
  * file.  The Segment and its Clusters are not bounded but read through:
@@ -471,7 +472,7 @@ static int next_block(sox_format_t * ft, priv_t * p)
   }
 }
 
-static int read_packet(sox_format_t * ft, void * v, lsx_packet_t * packet)
+static int read_packet(sox_format_t * ft, void * v, lsx_codec_t * codec UNUSED, lsx_packet_t * packet)
 {
   priv_t * p = v;
 
@@ -484,6 +485,7 @@ static int read_packet(sox_format_t * ft, void * v, lsx_packet_t * packet)
   packet->data = p->block + p->lace_pos;
   packet->size = p->lace_sizes[p->lace];
   packet->frames = 0;
+  packet->skip = 0;
   packet->discard = ++p->lace == p->laces? p->block_discard : 0;
   p->lace_pos += packet->size;
   return SOX_SUCCESS;
@@ -520,37 +522,23 @@ static void be64(unsigned char * out, sox_uint64_t value)
     out[i] = (unsigned char)(value >> (8 * (7 - i)));
 }
 
-static int open_write(sox_format_t * ft, void * v, lsx_codec_t const * codec)
+static int open_write(sox_format_t * ft, void * v, lsx_codec_t const * codec,
+    lsx_codec_tag_t const * tag)
 {
   priv_t * p = v;
   lsx_codec_params_t const * params = &codec->params;
   lsx_ebml_buffer_t * b = &p->buf;
-  lsx_codec_tag_t const * tag;
   sox_uint64_t start = (sox_uint64_t)lsx_tell(ft);
   size_t master, entry, audio;
   char app[64];
-
-  if (!strncasecmp(ft->filetype, "webm", 4) && (!ft->filetype[4] || ft->filetype[4] == ':')) {
-    lsx_fail_errno(ft, SOX_EFMT, "writing WebM is not supported; write Matroska (mka) instead");
-    return SOX_EOF;
-  }
-  /* 8-bit integer PCM is unsigned under the same identifiers. */
-  tag = lsx_codec_tag_by_codec(lsx_container_matroska, codec->handler->name,
-      params->encoding == SOX_ENCODING_UNSIGNED && params->bits_per_sample == 8?
-      SOX_ENCODING_SIGN2 : params->encoding, params->big_endian);
-  if (!tag) {
-    lsx_fail_errno(ft, SOX_EFMT, "Matroska can't hold %s-endian %s as `%s'",
-        params->big_endian? "big" : "little", sox_encodings_info[params->encoding].desc,
-        codec->handler->name);
-    return SOX_EOF;
-  }
 
   master = lsx_ebml_open_master(b, EBML_ID_HEADER);
   lsx_ebml_put_uint(b, EBML_ID_VERSION, 1);
   lsx_ebml_put_uint(b, EBML_ID_READ_VERSION, 1);
   lsx_ebml_put_uint(b, EBML_ID_MAX_ID_LENGTH, 4);
   lsx_ebml_put_uint(b, EBML_ID_MAX_SIZE_LENGTH, 8);
-  lsx_ebml_put_string(b, EBML_ID_DOCTYPE, "matroska");
+  lsx_ebml_put_string(b, EBML_ID_DOCTYPE,
+      lsx_container_family(ft->filetype) == lsx_container_webm? "webm" : "matroska");
   lsx_ebml_put_uint(b, EBML_ID_DOCTYPE_VERSION, 4);
   lsx_ebml_put_uint(b, EBML_ID_DOCTYPE_READ_VERSION, 2);
   lsx_ebml_close_master(b, master);
@@ -748,7 +736,7 @@ static int close_write(sox_format_t * ft, void * v, lsx_codec_t const * codec)
 
 static lsx_container_ops_t const matroska_ops = {
   sizeof(priv_t),
-  open_read, read_packet, close_read,
+  open_read, read_packet, NULL, NULL, NULL, close_read,
   open_write, write_packet, close_write
 };
 

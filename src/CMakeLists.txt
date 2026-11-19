@@ -1104,17 +1104,19 @@ if(HAVE_FLAC)
     target_compile_definitions(libsox PRIVATE STATIC_FLAC FLAC__NO_DLL)
 endif()
 
-# Ogg Vorbis format
+# Ogg container, with the Vorbis and Opus codecs it and Matroska hold
+if(HAVE_OGG_VORBIS OR HAVE_OPUS)
+    target_sources(libsox PRIVATE ogg.c)
+    target_compile_definitions(libsox PRIVATE STATIC_OGG)
+endif()
 if(HAVE_OGG_VORBIS)
-    target_sources(libsox PRIVATE vorbis.c)
+    target_sources(libsox PRIVATE codec-vorbis.c)
     target_link_libraries(libsox PRIVATE ${OGG_VORBIS_LIBRARIES})
     target_include_directories(libsox PRIVATE ${OGG_VORBIS_INCLUDE_DIRS})
     target_compile_definitions(libsox PRIVATE STATIC_OGG_VORBIS)
 endif()
-
-# Opus format
 if(HAVE_OPUS)
-    target_sources(libsox PRIVATE opus.c)
+    target_sources(libsox PRIVATE codec-opus.c)
     target_link_libraries(libsox PRIVATE ${OPUS_LIBRARIES})
     target_include_directories(libsox PRIVATE ${OPUS_INCLUDE_DIRS})
     target_compile_definitions(libsox PRIVATE STATIC_OPUS)
@@ -1165,7 +1167,7 @@ endif()
 
 # MP3 format (mad/lame/twolame)
 if(HAVE_MP3)
-    target_sources(libsox PRIVATE mp3.c)
+    target_sources(libsox PRIVATE mp3.c codec-mp3.c)
     target_link_libraries(libsox PRIVATE ${MP3_LIBRARIES})
     target_compile_definitions(libsox PRIVATE STATIC_MP3)
     if(HAVE_MAD_H)
@@ -1189,7 +1191,7 @@ endif()
 
 # WavPack format
 if(HAVE_WAVPACK)
-    target_sources(libsox PRIVATE wavpack.c)
+    target_sources(libsox PRIVATE wavpack.c codec-wavpack.c)
     target_link_libraries(libsox PRIVATE ${WAVPACK_LIBRARIES})
     target_include_directories(libsox PRIVATE ${WAVPACK_INCLUDE_DIRS})
     target_compile_definitions(libsox PRIVATE STATIC_WAVPACK)

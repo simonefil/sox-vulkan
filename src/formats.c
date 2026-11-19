@@ -20,7 +20,7 @@
 
 #define _GNU_SOURCE
 #include "sox_i.h"
-#include "codec.h"
+#include "container.h"
 #include "ebml.h"
 
 #ifdef STATIC_FFMPEG_CODECS
@@ -248,8 +248,7 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   CHECK(amr-nb, 0, 0, ""     , 0,  6, "#!AMR\n")
   CHECK(txw   , 0, 0, ""     , 0,  6, "LM8953")
   CHECK(sndt  , 0, 0, ""     , 0,  6, "SOUND\x1a")
-  CHECK(vorbis, 0, 4, "OggS" , 29, 6, "vorbis")
-  CHECK(opus  , 0, 4, "OggS" , 28, 8, "OpusHead")
+  CHECK(ogg   , 0, 4, "OggS" , 0, 0, "")
   /* Ahead of the FFmpeg probes, some of which scan the whole window and
    * could find their signature by chance inside a Matroska header. */
   {
@@ -783,21 +782,30 @@ static void UNUSED rewind_pipe(FILE * fp)
 }
 
 /* What a handler can write.  A container leaves that to the codec named
- * after the colon in its type, and without one can write nothing. */
+ * after the colon in its type, or to its default codec, and without either
+ * can write nothing. */
 static unsigned const * handler_write_formats(sox_format_handler_t const * handler, char const * type)
 {
   lsx_codec_handler_t const * codec;
 
   if (!(handler->flags & SOX_FILE_CONTAINER))
     return handler->write_formats;
-  codec = lsx_codec_find(lsx_type_codec(type));
+  codec = lsx_codec_find(lsx_container_codec(type));
   return codec? codec->write_formats : NULL;
 }
 
+static sox_rate_t const * handler_write_rates(sox_format_handler_t const * handler, char const * type)
+{
+  if (!(handler->flags & SOX_FILE_CONTAINER))
+    return handler->write_rates;
+  return lsx_codec_find(lsx_container_codec(type))->write_rates;
+}
+
 /* A codec may be named only after a container type, and must be one this
- * build has; on output a container needs one, since what to encode with is
- * not the container's to choose.  Checked before the file is opened, so a
- * refused output does not truncate an existing file. */
+ * build has; on output a container needs one, named or its default, since
+ * what to encode with is not otherwise the container's to choose.  Checked
+ * before the file is opened, so a refused output does not truncate an
+ * existing file. */
 static int check_type_codec(sox_format_handler_t const * handler, char const * type, sox_bool writing)
 {
   char const * codec = lsx_type_codec(type);
@@ -807,8 +815,15 @@ static int check_type_codec(sox_format_handler_t const * handler, char const * t
       lsx_fail("file type `%s' does not take a codec", handler->names[0]);
       return SOX_EOF;
     }
+    return SOX_SUCCESS;
   }
-  else if (codec) {
+  if (codec && !lsx_container_takes_codec(type)) {
+    lsx_fail("file type `%.*s' does not take a codec", (int)strcspn(type, ":"), type);
+    return SOX_EOF;
+  }
+  if (writing)
+    codec = lsx_container_codec(type);
+  if (codec) {
     if (!lsx_codec_find(codec)) {
       lsx_fail("unknown codec `%s'; codecs: %s", codec, lsx_codec_names());
       return SOX_EOF;
@@ -1084,7 +1099,8 @@ static void set_output_format(sox_format_t * ft)
         }
         if (ft->signal.rate == HUGE_VAL)
           ft->signal.rate = max;
-        lsx_warn("%s can't encode at %gHz; using %gHz", ft->handler.names[0], given, ft->signal.rate);
+        lsx_warn("%s can't encode at %gHz; using %gHz",
+            ft->handler.flags & SOX_FILE_CONTAINER? ft->filetype : ft->handler.names[0], given, ft->signal.rate);
       }
     }
   }
@@ -1271,6 +1287,7 @@ static sox_format_t * open_write(
 
   ft->handler = *handler;
   ft->handler.write_formats = handler_write_formats(handler, filetype);
+  ft->handler.write_rates = handler_write_rates(handler, filetype);
   /* Both are refused rather than ignored when the handler cannot use them,
    * so that an option aimed at the wrong format is not silently dropped. */
   ft->codec_options = codec_options;
@@ -1282,6 +1299,40 @@ static sox_format_t * open_write(
   if (channel_layout && !(ft->handler.flags & SOX_FILE_CHANNEL_LAYOUT)) {
     lsx_fail("channel layouts are unsupported for file type `%s'", filetype);
     goto error;
+  }
+
+  ft->filetype = lsx_strdup(filetype);
+  ft->filename = lsx_strdup(path);
+  ft->mode = 'w';
+  ft->signal = *signal;
+
+  if (encoding)
+    ft->encoding = *encoding;
+  else sox_init_encodinginfo(&ft->encoding);
+  set_endiannesses(ft);
+
+  if (oob) {
+    ft->oob = *oob;
+    /* deep copy: */
+    ft->oob.comments = sox_copy_comments(oob->comments);
+  }
+
+  set_output_format(ft);
+
+  /* FIXME: doesn't cover the situation where
+   * codec changes audio length due to block alignment (e.g. 8svx, gsm): */
+  if (signal->rate && signal->channels)
+    ft->signal.length = ft->signal.length * ft->signal.rate / signal->rate *
+      ft->signal.channels / signal->channels + .5;
+
+  /* The output is opened only once it is known to be one the container
+   * can hold, and its encoder has started. */
+  if (ft->handler.flags & SOX_FILE_CONTAINER) {
+    ft->priv = lsx_calloc(1, ft->handler.priv_size);
+    if (lsx_container_prepare_write(ft) != SOX_SUCCESS) {
+      lsx_fail("can't open output file `%s': %s", ft->filename, ft->sox_errstr);
+      goto error;
+    }
   }
 
   if (!(ft->handler.flags & SOX_FILE_NOSTDIO)) {
@@ -1322,34 +1373,11 @@ static sox_format_t * open_write(
     ft->seekable = is_seekable(ft);
   }
 
-  ft->filetype = lsx_strdup(filetype);
-  ft->filename = lsx_strdup(path);
-  ft->mode = 'w';
-  ft->signal = *signal;
-
-  if (encoding)
-    ft->encoding = *encoding;
-  else sox_init_encodinginfo(&ft->encoding);
-  set_endiannesses(ft);
-
-  if (oob) {
-    ft->oob = *oob;
-    /* deep copy: */
-    ft->oob.comments = sox_copy_comments(oob->comments);
-  }
-
-  set_output_format(ft);
-
-  /* FIXME: doesn't cover the situation where
-   * codec changes audio length due to block alignment (e.g. 8svx, gsm): */
-  if (signal->rate && signal->channels)
-    ft->signal.length = ft->signal.length * ft->signal.rate / signal->rate *
-      ft->signal.channels / signal->channels + .5;
-
   if ((ft->handler.flags & SOX_FILE_REWIND) && strcmp(ft->filetype, "sox") && !ft->signal.length && !ft->seekable)
     lsx_warn("can't seek in output file `%s'; length in file header will be unspecified", ft->filename);
 
-  ft->priv = lsx_calloc(1, ft->handler.priv_size);
+  if (!ft->priv)
+    ft->priv = lsx_calloc(1, ft->handler.priv_size);
   /* Read and write starters can change their formats. */
   if (ft->handler.startwrite && (ft->handler.startwrite)(ft) != SOX_SUCCESS){
     lsx_fail("can't open output file `%s': %s", ft->filename, ft->sox_errstr);
@@ -1372,6 +1400,8 @@ static sox_format_t * open_write(
 error:
   if (ft->fp && ft->fp != stdout)
     xfclose(ft->fp, ft->io_type);
+  if (ft->priv && (ft->handler.flags & SOX_FILE_CONTAINER))
+    lsx_container_cancel_write(ft);
   free(ft->priv);
   free(ft->filename);
   free(ft->filetype);

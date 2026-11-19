@@ -39,6 +39,8 @@ typedef struct {
   size_t input_size, input_pos;
   sox_bool failed;
   sox_bool drained;
+  sox_bool started;   /* a frame has been decoded */
+  sox_bool whole;     /* from the stream's first frame, which the MD5 checksum needs */
 
   /* Encoding */
   FLAC__StreamEncoder * encoder;
@@ -79,6 +81,11 @@ static FLAC__StreamDecoderWriteStatus decoder_write(FLAC__StreamDecoder const * 
     ((priv_t *)codec->priv)->failed = sox_true;
     return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
   }
+  if (!((priv_t *)codec->priv)->started) {
+    ((priv_t *)codec->priv)->started = sox_true;
+    ((priv_t *)codec->priv)->whole = !(frame->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER?
+        frame->header.number.sample_number : frame->header.number.frame_number);
+  }
   out = lsx_codec_output(codec, (size_t)frame->header.blocksize * params->channels);
   for (i = 0; i < frame->header.blocksize; ++i)
     for (channel = 0; channel < params->channels; ++channel)
@@ -89,13 +96,19 @@ static FLAC__StreamDecoderWriteStatus decoder_write(FLAC__StreamDecoder const * 
 static void decoder_metadata(FLAC__StreamDecoder const * decoder UNUSED,
     FLAC__StreamMetadata const * metadata, void * client_data)
 {
-  lsx_codec_params_t * params = &((lsx_codec_t *)client_data)->params;
+  lsx_codec_t * codec = client_data;
+  lsx_codec_params_t * params = &codec->params;
+  FLAC__uint32 i;
 
   if (metadata->type == FLAC__METADATA_TYPE_STREAMINFO) {
     params->rate = metadata->data.stream_info.sample_rate;
     params->channels = metadata->data.stream_info.channels;
     params->bits_per_sample = metadata->data.stream_info.bits_per_sample;
   }
+  else if (metadata->type == FLAC__METADATA_TYPE_VORBIS_COMMENT)
+    for (i = 0; i < metadata->data.vorbis_comment.num_comments; ++i)
+      sox_append_comment(&codec->ft->oob.comments,
+          (char const *)metadata->data.vorbis_comment.comments[i].entry);
 }
 
 static void decoder_error(FLAC__StreamDecoder const * decoder UNUSED,
@@ -157,6 +170,7 @@ static int start_decode(lsx_codec_t * codec)
     return SOX_EOF;
   }
   FLAC__stream_decoder_set_md5_checking(p->decoder, sox_true);
+  FLAC__stream_decoder_set_metadata_respond(p->decoder, FLAC__METADATA_TYPE_VORBIS_COMMENT);
   p->input = header;
   p->input_size = header_size;
   ok = FLAC__stream_decoder_init_stream(p->decoder, decoder_read, NULL, NULL, NULL, NULL,
@@ -212,11 +226,37 @@ static int decode(lsx_codec_t * codec, unsigned char const * data, size_t size)
   return p->failed? SOX_EOF : SOX_SUCCESS;
 }
 
+/* The block size a frame header gives, which is all a frame header says
+ * about how long the frame is. */
+static size_t packet_frames(lsx_codec_t * codec UNUSED, unsigned char const * data, size_t size)
+{
+  unsigned code, pos = 5;
+
+  if (size < 6 || data[0] != 0xff || (data[1] & 0xfe) != 0xf8)
+    return 0;
+  for (code = data[4]; code & 0x80 && pos < 11; code <<= 1)
+    ++pos; /* the frame or sample number, UTF-8 coded */
+  if (data[4] & 0x80)
+    --pos;
+  code = data[2] >> 4;
+  if (code == 1)
+    return 192;
+  if (code >= 2 && code <= 5)
+    return (size_t)576 << (code - 2);
+  if (code >= 8)
+    return (size_t)256 << (code - 8);
+  if (code == 6 && size > pos)
+    return data[pos] + 1u;
+  if (code == 7 && size > pos + 1)
+    return (((size_t)data[pos] << 8) | data[pos + 1]) + 1;
+  return 0;
+}
+
 static void stop_decode(lsx_codec_t * codec)
 {
   priv_t * p = codec->priv;
 
-  if (!FLAC__stream_decoder_finish(p->decoder) && p->drained && !p->failed)
+  if (!FLAC__stream_decoder_finish(p->decoder) && p->drained && p->whole && !p->failed)
     lsx_warn("decoder MD5 checksum mismatch.");
   FLAC__stream_decoder_delete(p->decoder);
 }
@@ -361,8 +401,8 @@ lsx_codec_handler_t const * lsx_flac_codec_fn(void)
 {
   static unsigned const write_formats[] = {SOX_ENCODING_FLAC, 8, 16, 24, 0, 0};
   static lsx_codec_handler_t const handler = {
-    "flac", write_formats, sizeof(priv_t),
-    start_decode, decode, stop_decode,
+    "flac", write_formats, NULL, sizeof(priv_t),
+    start_decode, decode, packet_frames, stop_decode,
     start_encode, encode, stop_encode
   };
   return &handler;

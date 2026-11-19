@@ -38,8 +38,6 @@
 #cmakedefine HAVE_MP3                 1
 #cmakedefine HAVE_OGG_VORBIS          1
 #cmakedefine HAVE_OPUS                1
-#cmakedefine HAVE_OPUSFILE            1
-#cmakedefine HAVE_OPUSENC             1
 #cmakedefine HAVE_FFMPEG_CODECS       1
 #cmakedefine HAVE_FFMPEG_FORMATS      1
 #cmakedefine HAVE_SNDFILE             1

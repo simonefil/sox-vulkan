@@ -410,9 +410,12 @@ endif()
 # is the flattened list that does.  It is used only where -static is actually
 # in effect -- Linux and BSD -- because elsewhere the imported target is
 # correct and pulls in fewer system libraries.
+#
+# libvorbis is the codec; the Ogg container, which Opus streams also come in,
+# is SoX's own over libogg.
 if(WITH_OGGVORBIS)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(VORBIS IMPORTED_TARGET vorbisfile vorbisenc vorbis)
+        pkg_check_modules(VORBIS IMPORTED_TARGET vorbisenc vorbis)
         pkg_check_modules(OGG IMPORTED_TARGET ogg)
         if(VORBIS_FOUND)
             if(SOX_REQUIRE_STATIC_DEPENDENCIES AND (IS_LINUX OR IS_BSD))
@@ -431,12 +434,11 @@ if(WITH_OGGVORBIS)
     endif()
     if(NOT VORBIS_FOUND)
         find_library(VORBIS_LIBRARY vorbis)
-        find_library(VORBISFILE_LIBRARY vorbisfile)
         find_library(VORBISENC_LIBRARY vorbisenc)
         find_library(OGG_LIBRARY ogg)
         find_path(VORBIS_INCLUDE_DIR vorbis/codec.h)
-        if(VORBIS_LIBRARY AND VORBISFILE_LIBRARY AND VORBISENC_LIBRARY AND OGG_LIBRARY AND VORBIS_INCLUDE_DIR)
-            set(VORBIS_LIBRARIES ${VORBISENC_LIBRARY} ${VORBISFILE_LIBRARY} ${VORBIS_LIBRARY})
+        if(VORBIS_LIBRARY AND VORBISENC_LIBRARY AND OGG_LIBRARY AND VORBIS_INCLUDE_DIR)
+            set(VORBIS_LIBRARIES ${VORBISENC_LIBRARY} ${VORBIS_LIBRARY})
             set(OGG_LIBRARIES ${OGG_LIBRARY})
             set(VORBIS_INCLUDE_DIRS ${VORBIS_INCLUDE_DIR})
             set(VORBIS_FOUND TRUE)
@@ -450,76 +452,17 @@ if(WITH_OGGVORBIS)
     endif()
 endif()
 
-# Opus (decoder and encoder are optional independently)
+# Opus: libopus is the codec, in Matroska or in SoX's own Ogg container over
+# libogg.
 if(WITH_OPUS)
-    if(PKG_CONFIG_FOUND)
-        pkg_check_modules(OPUSFILE IMPORTED_TARGET opusfile)
-        pkg_check_modules(OPUSENC IMPORTED_TARGET libopusenc)
-        if(OPUSFILE_FOUND)
-            set(OPUSFILE_LIBRARIES PkgConfig::OPUSFILE)
-        endif()
-        if(OPUSENC_FOUND)
-            set(OPUSENC_LIBRARIES PkgConfig::OPUSENC)
-        endif()
-    endif()
-
     find_library(OPUS_LIBRARY opus)
     find_path(OPUS_INCLUDE_DIR opus.h PATH_SUFFIXES opus)
     find_library(OPUS_OGG_LIBRARY ogg)
     find_path(OPUS_OGG_INCLUDE_DIR ogg/ogg.h)
-
-    if(NOT OPUSFILE_FOUND)
-        find_library(OPUSFILE_LIBRARY opusfile)
-        find_path(OPUSFILE_INCLUDE_DIR opusfile.h PATH_SUFFIXES opus)
-        if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR AND
-                OPUS_OGG_LIBRARY AND OPUS_OGG_INCLUDE_DIR AND
-                OPUSFILE_LIBRARY AND OPUSFILE_INCLUDE_DIR)
-            set(OPUSFILE_LIBRARIES ${OPUSFILE_LIBRARY} ${OPUS_LIBRARY})
-            set(OPUSFILE_INCLUDE_DIRS
-                ${OPUSFILE_INCLUDE_DIR}
-                ${OPUS_INCLUDE_DIR}
-                ${OPUS_OGG_INCLUDE_DIR}
-            )
-            set(OPUSFILE_FOUND TRUE)
-        endif()
-    endif()
-
-    if(NOT OPUSENC_FOUND)
-        find_library(OPUSENC_LIBRARY opusenc)
-        find_path(OPUSENC_INCLUDE_DIR opusenc.h PATH_SUFFIXES opus)
-        if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR AND OPUSENC_LIBRARY AND OPUSENC_INCLUDE_DIR)
-            set(OPUSENC_LIBRARIES ${OPUSENC_LIBRARY} ${OPUS_LIBRARY})
-            set(OPUSENC_INCLUDE_DIRS
-                ${OPUSENC_INCLUDE_DIR}
-                ${OPUS_INCLUDE_DIR}
-            )
-            set(OPUSENC_FOUND TRUE)
-        endif()
-    endif()
-
-    set(OPUS_LIBRARIES)
-    set(OPUS_INCLUDE_DIRS)
-    if(OPUSFILE_FOUND)
-        set(HAVE_OPUSFILE TRUE)
-        list(APPEND OPUS_LIBRARIES ${OPUSFILE_LIBRARIES})
-        list(APPEND OPUS_INCLUDE_DIRS ${OPUSFILE_INCLUDE_DIRS})
-        if(OPUS_OGG_LIBRARY)
-            list(APPEND OPUS_LIBRARIES ${OPUS_OGG_LIBRARY})
-        endif()
-    endif()
-    if(OPUSENC_FOUND)
-        set(HAVE_OPUSENC TRUE)
-        list(APPEND OPUS_LIBRARIES ${OPUSENC_LIBRARIES})
-        list(APPEND OPUS_INCLUDE_DIRS ${OPUSENC_INCLUDE_DIRS})
-    endif()
-    if(OPUS_LIBRARY)
-        list(APPEND OPUS_LIBRARIES ${OPUS_LIBRARY})
-    endif()
-    list(REMOVE_DUPLICATES OPUS_LIBRARIES)
-    list(REMOVE_DUPLICATES OPUS_INCLUDE_DIRS)
-
-    if(HAVE_OPUSFILE OR HAVE_OPUSENC)
+    if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR AND OPUS_OGG_LIBRARY AND OPUS_OGG_INCLUDE_DIR)
         set(HAVE_OPUS TRUE)
+        set(OPUS_LIBRARIES ${OPUS_LIBRARY} ${OPUS_OGG_LIBRARY})
+        set(OPUS_INCLUDE_DIRS ${OPUS_INCLUDE_DIR} ${OPUS_OGG_INCLUDE_DIR})
     endif()
 endif()
 
@@ -999,8 +942,7 @@ message(STATUS "  GSM:                   ${HAVE_GSM} (external: ${EXTERNAL_GSM})
 message(STATUS "  LPC10:                 ${HAVE_LPC10} (external: ${EXTERNAL_LPC10})")
 message(STATUS "  MP3 (mad/lame/twolame):${HAVE_MP3}")
 message(STATUS "  Ogg Vorbis:            ${HAVE_OGG_VORBIS}")
-message(STATUS "  Opus decode:           ${HAVE_OPUSFILE}")
-message(STATUS "  Opus encode:           ${HAVE_OPUSENC}")
+message(STATUS "  Opus:                  ${HAVE_OPUS}")
 message(STATUS "  FFmpeg codecs:         ${HAVE_FFMPEG_CODECS}")
 message(STATUS "  FFmpeg containers:     ${HAVE_FFMPEG_FORMATS}")
 message(STATUS "  libsndfile:            ${HAVE_SNDFILE}")

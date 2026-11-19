@@ -881,7 +881,7 @@ The build scripts download and compile the following library versions:
 | libvorbis | 1.3.7 |
 | FLAC | 1.5.0 |
 | opus | 1.6.1 |
-| libmad | 0.15.1b |
+| libmad | 0.16.5 |
 | LAME | 4.0 |
 | TwoLAME | 0.4.0 |
 | libid3tag | 0.15.1b |

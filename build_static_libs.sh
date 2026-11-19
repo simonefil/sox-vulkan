@@ -108,7 +108,7 @@ LIBOGG_VERSION="1.3.6"
 LIBVORBIS_VERSION="1.3.7"
 FLAC_VERSION="1.5.0"
 OPUS_VERSION="1.6.1"
-LIBMAD_VERSION="0.15.1b"
+LIBMAD_VERSION="0.16.5"
 LAME_VERSION="4.0"
 TWOLAME_VERSION="0.4.0"
 LIBID3TAG_VERSION="0.15.1b"
@@ -131,6 +131,9 @@ VKFFT_VERSION="1.3.4"
 # GitHub-generated archive for the tag above, kept identical to the one pinned
 # in build_static_libs.ps1 so both platforms install the same headers.
 VKFFT_SHA256="b61055393adb3adc79009fe12401cbfbbdfba584e665e9c35fcbf4b32fb31f30"
+# The SHA-256 digest the Tenacity team publishes with the libmad release
+# tarball, kept identical to the one in build_static_libs.ps1.
+LIBMAD_SHA256="f401b2ccf49c26ad0c3a6ef0179b1cbbff2406338b0603bb2033e6dcaf706114"
 
 # Colors for output
 RED='\033[0;31m'
@@ -252,7 +255,7 @@ verify_static_dependencies() {
     local binary="$1"
     # stdc++ because the C++ runtime (Monkey's Audio SDK, Vulkan backend) is
     # linked statically on Linux, like the codec libraries themselves.
-    local forbidden='(avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|libMAC|mpcdec|mpcenc|mpcpsy|stdc\+\+|opencore-amr|png|magic|libao)'
+    local forbidden='(avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|libmad|mp3lame|twolame|id3tag|wavpack|libMAC|mpcdec|mpcenc|mpcpsy|stdc\+\+|opencore-amr|png|magic|libao)'
 
     log_info "Verifying that codec dependencies are statically linked..."
 
@@ -604,31 +607,23 @@ update_config_scripts() {
 build_libmad() {
     log_info "========== Building libmad ${LIBMAD_VERSION} =========="
 
-    local url="https://downloads.sourceforge.net/project/mad/libmad/${LIBMAD_VERSION}/libmad-${LIBMAD_VERSION}.tar.gz"
+    local url="https://codeberg.org/tenacityteam/libmad/releases/download/${LIBMAD_VERSION}/libmad-${LIBMAD_VERSION}.tar.gz"
     local archive="${DOWNLOAD_DIR}/libmad-${LIBMAD_VERSION}.tar.gz"
-    local src="${SRC_DIR}/libmad-${LIBMAD_VERSION}"
+    local src="${SRC_DIR}/mad-${LIBMAD_VERSION}-source"
 
     download_file "$url" "$archive"
+    verify_sha256 "$archive" "${LIBMAD_SHA256}"
 
     if [ ! -d "$src" ]; then
         extract_archive "$archive" "$SRC_DIR"
     fi
 
     cd "$src"
+    mkdir -p build && cd build
 
-    # Update config.guess/config.sub for ARM64 support
-    update_config_scripts "$src"
-
-    # Fix for modern compilers - remove -fforce-mem flag
-    sed -i.bak 's/-fforce-mem//g' configure 2>/dev/null || \
-        sed -i '' 's/-fforce-mem//g' configure
-
-    ./configure $(get_common_flags)
-
-    # Fix for macOS clang - remove unsupported -march=i486 flag
-    if [ "${PLATFORM}" = "Darwin" ]; then
-        sed -i '' 's/-march=i486//g' Makefile 2>/dev/null || true
-    fi
+    cmake .. $(get_cmake_flags) \
+        -DEXAMPLE=OFF \
+        -DOPTIMIZE=ACCURACY
 
     make -j${JOBS}
     make install

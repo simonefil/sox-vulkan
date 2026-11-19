@@ -85,7 +85,7 @@ $Versions = @{
     twolame = "0.4.0"
     wavpack = "5.9.0"
     libsndfile = "1.2.2"
-    libmad = "0.15.1b"
+    libmad = "0.16.5"
     libid3tag = "0.15.1b"
     ffmpeg = "9.0.2"
     mac = "13.47"
@@ -537,87 +537,24 @@ function Build-Opus {
 function Build-Libmad {
     Write-Info "========== Building libmad $($Versions.libmad) =========="
 
-    $url = "https://sourceforge.net/projects/mad/files/libmad/$($Versions.libmad)/libmad-$($Versions.libmad).tar.gz/download"
+    $url = "https://codeberg.org/tenacityteam/libmad/releases/download/$($Versions.libmad)/libmad-$($Versions.libmad).tar.gz"
     $archive = Join-Path $DownloadDir "libmad-$($Versions.libmad).tar.gz"
-    $src = Join-Path $SrcDir "libmad-$($Versions.libmad)"
+    $src = Join-Path $SrcDir "mad-$($Versions.libmad)-source"
+    # The digest the Tenacity team publishes with the release, kept identical
+    # to LIBMAD_SHA256 in build_static_libs.sh.
+    $expectedSha256 = "f401b2ccf49c26ad0c3a6ef0179b1cbbff2406338b0603bb2033e6dcaf706114"
 
     Download-File $url $archive
+    Test-Sha256 $archive $expectedSha256
 
     if (-not (Test-Path $src)) {
         Extract-Archive $archive $SrcDir
     }
 
-    # Create CMakeLists.txt for libmad
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-
-    $cmakeContent = @"
-cmake_minimum_required(VERSION 3.14)
-project(mad C)
-
-set(MAD_SOURCES
-    bit.c
-    decoder.c
-    fixed.c
-    frame.c
-    huffman.c
-    layer12.c
-    layer3.c
-    stream.c
-    synth.c
-    timer.c
-    version.c
-)
-
-add_library(mad STATIC `${MAD_SOURCES})
-
-target_include_directories(mad PUBLIC
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}>
-    `$<INSTALL_INTERFACE:include>
-)
-
-# Use FPM_64BIT for 64-bit builds (FPM_INTEL uses x86 asm not supported on x64)
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(FPM_MODE FPM_64BIT)
-else()
-    set(FPM_MODE FPM_DEFAULT)
-endif()
-
-target_compile_definitions(mad PRIVATE
-    _CRT_SECURE_NO_WARNINGS
-    `${FPM_MODE}
-    HAVE_CONFIG_H
-)
-
-if(MSVC)
-    target_compile_options(mad PRIVATE /wd4244 /wd4305 /wd4018)
-endif()
-
-# Generate config.h for MSVC
-file(WRITE `${CMAKE_CURRENT_BINARY_DIR}/config.h "
-#ifndef CONFIG_H
-#define CONFIG_H
-
-#define HAVE_STDINT_H 1
-#define HAVE_LIMITS_H 1
-#define HAVE_MEMORY_H 1
-#define HAVE_STRING_H 1
-#define STDC_HEADERS 1
-
-#define SIZEOF_INT 4
-#define SIZEOF_LONG 4
-#define SIZEOF_LONG_LONG 8
-
-#endif /* CONFIG_H */
-")
-
-target_include_directories(mad PRIVATE `${CMAKE_CURRENT_BINARY_DIR})
-
-install(TARGETS mad ARCHIVE DESTINATION lib)
-install(FILES mad.h DESTINATION include)
-"@
-    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
-
-    Build-CMakeProject $src
+    Build-CMakeProject $src @(
+        "-DEXAMPLE=OFF"
+        "-DOPTIMIZE=ACCURACY"
+    )
 
     Write-Success "libmad installed"
 }
@@ -1314,7 +1251,7 @@ function Test-StaticDependencies($binary) {
     # while the codec libraries that must not appear are exactly the ones this
     # script builds. msys- catches an FFmpeg accidentally linked against the
     # MSYS2 runtime, which would run here and nowhere else.
-    $forbidden = "avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|MACDll|libMAC|mpcdec|mpcenc|mpcpsy|opencore-amr|png|magic|libao|msys-"
+    $forbidden = "avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|libmad|mad\.dll|mp3lame|twolame|id3tag|wavpack|MACDll|libMAC|mpcdec|mpcenc|mpcpsy|opencore-amr|png|magic|libao|msys-"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {
         throw "Unexpected dynamic dependency detected:`n$($unexpected -join [Environment]::NewLine)"

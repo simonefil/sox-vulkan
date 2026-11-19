@@ -542,12 +542,6 @@ if(WITH_MAD)
     if(MAD_LIBRARY AND MAD_INCLUDE_DIR)
         set(HAVE_MAD_H TRUE)
         set(MAD_LIBRARIES ${MAD_LIBRARY})
-        # Use FPM_64BIT for 64-bit builds to avoid x86 inline asm in mad.h
-        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            add_definitions(-DFPM_64BIT)
-        else()
-            add_definitions(-DFPM_DEFAULT)
-        endif()
     endif()
 endif()
 

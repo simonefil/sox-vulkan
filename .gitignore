@@ -11,6 +11,8 @@ cmake_install.cmake
 sox*.tar.gz
 *.pdf
 *.html
+!docs/*.pdf
+!docs/*.html
 sox.pc
 *.a
 *.o

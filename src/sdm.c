@@ -1714,12 +1714,6 @@ sdm_t *sdm_init(const char *filter_name,
 #endif
   }
 
-  /* The trellis search has its own parallelism over candidate paths, and
-   * running the channels in parallel on top of it would oversubscribe rather
-   * than help; the channels are threaded only on the simple path. */
-  if (trellis_order)
-    threads = 1;
-
   p = aligned_alloc((size_t)32, sizeof(*p));
   if (!p)
     return NULL;

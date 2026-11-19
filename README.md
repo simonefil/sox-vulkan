@@ -481,7 +481,7 @@ by name instead:
 
 | Effect | Runs on |
 |--------|---------|
-| `rate`, `fir`, DSD decode | The device under a profile, the CPU without one |
+| `rate`, `fir`, `sinc`, `firfit`, `hilbert`, `loudness`, DSD decode | The device under a profile, the CPU without one |
 | `sdm` | The CPU, always |
 | `sdm-vulkan` | The device, and it needs a profile |
 
@@ -489,7 +489,8 @@ by name instead:
 
 - The CPU planner owns coefficients, topology, quality, phase, bandwidth, aliasing, length, latency and drain.
 - Vulkan runs the DFT, polyphase and half-band stages it supports: `medium`, `high`, `very-high`, exact ratios, the 44.1/48 kHz family, DSD rates.
-- Everything else falls back to the CPU. `-V3` shows the route taken.
+- Under a profile, any other conversion stops with `rate plan is not supported by the Vulkan backend`. `-V3` shows the route taken.
+
 - `-R` and `-d` keep working on the CPU. Under a profile they're ignored with a warning: they'd exclude the effect from the device, and they say nothing about where the work should run.
 
 ### FIR

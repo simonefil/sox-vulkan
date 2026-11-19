@@ -117,8 +117,8 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_transform_endpoint = {
  * result_low receives it laid out the same way as result. Only interpolation
  * order zero carries it: the deltas of a higher order would have to be formed
  * in double-double as well, and a stage that has them never reaches the
- * device (rate_vulkan_plan_supported turns the whole plan back to the CPU
- * on interp_order != 0) so there is nothing there to carry them for. */
+ * device (rate_vulkan_plan_supported rejects the whole plan on
+ * interp_order != 0) so there is nothing there to carry them for. */
 static sample_t * prepare_coefs(raw_coef_t const * coefs,
     raw_coef_t const * coef_lows, int num_coefs,
     int num_phases, int interp_order, int multiplier,
@@ -1682,8 +1682,9 @@ static sox_bool rate_vulkan_dft_direct_supported(stage_t const *stage)
 }
 
 /* Whether every stage of a plan has a Vulkan executor. All or nothing: a
- * plan with one unsupported stage falls back to the CPU entirely, rather than
+ * plan with one unsupported stage is rejected entirely, rather than
  * splitting the chain and paying a round trip in the middle.
+
  *
  * The polyphase conditions are what the device kernel implements and the CPU
  * stage does not require: no coefficient interpolation, no high-precision
@@ -3477,7 +3478,7 @@ sox_effect_handler_t const * lsx_rate_effect_fn(void)
     " -h  high (default) 95%     125     16-bit mastering (use with dither)",
     " -v  very high      95%     175     24-bit mastering",
     " -x  extreme        95%     275     floating-point mastering",
-    " -z  overkill       94%     632     double-double, Vulkan reference",
+    " -z  overkill       95%     632     double-double, Vulkan reference",
     " -E           Extrapolate PCM signal at both boundaries (LPC)",
     "              OVERRIDE OPTIONS (only with -m, -h, -v, -x, -z)",
     " -M/-I/-L     Phase response = minimum/intermediate/linear(default)",

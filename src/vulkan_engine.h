@@ -260,8 +260,9 @@ typedef struct lsx_vulkan_context {
 
 /* The chain's context, created on first call. Returns NULL if no usable
  * device exists or the requested profile cannot be honoured, which callers
- * treat as "fall back to the CPU path" rather than as a fatal error. The
- * context belongs to the effects chain, not the caller. */
+ * treat as a fatal error. The context belongs to the effects chain, not the
+ * caller. */
+
 lsx_vulkan_context_t *lsx_vulkan_context_get(sox_effects_globals_t *effects_globals);
 
 /* Destroy a context. Takes void * because it is installed as the effects

@@ -2091,7 +2091,7 @@ static void usage(char const * message)
 "-                        Pipe/redirect input/output (stdin/stdout); may need -t",
 "-d, --default-device     Use the default audio device (where available)",
 "-n, --null               Use the `null' file handler; e.g. with synth effect",
-"-p, --sox-pipe           Alias for `-t sox -'"
+"-p, --pipe               Alias for `-t sox -'"
   };
   static char const * const linesPopen[] = {
 "\nSPECIAL FILENAMES (infile only):",
@@ -2101,7 +2101,7 @@ static void usage(char const * message)
   static char const * const lines2[] = {
 "",
 "GLOBAL OPTIONS (gopts) (can be specified at any point before the first effect):",
-"--buffer BYTES           Set the size of all processing buffers (default 8192)",
+"--buffer SIZE            Set the size of all processing buffers (default 8192)",
 "--clobber                Don't prompt to overwrite output file (default)",
 "--combine concatenate    Concatenate all input files (default for sox, rec)",
 "--combine sequence       Sequence all input files (default for play)",
@@ -2114,7 +2114,7 @@ static void usage(char const * message)
 "--help-effect NAME       Show usage of effect NAME, or NAME=all for all",
 "--help-format NAME       Show info on format NAME, or NAME=all for all",
 "--i, --info              Behave as soxi(1)",
-"--input-buffer BYTES     Override the input buffer size (default: as --buffer)",
+"--input-buffer SIZE      Override the input buffer size (default: as --buffer)",
 "--no-clobber             Prompt to overwrite output file",
 "-m, --combine mix        Mix multiple input files (instead of concatenating)",
 "--combine mix-power      Mix to equal power (instead of concatenating)",

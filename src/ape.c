@@ -546,7 +546,8 @@ static int close_write(sox_format_t * ft, void * v, lsx_codec_t const * codec UN
   if (lsx_seeki(ft, (off_t)DESCRIPTOR_SIZE, SEEK_SET) != SOX_SUCCESS ||
       lsx_writebuf(ft, p->header, HEADER_SIZE) != HEADER_SIZE ||
       lsx_writebuf(ft, table, p->reserved * 4) != p->reserved * 4 ||
-      lsx_writebuf(ft, wav, p->wav_header_size) != p->wav_header_size)
+      lsx_writebuf(ft, wav, p->wav_header_size) != p->wav_header_size ||
+      lsx_seeki(ft, (off_t)data_start, SEEK_SET) != SOX_SUCCESS)
     goto end;
   lsx_md5_init(&md5);
   lsx_md5_add(&md5, wav, p->wav_header_size);

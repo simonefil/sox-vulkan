@@ -60,6 +60,7 @@ typedef struct {
   width_t width_type;
 
   filter_t filter_type;
+  unsigned channel_mask;  /* Zero: all channels; otherwise stereo bit mask */
 
   double b0, b1, b2;       /* Filter coefficients */
   double a0, a1, a2;       /* Filter coefficients */
@@ -68,6 +69,8 @@ typedef struct {
   double      o1, o2;      /* Filter memory */
 } biquad_t;
 
+int lsx_biquad_channels_getopts(sox_effect_t * effp, int * argc, char *** argv);
+int lsx_biquad_channels_start(sox_effect_t * effp);
 int lsx_biquad_getopts(sox_effect_t * effp, int n, char **argv,
     int min_args, int max_args, int fc_pos, int width_pos, int gain_pos,
     char const * allowed_width_types, filter_t filter_type);

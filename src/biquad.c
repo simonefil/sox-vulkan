@@ -31,6 +31,43 @@ static char const * const width_str[] = {
 static char const all_width_types[] = "hkboqs";
 
 
+int lsx_biquad_channels_getopts(sox_effect_t * effp, int * argc, char *** argv)
+{
+  priv_t * p = (priv_t *)effp->priv;
+  int i;
+
+  p->channel_mask = 0;
+  if (*argc > 1 && !strncmp((*argv)[1], "--channels=", 11)) {
+    char const * value = (*argv)[1] + 11;
+    if (!strcmp(value, "1"))
+      p->channel_mask = 1;
+    else if (!strcmp(value, "2"))
+      p->channel_mask = 2;
+    else if (!strcmp(value, "1,2"))
+      p->channel_mask = 3;
+    else
+      return lsx_usage(effp);
+    --*argc, ++*argv;
+  }
+  /* The selector is allowed only once, before all existing options. */
+  for (i = 1; i < *argc; ++i)
+    if (!strncmp((*argv)[i], "--channels", 10))
+      return lsx_usage(effp);
+  return SOX_SUCCESS;
+}
+
+
+int lsx_biquad_channels_start(sox_effect_t * effp)
+{
+  priv_t * p = (priv_t *)effp->priv;
+  if (p->channel_mask && effp->in_signal.channels != 2) {
+    lsx_fail("--channels requires stereo input");
+    return SOX_EOF;
+  }
+  return SOX_SUCCESS;
+}
+
+
 int lsx_biquad_getopts(sox_effect_t * effp, int argc, char **argv,
     int min_args, int max_args, int fc_pos, int width_pos, int gain_pos,
     char const * allowed_width_types, filter_t filter_type)
@@ -77,6 +114,8 @@ int lsx_biquad_start(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *)effp->priv;
 
+  if (lsx_biquad_channels_start(effp) != SOX_SUCCESS)
+    return SOX_EOF;
   start(effp);
 
   if (effp->global_info->plot == sox_plot_octave) {
@@ -147,6 +186,11 @@ int lsx_biquad_flow(sox_effect_t * effp, const sox_sample_t *ibuf,
 {
   priv_t * p = (priv_t *)effp->priv;
   size_t len = *isamp = *osamp = min(*isamp, *osamp);
+  if (p->channel_mask && !(p->channel_mask & (1u << effp->flow))) {
+    while (len--)
+      *obuf++ = *ibuf++;
+    return SOX_SUCCESS;
+  }
   while (len--) {
     double o0 = *ibuf*p->b0 + p->i1*p->b1 + p->i2*p->b2 - p->o1*p->a1 - p->o2*p->a2;
     p->i2 = p->i1, p->i1 = *ibuf++;
@@ -162,6 +206,8 @@ static int create(sox_effect_t * effp, int argc, char * * argv)
   double             * d = &p->b0;
   char               c;
 
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   --argc, ++argv;
   if (argc == 6)
     for (; argc && sscanf(*argv, "%lf%c", d, &c) == 1; --argc, ++argv, ++d);
@@ -171,7 +217,7 @@ static int create(sox_effect_t * effp, int argc, char * * argv)
 sox_effect_handler_t const * lsx_biquad_effect_fn(void)
 {
   static sox_effect_handler_t handler = {
-    "biquad", "b0 b1 b2 a0 a1 a2", 0,
+    "biquad", "[--channels=1|2|1,2] b0 b1 b2 a0 a1 a2", 0,
     create, lsx_biquad_start, lsx_biquad_flow, NULL, NULL, NULL, sizeof(priv_t)
   };
   return &handler;

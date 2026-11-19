@@ -73,6 +73,8 @@ static int hilo1_getopts(sox_effect_t * effp, int argc, char **argv) {
 
 static int hilo2_getopts(sox_effect_t * effp, int argc, char **argv) {
   priv_t * p = (priv_t *)effp->priv;
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   if (argc > 1 && strcmp(argv[1], "-1") == 0)
     return hilo1_getopts(effp, argc - 1, argv + 1);
   if (argc > 1 && strcmp(argv[1], "-2") == 0)
@@ -85,6 +87,8 @@ static int hilo2_getopts(sox_effect_t * effp, int argc, char **argv) {
 
 static int bandpass_getopts(sox_effect_t * effp, int argc, char **argv) {
   filter_t type = filter_BPF;
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   if (argc > 1 && strcmp(argv[1], "-c") == 0)
     ++argv, --argc, type = filter_BPF_CSG;
   return lsx_biquad_getopts(effp, argc, argv, 2, 2, 0, 1, 2, "hkqob", type);
@@ -92,6 +96,8 @@ static int bandpass_getopts(sox_effect_t * effp, int argc, char **argv) {
 
 
 static int bandrej_getopts(sox_effect_t * effp, int argc, char **argv) {
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   return lsx_biquad_getopts(effp, argc, argv, 2, 2, 0, 1, 2, "hkqob", filter_notch);
 }
 
@@ -99,6 +105,8 @@ static int bandrej_getopts(sox_effect_t * effp, int argc, char **argv) {
 static int allpass_getopts(sox_effect_t * effp, int argc, char **argv) {
   filter_t type = filter_APF;
   int m;
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   if (argc > 1 && strcmp(argv[1], "-1") == 0)
     ++argv, --argc, type = filter_AP1;
   else if (argc > 1 && strcmp(argv[1], "-2") == 0)
@@ -110,6 +118,8 @@ static int allpass_getopts(sox_effect_t * effp, int argc, char **argv) {
 
 static int tone_getopts(sox_effect_t * effp, int argc, char **argv) {
   priv_t * p = (priv_t *)effp->priv;
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   p->width = 0.5;
   p->fc = *effp->handler.name == 'b'? 100 : 3000;
   return lsx_biquad_getopts(effp, argc, argv, 1, 3, 1, 2, 0, "shkqo",
@@ -118,6 +128,8 @@ static int tone_getopts(sox_effect_t * effp, int argc, char **argv) {
 
 
 static int equalizer_getopts(sox_effect_t * effp, int argc, char **argv) {
+  if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
+    return SOX_EOF;
   return lsx_biquad_getopts(effp, argc, argv, 3, 3, 0, 1, 2, "qohk", filter_peakingEQ);
 }
 
@@ -159,6 +171,9 @@ static int start(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *)effp->priv;
   double w0, A, alpha, mult;
+
+  if (lsx_biquad_channels_start(effp) != SOX_SUCCESS)
+    return SOX_EOF;
 
   if (p->filter_type == filter_deemph) { /* See deemph.plt for documentation */
     if (effp->in_signal.rate == 44100) {
@@ -403,14 +418,14 @@ sox_effect_handler_t const * lsx_##name##_effect_fn(void) { \
   return &handler; \
 }
 
-BIQUAD_EFFECT(highpass,  hilo2,    "[-1|-2] frequency [width[q|o|h|k](0.707q)]", 0)
-BIQUAD_EFFECT(lowpass,   hilo2,    "[-1|-2] frequency [width[q|o|h|k]](0.707q)", 0)
-BIQUAD_EFFECT(bandpass,  bandpass, "[-c] frequency width[h|k|q|o]", 0)
-BIQUAD_EFFECT(bandreject,bandrej,  "frequency width[h|k|q|o]", 0)
-BIQUAD_EFFECT(allpass,   allpass,  "frequency width[h|k|q|o]", 0)
-BIQUAD_EFFECT(bass,      tone,     "gain [frequency(100) [width[s|h|k|q|o]](0.5s)]", 0)
-BIQUAD_EFFECT(treble,    tone,     "gain [frequency(3000) [width[s|h|k|q|o]](0.5s)]", 0)
-BIQUAD_EFFECT(equalizer, equalizer,"frequency width[q|o|h|k] gain", 0)
+BIQUAD_EFFECT(highpass,  hilo2,    "[--channels=1|2|1,2] [-1|-2] frequency [width[q|o|h|k](0.707q)]", 0)
+BIQUAD_EFFECT(lowpass,   hilo2,    "[--channels=1|2|1,2] [-1|-2] frequency [width[q|o|h|k]](0.707q)", 0)
+BIQUAD_EFFECT(bandpass,  bandpass, "[--channels=1|2|1,2] [-c] frequency width[h|k|q|o]", 0)
+BIQUAD_EFFECT(bandreject,bandrej,  "[--channels=1|2|1,2] frequency width[h|k|q|o]", 0)
+BIQUAD_EFFECT(allpass,   allpass,  "[--channels=1|2|1,2] frequency width[h|k|q|o]", 0)
+BIQUAD_EFFECT(bass,      tone,     "[--channels=1|2|1,2] gain [frequency(100) [width[s|h|k|q|o]](0.5s)]", 0)
+BIQUAD_EFFECT(treble,    tone,     "[--channels=1|2|1,2] gain [frequency(3000) [width[s|h|k|q|o]](0.5s)]", 0)
+BIQUAD_EFFECT(equalizer, equalizer,"[--channels=1|2|1,2] frequency width[q|o|h|k] gain", 0)
 BIQUAD_EFFECT(band,      band,     "[-n] center [width[h|k|q|o]]", 0)
 BIQUAD_EFFECT(deemph,    deemph,   NULL, 0)
 BIQUAD_EFFECT(riaa,      riaa,     NULL, 0)

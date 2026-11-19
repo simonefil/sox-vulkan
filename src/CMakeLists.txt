@@ -1376,6 +1376,13 @@ endif()
 
 target_link_libraries(sox_exe PRIVATE libsox)
 
+# sox.c includes libsox's internal headers, and soxomp.h includes <omp.h>
+# whenever HAVE_OPENMP is set; with Homebrew's libomp that header is outside
+# the compiler's default search path.
+if(HAVE_OPENMP AND OpenMP_C_FOUND)
+    target_link_libraries(sox_exe PRIVATE OpenMP::OpenMP_C)
+endif()
+
 # glslang_dynamic.c resolves the DLL by name at run time rather than linking
 # it, so nothing puts it next to the executable; these two steps do, for the
 # build tree and for an install.  Without them a Vulkan effect fails at the

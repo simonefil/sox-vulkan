@@ -23,6 +23,7 @@
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
 #include <libavutil/error.h>
+#include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
 
 #include <errno.h>
@@ -74,6 +75,9 @@ int lsx_bit_write(lsx_bit_writer_t * writer, unsigned count, uint32_t value)
  * they share a struct because everything above them is common. */
 struct lsx_ffmpeg_codec_t {
   lsx_ffmpeg_codec_definition_t const * definition; /* Not owned; caller-provided static data. */
+  lsx_ffmpeg_stream_definition_t const * stream; /* Likewise; NULL for a container's codec. */
+  lsx_ffmpeg_codec_packet_sink_t sink; /* Where a container's encoder sends packets. */
+  void * sink_opaque;
   AVCodec const * codec;        /* Not owned; libavcodec's own registry entry. */
   AVCodecContext * context;
   AVCodecParserContext * parser; /* NULL when the definition reads packets itself. */
@@ -231,6 +235,12 @@ static int allocate_state(
   lsx_ffmpeg_codec_t * p = lsx_calloc(1, sizeof(*p));
 
   p->definition = definition;
+  if (!encoding && (unsigned)(avcodec_version() >> 16) < definition->minimum_decoder_version) {
+    lsx_fail_errno(ft, SOX_EFMT, "%s decoding requires libavcodec %u or later", definition->name,
+        definition->minimum_decoder_version);
+    destroy_state(&p);
+    return SOX_EOF;
+  }
   p->codec = encoding ? avcodec_find_encoder(definition->codec_id) : avcodec_find_decoder(definition->codec_id);
   if (p->codec == NULL) {
     lsx_fail_errno(ft, SOX_EFMT, "FFmpeg %s for %s is unavailable", encoding ? "encoder" : "decoder", definition->name);
@@ -374,7 +384,7 @@ static int format_encoder(char const * format_name, enum AVCodecID * codec_id, u
     *max_channels = 6;
     return 1;
   }
-  if (!strcmp(format_name, "m4a")) {
+  if (!strcmp(format_name, "m4a") || !strcmp(format_name, "mp4") || !strcmp(format_name, "m4b")) {
     *codec_id = AV_CODEC_ID_ALAC;
     *max_channels = 8;
     return 1;
@@ -691,8 +701,8 @@ static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
  * flush whatever it still holds. */
 static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
-  if (state->definition->packet_reader != NULL)
-    return state->definition->packet_reader(ft, state->packet);
+  if (state->stream->packet_reader != NULL)
+    return state->stream->packet_reader(ft, state->packet);
 
   for (;;) {
     uint8_t * packet_data = NULL;
@@ -757,68 +767,83 @@ static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   }
 }
 
+/* Ask the decoder for its next frame and store it in state->decoded.
+ * Returns 1 with a frame, 0 when the decoder wants more input or, with
+ * state->decoder_eof set, has been drained, or SOX_EOF on error. */
+static int receive_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
+{
+  int result = avcodec_receive_frame(state->context, state->frame);
+
+  if (result == 0) {
+    warn_ignored_metadata(ft, state);
+    return store_decoded_frame(ft, state) == SOX_SUCCESS ? 1 : SOX_EOF;
+  }
+  if (result == AVERROR_EOF) {
+    state->decoder_eof = sox_true;
+    return 0;
+  }
+  if (result != AVERROR(EAGAIN))
+    return fail_av(ft, SOX_EFMT, "Unable to decode audio frame", result);
+  if (state->decoder_flushed) {
+    lsx_fail_errno(ft, SOX_EFMT, "FFmpeg decoder requested input after end of stream");
+    return SOX_EOF;
+  }
+  return 0;
+}
+
+/* Submit state->packet, or the end of the stream when it is NULL, which may
+ * happen only once. */
+static int send_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state, AVPacket * packet)
+{
+  int result = avcodec_send_packet(state->context, packet);
+
+  if (packet == NULL)
+    state->decoder_flushed = sox_true;
+  else av_packet_unref(packet);
+  return result < 0 ? fail_av(ft, SOX_EFMT, "Unable to submit compressed audio packet", result) : SOX_SUCCESS;
+}
+
 /* Run the libavcodec receive/send cycle until one frame comes out.  Returns 1
  * with the frame stored in state->decoded, 0 once the decoder is drained, or
  * SOX_EOF on error.
  *
  * The order is receive-then-send, as the API requires: the decoder is asked
- * for output first and only fed when it reports EAGAIN, and end of input is
+ * for output first and only fed when it wants more, and end of input is
  * signalled by sending a NULL packet exactly once.  A decoder that asks for
- * more input after that flush would leave the loop spinning, so it is treated
- * as an error rather than retried. */
+ * more input after that flush is treated as an error rather than retried,
+ * since it would leave the loop spinning. */
 static int decode_next_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   for (;;) {
-    int result = avcodec_receive_frame(state->context, state->frame);
+    int result = receive_frame(ft, state);
 
-    if (result == 0) {
-      warn_ignored_metadata(ft, state);
-      return store_decoded_frame(ft, state) == SOX_SUCCESS ? 1 : SOX_EOF;
-    }
-    if (result == AVERROR_EOF) {
-      state->decoder_eof = sox_true;
-      return 0;
-    }
-    if (result != AVERROR(EAGAIN))
-      return fail_av(ft, SOX_EFMT, "Unable to decode audio frame", result);
-
-    if (state->decoder_flushed) {
-      lsx_fail_errno(ft, SOX_EFMT, "FFmpeg decoder requested input after end of stream");
-      return SOX_EOF;
-    }
-
+    if (result != 0 || state->decoder_eof)
+      return result;
     result = read_parsed_packet(ft, state);
-    if (result == SOX_EOF)
+    if (result == SOX_EOF ||
+        send_packet(ft, state, result == 0 ? NULL : state->packet) != SOX_SUCCESS)
       return SOX_EOF;
-    if (result == 0) {
-      result = avcodec_send_packet(state->context, NULL);
-      state->decoder_flushed = sox_true;
-    }
-    else {
-      result = avcodec_send_packet(state->context, state->packet);
-      av_packet_unref(state->packet);
-    }
-    if (result < 0)
-      return fail_av(ft, SOX_EFMT, "Unable to submit compressed audio packet", result);
   }
 }
 
 int lsx_ffmpeg_codec_startread(
     sox_format_t * ft,
     lsx_ffmpeg_codec_t ** state,
-    lsx_ffmpeg_codec_definition_t const * definition)
+    lsx_ffmpeg_stream_definition_t const * stream)
 {
+  lsx_ffmpeg_codec_definition_t const * definition = stream->codec;
   lsx_ffmpeg_codec_t * p;
   int result;
 
   if (allocate_state(ft, state, definition, sox_false) != SOX_SUCCESS)
     return SOX_EOF;
   p = *state;
-  if (definition->prepare_decoder != NULL && definition->prepare_decoder(ft, p->context) != SOX_SUCCESS) {
+  p->stream = stream;
+  if (stream->prepare_decoder != NULL && stream->prepare_decoder(ft, p->context) != SOX_SUCCESS) {
     destroy_state(state);
     return SOX_EOF;
   }
-  if (definition->packet_reader == NULL) {
+  if (stream->packet_reader == NULL) {
     p->parser = av_parser_init(definition->codec_id);
     if (p->parser == NULL) {
       lsx_fail_errno(ft, SOX_EFMT, "FFmpeg parser for %s is unavailable", definition->name);
@@ -855,7 +880,71 @@ int lsx_ffmpeg_codec_startread(
   /* A definition with a fixed precision is a lossy format: reporting bits per
    * sample for it would suggest a word size the bitstream does not have. */
   ft->encoding.bits_per_sample = definition->precision ? 0 : ft->signal.precision;
+  if (definition->decoded_depth) {
+    int bits = p->context->bits_per_raw_sample;
+
+    ft->signal.precision = ft->encoding.bits_per_sample = bits == 16 || bits == 20 || bits == 24 ? (unsigned)bits : 16;
+  }
   return SOX_SUCCESS;
+}
+
+int lsx_ffmpeg_codec_open_decoder(
+    sox_format_t * ft,
+    lsx_ffmpeg_codec_t ** state,
+    lsx_ffmpeg_codec_definition_t const * definition,
+    uint8_t const * extradata,
+    size_t extradata_size)
+{
+  AVCodecContext * context;
+
+  if (allocate_state(ft, state, definition, sox_false) != SOX_SUCCESS)
+    return SOX_EOF;
+  context = (*state)->context;
+  if (extradata_size) {
+    /* The context frees its extradata, so it comes from FFmpeg's allocator,
+     * padded as the bitstream readers require. */
+    context->extradata = av_mallocz(extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (context->extradata == NULL) {
+      lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate %s decoder configuration", definition->name);
+      destroy_state(state);
+      return SOX_EOF;
+    }
+    memcpy(context->extradata, extradata, extradata_size);
+    context->extradata_size = (int)extradata_size;
+  }
+  if (open_codec(ft, *state, sox_false) != SOX_SUCCESS) {
+    destroy_state(state);
+    return SOX_EOF;
+  }
+  return SOX_SUCCESS;
+}
+
+int lsx_ffmpeg_codec_send_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state, uint8_t const * data, size_t size)
+{
+  int result;
+
+  if (data == NULL)
+    return state->decoder_flushed ? SOX_SUCCESS : send_packet(ft, state, NULL);
+  result = av_new_packet(state->packet, (int)size);
+  if (result < 0)
+    return fail_av(ft, SOX_ENOMEM, "Unable to allocate compressed audio packet", result);
+  memcpy(state->packet->data, data, size);
+  return send_packet(ft, state, state->packet);
+}
+
+int lsx_ffmpeg_codec_receive_samples(
+    sox_format_t * ft,
+    lsx_ffmpeg_codec_t * state,
+    sox_sample_t const ** samples,
+    size_t * length)
+{
+  int result = state->decoder_eof ? 0 : receive_frame(ft, state);
+
+  if (result == 1) {
+    *samples = state->decoded;
+    *length = state->decoded_size;
+  }
+  return result;
 }
 
 size_t lsx_ffmpeg_codec_read(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_sample_t * samples, size_t length)
@@ -1154,8 +1243,10 @@ static int write_available_packets(sox_format_t * ft, lsx_ffmpeg_codec_t * state
       return SOX_SUCCESS;
     if (result < 0)
       return fail_av(ft, SOX_EFMT, "Unable to receive encoded audio packet", result);
-    if (state->definition->packet_writer != NULL)
-      result = state->definition->packet_writer(ft, state->context, state->packet);
+    if (state->sink != NULL)
+      result = state->sink(state->sink_opaque, state->context, state->packet);
+    else if (state->stream->packet_writer != NULL)
+      result = state->stream->packet_writer(ft, state->context, state->packet);
     else
       result = lsx_writebuf(ft, state->packet->data,
           (size_t)state->packet->size) == (size_t)state->packet->size ?
@@ -1205,15 +1296,31 @@ static int encode_pending_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state, i
 int lsx_ffmpeg_codec_startwrite(
     sox_format_t * ft,
     lsx_ffmpeg_codec_t ** state,
-    lsx_ffmpeg_codec_definition_t const * definition)
+    lsx_ffmpeg_stream_definition_t const * stream)
+{
+  if (lsx_ffmpeg_codec_open_encoder(ft, state, stream->codec, NULL, NULL) != SOX_SUCCESS)
+    return SOX_EOF;
+  (*state)->stream = stream;
+  return SOX_SUCCESS;
+}
+
+int lsx_ffmpeg_codec_open_encoder(
+    sox_format_t * ft,
+    lsx_ffmpeg_codec_t ** state,
+    lsx_ffmpeg_codec_definition_t const * definition,
+    lsx_ffmpeg_codec_packet_sink_t sink,
+    void * opaque)
 {
   lsx_ffmpeg_codec_t * p;
   AVChannelLayout layout = {0};
   enum AVSampleFormat sample_format;
   double rate = ft->signal.rate;
   unsigned precision = ft->encoding.bits_per_sample ? ft->encoding.bits_per_sample : definition->precision;
+  char const * layout_name = ft->channel_layout;
   int result;
 
+  if (definition->check_encoder != NULL && definition->check_encoder(ft, definition) != SOX_SUCCESS)
+    return SOX_EOF;
   /* Everything the encoder cannot change later is settled before the state is
    * allocated or the context is opened, so that a rejected request leaves
    * nothing behind.  The layout is the one exception: it may hold an
@@ -1224,21 +1331,23 @@ int lsx_ffmpeg_codec_startwrite(
         definition->name, definition->max_encode_channels);
     return SOX_EOF;
   }
-  if (ft->channel_layout != NULL) {
-    result = av_channel_layout_from_string(&layout, ft->channel_layout);
+  if (layout_name == NULL && definition->encode_layout != NULL)
+    layout_name = definition->encode_layout(ft->signal.channels);
+  if (layout_name != NULL) {
+    result = av_channel_layout_from_string(&layout, layout_name);
     if (result < 0 || !av_channel_layout_check(&layout)) {
       av_channel_layout_uninit(&layout);
       lsx_fail_errno(ft, SOX_EINVAL,
           "Unknown or invalid %s channel layout `%s'; "
           "use --help-format %s to list supported layouts",
-          definition->name, ft->channel_layout, ft->filetype);
+          definition->name, layout_name, ft->filetype);
       return SOX_EOF;
     }
     if ((unsigned)layout.nb_channels != ft->signal.channels) {
       lsx_fail_errno(ft, SOX_EINVAL,
           "%s channel layout `%s' has %d channels, "
           "but the output signal has %u",
-          definition->name, ft->channel_layout,
+          definition->name, layout_name,
           layout.nb_channels, ft->signal.channels);
       av_channel_layout_uninit(&layout);
       return SOX_EOF;
@@ -1261,6 +1370,8 @@ int lsx_ffmpeg_codec_startwrite(
     return SOX_EOF;
   }
   p = *state;
+  p->sink = sink;
+  p->sink_opaque = opaque;
 
   if (codec_supports_rate(ft, p->codec, (int)rate) != SOX_SUCCESS ||
       codec_supports_layout(ft, p->codec, &layout) != SOX_SUCCESS ||
@@ -1324,6 +1435,8 @@ int lsx_ffmpeg_codec_startwrite(
   ft->encoding.encoding = definition->encoding;
   ft->encoding.bits_per_sample = definition->precision ? 0 : precision;
   ft->signal.precision = precision;
+  if (definition->warn_encoded_layout != NULL)
+    definition->warn_encoded_layout(ft);
   return SOX_SUCCESS;
 }
 
@@ -1358,16 +1471,12 @@ size_t lsx_ffmpeg_codec_write(
   return done;
 }
 
-int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
+/* The state latches a failed write, which is reported as SOX_EOF without
+ * attempting to flush. */
+int lsx_ffmpeg_codec_flush(sox_format_t * ft, lsx_ffmpeg_codec_t * p)
 {
-  lsx_ffmpeg_codec_t * p;
   int result = SOX_SUCCESS;
 
-  if (state == NULL || *state == NULL)
-    return SOX_SUCCESS;
-  p = *state;
-  /* The state is destroyed on every path below, failure included, so that a
-   * caller which ignores the return value still does not leak. */
   if (p->write_failed)
     result = SOX_EOF;
   else if (p->pending_size) {
@@ -1381,15 +1490,15 @@ int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
     else {
       samples_per_channel = (int)(p->pending_size / channels);
       /* An encoder that cannot take a short last frame is given a full one
-       * padded with silence, which lengthens the file by up to one frame.
-       * There is no alternative: the codecs here have no way to record a
-       * partial final frame. */
+       * padded with silence, which lengthens the stream by up to one frame
+       * where the framing has no way to record a partial final frame. */
       if (!(p->codec->capabilities & AV_CODEC_CAP_SMALL_LAST_FRAME)) {
         memset(p->pending + p->pending_size, 0, (p->pending_capacity - p->pending_size) * sizeof(*p->pending));
         samples_per_channel = p->frame_samples;
       }
       result = encode_pending_frame(ft, p, samples_per_channel);
     }
+    p->pending_size = 0;
   }
   if (result == SOX_SUCCESS) {
     int av_result = avcodec_send_frame(p->context, NULL);
@@ -1399,6 +1508,20 @@ int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
     else
       result = write_available_packets(ft, p, sox_true);
   }
+  if (result != SOX_SUCCESS)
+    p->write_failed = sox_true;
+  return result;
+}
+
+/* The state is destroyed on every path, failure included, so that a caller
+ * which ignores the return value still does not leak. */
+int lsx_ffmpeg_codec_stopwrite(sox_format_t * ft, lsx_ffmpeg_codec_t ** state)
+{
+  int result;
+
+  if (state == NULL || *state == NULL)
+    return SOX_SUCCESS;
+  result = lsx_ffmpeg_codec_flush(ft, *state);
   destroy_state(state);
   return result;
 }

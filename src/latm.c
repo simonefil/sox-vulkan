@@ -17,13 +17,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "sox_i.h"
+#include "codec.h"
 #include "ffmpeg-codec.h"
 #include "latm-common.h"
 
 #ifdef HAVE_FFMPEG_CODECS
-
-#include <libavutil/opt.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -86,27 +84,6 @@ static int write_latm_value(lsx_bit_writer_t * writer, uint32_t value)
   return SOX_SUCCESS;
 }
 
-/* Read the audioObjectType from the front of a byte-aligned
- * AudioSpecificConfig.  Unlike the LATM case, the encoder's extradata does
- * start on a byte boundary, so the two fields are extracted by shifting
- * rather than through a bit reader.  Escape value 31 means "32 plus the next
- * 6 bits", which here straddle the first two bytes. */
-static int audio_object_type(uint8_t const * config, size_t config_size, uint32_t * object_type)
-{
-  uint32_t value;
-
-  if (config_size == 0)
-    return SOX_EOF;
-  value = config[0] >> 3;
-  if (value == 31) {
-    if (config_size < 2)
-      return SOX_EOF;
-    value = 32 + (((uint32_t)config[0] & 7) << 3) + (config[1] >> 5);
-  }
-  *object_type = value;
-  return SOX_SUCCESS;
-}
-
 /* AAC-LC (2), HE-AAC (5) and HE-AACv2 (29): the object types this handler
  * claims.  USAC in the same framing belongs to the usac handler, and the
  * older or more exotic types are refused by name rather than handed to a
@@ -157,18 +134,6 @@ static int read_latm_packet(sox_format_t * ft, AVPacket * packet)
   }
   memcpy(packet->data, p->packet, packet_size);
   return 1;
-}
-
-/* Force a programme config element for the layouts the fixed channel
- * configurations cannot describe, so the file states its own channel order
- * instead of leaning on a default that means something else. */
-static int prepare_latm_encoder(AVCodecContext * context)
-{
-  /* Quad and 6.1 require a PCE.  Force one for 7.1 as well because channel
-   * configuration 7 describes the different 7.1(wide) layout. */
-  if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7)
-    return av_opt_set_int(context->priv_data, "aac_pce", 1, 0);
-  return 0;
 }
 
 /* Emit a StreamMuxConfig describing one synchronous programme and layer,
@@ -231,7 +196,7 @@ static int write_latm_packet(sox_format_t * ft, AVCodecContext const * context, 
   if (context->extradata == NULL ||
       context->extradata_size < 2 ||
       context->extradata_size > LATM_MAX_ASC_SIZE ||
-      audio_object_type(context->extradata,
+      lsx_aac_object_type(context->extradata,
           (size_t)context->extradata_size,
           &object_type) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR, "AAC encoder did not provide a valid AudioSpecificConfig");
@@ -309,64 +274,26 @@ too_large:
   return SOX_EOF;
 }
 
-/* Reading and writing need separate definitions because they use different
- * libavcodec codecs: AAC_LATM is a decoder that takes whole LOAS frames,
- * whereas encoding goes through the plain AAC encoder with this file adding
- * the framing.  Each definition therefore leaves the other direction's limits
- * at zero, and the handler passes the matching one to each entry point. */
-
-static lsx_ffmpeg_codec_definition_t const read_definition = {
-  AV_CODEC_ID_AAC_LATM,
-  SOX_ENCODING_AAC,
-  "AAC LATM",
-  8,                            /* max_decode_channels */
+/* Reading and writing use different libavcodec codecs: AAC_LATM is a
+ * decoder that takes whole LOAS frames, whereas encoding goes through the
+ * plain AAC encoder with this file adding the framing. */
+static lsx_ffmpeg_codec_definition_t const latm_definition = {
+  AV_CODEC_ID_AAC_LATM, SOX_ENCODING_AAC, "AAC LATM",
   /* A PCE-configured stream is decoded in the order the file states, which
    * FFmpeg may report without naming speakers. */
-  sox_true,                     /* accept_unspecified_decode_layout */
-  0,                            /* max_encode_channels */
-  24,                           /* precision */
-  0,                            /* default_bit_rate */
-  0,                            /* minimum_bit_rate */
-  0,                            /* maximum_bit_rate */
-  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
-  NULL,                         /* ignored_metadata_name */
-  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
-  NULL,                         /* prepare_decoder */
-  NULL,                         /* prepare_encoder */
-  read_latm_packet,             /* packet_reader */
-  NULL,                         /* packet_writer */
-  sox_false,                    /* use_compression_level */
-  0,                            /* default_compression_level */
-  0,                            /* minimum_compression_level */
-  0,                            /* maximum_compression_level */
-  NULL                          /* select_layout */
+  8, sox_true, 0, 24,
+  0, 0, 0,
+  AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
+  NULL, NULL, NULL, NULL, sox_false,
+  sox_false, 0, 0, 0, NULL
 };
 
-static lsx_ffmpeg_codec_definition_t const write_definition = {
-  AV_CODEC_ID_AAC,
-  SOX_ENCODING_AAC,
-  "AAC LATM",
-  0,                            /* max_decode_channels */
-  sox_false,                    /* accept_unspecified_decode_layout */
-  8,                            /* max_encode_channels */
-  24,                           /* precision */
-  128000,                       /* default_bit_rate */
-  /* AAC has no fixed bit rate range: what is usable depends on the rate and
-   * channel count, so the encoder is left to reject what it cannot do. */
-  0,                            /* minimum_bit_rate */
-  0,                            /* maximum_bit_rate */
-  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
-  NULL,                         /* ignored_metadata_name */
-  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
-  NULL,                         /* prepare_decoder */
-  prepare_latm_encoder,         /* prepare_encoder */
-  NULL,                         /* packet_reader */
-  write_latm_packet,            /* packet_writer */
-  sox_false,                    /* use_compression_level */
-  0,                            /* default_compression_level */
-  0,                            /* minimum_compression_level */
-  0,                            /* maximum_compression_level */
-  NULL                          /* select_layout */
+static lsx_ffmpeg_stream_definition_t const read_definition = {
+  &latm_definition, NULL, read_latm_packet, NULL
+};
+
+static lsx_ffmpeg_stream_definition_t const write_definition = {
+  &lsx_ffmpeg_aac_definition, NULL, NULL, write_latm_packet
 };
 
 static int startread(sox_format_t * ft)

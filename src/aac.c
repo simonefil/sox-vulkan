@@ -23,7 +23,6 @@
 #ifdef HAVE_FFMPEG_CODECS
 
 #include <libavcodec/adts_parser.h>
-#include <libavutil/opt.h>
 
 #include <stdint.h>
 
@@ -390,7 +389,7 @@ static int configure_adts(sox_format_t * ft, AVCodecContext const * context, pri
     }
     p->pce_pending = sox_true;
   }
-  /* prepare_aac_encoder asked for a PCE for exactly these channel counts, so
+  /* The AAC definition asks for a PCE for exactly these channel counts, so
    * a numbered configuration here means the encoder ignored that and the
    * file would state a layout other than the one being written. */
   else if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7) {
@@ -399,18 +398,6 @@ static int configure_adts(sox_format_t * ft, AVCodecContext const * context, pri
   }
   p->adts_configured = sox_true;
   return SOX_SUCCESS;
-}
-
-/* Force a programme config element for the layouts the numbered channel
- * configurations cannot describe, so the file states its own channel order
- * instead of leaning on a default that means something else. */
-static int prepare_aac_encoder(AVCodecContext * context)
-{
-  /* Quad and 6.1 require a PCE.  Force one for 7.1 as well because ADTS
-   * channel_configuration 7 describes the different 7.1(wide) layout. */
-  if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7)
-    return av_opt_set_int(context->priv_data, "aac_pce", 1, 0);
-  return 0;
 }
 
 /* Write one encoded frame with an ADTS header in front, and the PCE too if
@@ -459,33 +446,8 @@ static int write_adts_packet(sox_format_t * ft, AVCodecContext const * context, 
 
 /* One definition serves both directions: the same libavcodec AAC codec reads
  * and writes, with this file supplying the ADTS framing on each side. */
-static lsx_ffmpeg_codec_definition_t const definition = {
-  AV_CODEC_ID_AAC,
-  SOX_ENCODING_AAC,
-  "AAC",
-  8,                            /* max_decode_channels */
-  /* FFmpeg preserves canonical PCE sample order but reports 6.1 and 7.1
-   * frames with AV_CHANNEL_ORDER_UNSPEC. */
-  sox_true,                     /* accept_unspecified_decode_layout */
-  8,                            /* max_encode_channels */
-  24,                           /* precision */
-  128000,                       /* default_bit_rate */
-  /* No fixed range: what is usable depends on the rate and channel count, so
-   * the encoder is left to reject what it cannot do. */
-  0,                            /* minimum_bit_rate */
-  0,                            /* maximum_bit_rate */
-  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
-  NULL,                         /* ignored_metadata_name */
-  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
-  NULL,                         /* prepare_decoder */
-  prepare_aac_encoder,          /* prepare_encoder */
-  read_adts_packet,             /* packet_reader */
-  write_adts_packet,            /* packet_writer */
-  sox_false,                    /* use_compression_level */
-  0,                            /* default_compression_level */
-  0,                            /* minimum_compression_level */
-  0,                            /* maximum_compression_level */
-  NULL                          /* select_layout */
+static lsx_ffmpeg_stream_definition_t const definition = {
+  &lsx_ffmpeg_aac_definition, NULL, read_adts_packet, write_adts_packet
 };
 
 static int startread(sox_format_t * ft)

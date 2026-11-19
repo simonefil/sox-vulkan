@@ -65,6 +65,52 @@
   #define NO_REWIND_PIPE
 #endif
 
+/* Whether a four-byte ftyp brand names an MP4 or QuickTime file that can
+ * carry audio.  M4A and M4B are only Apple's labels for one; files written
+ * by other tools declare the generic ISO, MP4, DASH or CMAF brands instead. */
+static sox_bool is_mp4_audio_brand(unsigned char const * brand)
+{
+  static char const brands[][4] = {
+    {'M','4','A',' '}, {'M','4','B',' '}, {'M','4','P',' '}, {'M','4','V',' '},
+    {'i','s','o','m'}, {'i','s','o','2'}, {'i','s','o','3'}, {'i','s','o','4'},
+    {'i','s','o','5'}, {'i','s','o','6'}, {'i','s','o','8'}, {'i','s','o','9'},
+    {'m','p','4','1'}, {'m','p','4','2'}, {'d','a','s','h'}, {'c','m','f','c'},
+    {'a','v','c','1'}, {'q','t',' ',' '}
+  };
+  size_t i;
+
+  for (i = 0; i < array_length(brands); ++i)
+    if (!memcmp(brand, brands[i], 4))
+      return sox_true;
+  return sox_false;
+}
+
+/* An MP4 file with an audio-capable brand.  The leading box is ftyp, holding
+ * a major brand and then a list of compatible ones, four bytes each; both are
+ * examined, since a file often declares some other major brand and lists a
+ * known one among the compatible ones.  The search is bounded by the box's
+ * own size as well as by what was read, so it cannot wander into the next
+ * box.  The codec is left to the file. */
+static sox_bool is_mp4_header(unsigned char const * data, size_t length)
+{
+  size_t box_size;
+  size_t limit;
+  size_t position;
+
+  if (length < 12 || memcmp(data + 4, "ftyp", 4))
+    return sox_false;
+  box_size = ((size_t)data[0] << 24) | ((size_t)data[1] << 16) | ((size_t)data[2] << 8) | data[3];
+  if (box_size < 12)
+    return sox_false;
+  limit = min(box_size, length);
+  if (is_mp4_audio_brand(data + 8))
+    return sox_true;
+  for (position = 16; position + 4 <= limit; position += 4)
+    if (is_mp4_audio_brand(data + position))
+      return sox_true;
+  return sox_false;
+}
+
 #ifdef HAVE_FFMPEG_CODECS
 /* Content probes for the FFmpeg-backed formats.  None of these bitstreams
  * carries a distinctive magic number at offset zero, so the CHECK macro that
@@ -169,56 +215,6 @@ static size_t leading_id3v2_size(unsigned char const * data, size_t length)
   return size;
 }
 
-#ifdef HAVE_FFMPEG_FORMATS
-/* Whether a four-byte ftyp brand names an MP4 or QuickTime file that can
- * carry audio.  M4A is only Apple's label for one; files written by other
- * tools declare the generic ISO and MP4 brands instead. */
-static sox_bool is_mp4_audio_brand(unsigned char const * brand)
-{
-  static char const brands[][4] = {
-    {'M','4','A',' '}, {'M','4','B',' '}, {'M','4','P',' '},
-    {'i','s','o','m'}, {'i','s','o','2'}, {'i','s','o','4'},
-    {'i','s','o','5'}, {'i','s','o','6'},
-    {'m','p','4','1'}, {'m','p','4','2'}, {'q','t',' ',' '}
-  };
-  size_t i;
-
-  for (i = 0; i < array_length(brands); ++i)
-    if (!memcmp(brand, brands[i], 4))
-      return sox_true;
-  return sox_false;
-}
-
-/* An MP4 file with an audio-capable brand.  The leading atom is ftyp, holding
- * a major brand and then a list of compatible ones, four bytes each; both are
- * examined, since a file often declares some other major brand and lists a
- * known one among the compatible ones.  The search is bounded by the atom's
- * own size as well as by what was read, so it cannot wander into the next
- * atom.
- *
- * Only ALAC is claimed here.  An MP4 carrying anything else matches too and
- * is then rejected when the container adapter finds no ALAC stream, which is
- * a clearer outcome than treating the file as an unknown format. */
-static sox_bool is_m4a_header(unsigned char const * data, size_t length)
-{
-  size_t atom_size;
-  size_t limit;
-  size_t position;
-
-  if (length < 12 || memcmp(data + 4, "ftyp", 4))
-    return sox_false;
-  atom_size = ((size_t)data[0] << 24) | ((size_t)data[1] << 16) | ((size_t)data[2] << 8) | data[3];
-  if (atom_size < 12)
-    return sox_false;
-  limit = min(atom_size, length);
-  if (is_mp4_audio_brand(data + 8))
-    return sox_true;
-  for (position = 16; position + 4 <= limit; position += 4)
-    if (is_mp4_audio_brand(data + position))
-      return sox_true;
-  return sox_false;
-}
-#endif
 #endif
 
 static char const * auto_detect_format(sox_format_t * ft, char const * ext)
@@ -257,16 +253,14 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
     if (matroska_type)
       return matroska_type;
   }
+  if (is_mp4_header((unsigned char const *)data, len))
+    return "m4a";
 #ifdef HAVE_FFMPEG_CODECS
   /* These probes run before the CHECK lines that follow rather than after,
    * because a bitstream with no magic number at offset zero can happen to
    * contain any given byte sequence; asking the specific tests first stops a
    * coincidence from claiming the file.  Within the group the order goes
    * from the most distinctive signature to the least. */
-#ifdef HAVE_FFMPEG_FORMATS
-  if (is_m4a_header((unsigned char const *)data, len))
-    return "m4a";
-#endif
   if (is_dts_header((unsigned char const *)data, len))
     return "dts";
   {
@@ -826,6 +820,10 @@ static int check_type_codec(sox_format_handler_t const * handler, char const * t
   if (codec) {
     if (!lsx_codec_find(codec)) {
       lsx_fail("unknown codec `%s'; codecs: %s", codec, lsx_codec_names());
+      return SOX_EOF;
+    }
+    if (writing && !lsx_codec_find(codec)->start_encode) {
+      lsx_fail("codec `%s' can only be decoded", codec);
       return SOX_EOF;
     }
   }

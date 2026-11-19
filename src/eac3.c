@@ -26,35 +26,8 @@ typedef struct {
   lsx_ffmpeg_codec_t * codec;
 } priv_t;
 
-/* Like AC-3, E-AC-3 needs no hooks.  Two asymmetries are deliberate: it
- * decodes up to 8 channels but encodes at most 6, because FFmpeg's E-AC-3
- * encoder is the AC-3 one extended and stops at 5.1; and an Atmos stream is
- * decoded as its channel bed, with the object metadata warned about and
- * dropped, since SoX has no way to carry it. */
-static lsx_ffmpeg_codec_definition_t const definition = {
-  AV_CODEC_ID_EAC3,
-  SOX_ENCODING_EAC3,
-  "E-AC-3",
-  8,                            /* max_decode_channels */
-  sox_false,                    /* accept_unspecified_decode_layout */
-  6,                            /* max_encode_channels */
-  24,                           /* precision */
-  640000,                       /* default_bit_rate */
-  32000,                        /* minimum_bit_rate */
-  6144000,                      /* maximum_bit_rate */
-  AV_PROFILE_EAC3_DDP_ATMOS,    /* ignored_metadata_profile */
-  "Dolby Atmos JOC/OAMD",       /* ignored_metadata_name */
-  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
-  NULL,                         /* prepare_decoder */
-  NULL,                         /* prepare_encoder */
-  NULL,                         /* packet_reader */
-  NULL,                         /* packet_writer */
-  sox_false,                    /* use_compression_level */
-  0,                            /* default_compression_level */
-  0,                            /* minimum_compression_level */
-  0,                            /* maximum_compression_level */
-  NULL                          /* select_layout */
-};
+/* Like AC-3, E-AC-3 needs no hooks. */
+static lsx_ffmpeg_stream_definition_t const definition = {&lsx_ffmpeg_eac3_definition, NULL, NULL, NULL};
 
 static int startread(sox_format_t * ft)
 {

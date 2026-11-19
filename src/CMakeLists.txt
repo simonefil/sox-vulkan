@@ -156,6 +156,7 @@ set(LIBSOX_FORMAT_SOURCES
     htk.c
     maud.c
     matroska.c
+    mp4.c
     container.c
     codec.c
     codec-pcm.c
@@ -1131,6 +1132,7 @@ endif()
 if(HAVE_FFMPEG_CODECS)
     target_sources(libsox PRIVATE
         ffmpeg-codec.c
+        codec-ffmpeg.c
         latm-common.c
         aac.c
         ac3.c
@@ -1152,17 +1154,6 @@ if(HAVE_FFMPEG_CODECS)
     if(IS_WINDOWS)
         target_link_libraries(libsox PRIVATE bcrypt)
     endif()
-endif()
-
-# FFmpeg libavformat containers
-if(HAVE_FFMPEG_FORMATS)
-    target_sources(libsox PRIVATE
-        ffmpeg-container.c
-        alac.c
-    )
-    target_link_libraries(libsox PRIVATE ${FFMPEG_FORMATS_LIBRARIES})
-    target_include_directories(libsox PRIVATE ${FFMPEG_FORMATS_INCLUDE_DIRS})
-    target_compile_definitions(libsox PRIVATE STATIC_FFMPEG_FORMATS)
 endif()
 
 # MP3 format (mad/lame/twolame)

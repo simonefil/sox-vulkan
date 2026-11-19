@@ -163,7 +163,7 @@ if ${bindir}/sox${EXEEXT} -n -r 48000 -t opus /dev/null synth .01 2>/dev/null; t
 	test "`${bindir}/sox${EXEEXT} --i -c /tmp/opus-5.1-decoded.wav`" = 6
 fi
 
-if ${bindir}/sox${EXEEXT} --help-format m4a 2>/dev/null | grep -q '^Writes:$'; then
+if ${bindir}/sox${EXEEXT} --help-format m4a 2>/dev/null | grep -q '^Writes: yes$'; then
 	echo "Format: m4a    Options: -C 2, 16-bit stereo ALAC"
 	${bindir}/sox${EXEEXT} -R -n -r 44100 -c 2 -b 16 /tmp/alac-stereo.wav synth .1 sine 997 sine 1499 vol .1
 	${bindir}/sox${EXEEXT} /tmp/alac-stereo.wav -t s16 /tmp/alac-stereo-reference.s16

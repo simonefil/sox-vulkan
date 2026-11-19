@@ -39,12 +39,25 @@ static lsx_codec_handler_t const * (* const codec_fns[])(void) = {
 #if defined HAVE_WAVPACK && (defined STATIC_WAVPACK || !defined HAVE_LIBLTDL)
   lsx_wavpack_codec_fn,
 #endif
+#if defined HAVE_FFMPEG_CODECS && (defined STATIC_FFMPEG_CODECS || !defined HAVE_LIBLTDL)
+  lsx_aac_codec_fn,
+  lsx_usac_codec_fn,
+  lsx_alac_codec_fn,
+  lsx_ac3_codec_fn,
+  lsx_eac3_codec_fn,
+  lsx_dts_codec_fn,
+  lsx_mlp_codec_fn,
+  lsx_truehd_codec_fn,
+#endif
 };
 
 /* Every identifier a container uses for a codec.  A codec the build lacks
  * keeps its identifiers here, so that a file holding it is reported as such
  * rather than as unknown.  Ogg names a codec by the bytes its first packet
- * begins with. */
+ * begins with, and MP4 by its sample entry, or for an MPEG-4 audio entry by
+ * the object type its decoder configuration gives, as in mp4a.40.  An AAC
+ * identifier stands for xHE-AAC too, which its configuration tells apart.
+ * Where a codec has several, the first is the one written. */
 static lsx_codec_tag_t const codec_tags[] = {
   {lsx_container_matroska, "A_PCM/INT/LIT"   , "pcm"    , SOX_ENCODING_SIGN2   , lsx_endian_little},
   {lsx_container_matroska, "A_PCM/INT/BIG"   , "pcm"    , SOX_ENCODING_SIGN2   , lsx_endian_big},
@@ -60,11 +73,41 @@ static lsx_codec_tag_t const codec_tags[] = {
   {lsx_container_ogg     , "\x01vorbis"      , "vorbis" , SOX_ENCODING_VORBIS  , lsx_endian_any},
   {lsx_container_ogg     , "OpusHead"        , "opus"   , SOX_ENCODING_OPUS    , lsx_endian_any},
   {lsx_container_ogg     , "\x7f" "FLAC"     , "flac"   , SOX_ENCODING_FLAC    , lsx_endian_any},
+  {lsx_container_matroska, "A_AAC"           , "aac"    , SOX_ENCODING_AAC     , lsx_endian_any},
+  {lsx_container_matroska, "A_AAC"           , "usac"   , SOX_ENCODING_USAC    , lsx_endian_any},
+  {lsx_container_matroska, "A_ALAC"          , "alac"   , SOX_ENCODING_ALAC    , lsx_endian_any},
+  {lsx_container_matroska, "A_AC3"           , "ac3"    , SOX_ENCODING_AC3     , lsx_endian_any},
+  {lsx_container_matroska, "A_EAC3"          , "eac3"   , SOX_ENCODING_EAC3    , lsx_endian_any},
+  {lsx_container_matroska, "A_DTS"           , "dts"    , SOX_ENCODING_DTS     , lsx_endian_any},
+  {lsx_container_matroska, "A_TRUEHD"        , "truehd" , SOX_ENCODING_TRUEHD  , lsx_endian_any},
+  {lsx_container_matroska, "A_MLP"           , "mlp"    , SOX_ENCODING_MLP     , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.40"         , "aac"    , SOX_ENCODING_AAC     , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.40"         , "usac"   , SOX_ENCODING_USAC    , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.66"         , "aac"    , SOX_ENCODING_AAC     , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.67"         , "aac"    , SOX_ENCODING_AAC     , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.68"         , "aac"    , SOX_ENCODING_AAC     , lsx_endian_any},
+  {lsx_container_mp4     , "alac"            , "alac"   , SOX_ENCODING_ALAC    , lsx_endian_any},
+  {lsx_container_mp4     , "ac-3"            , "ac3"    , SOX_ENCODING_AC3     , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.a5"         , "ac3"    , SOX_ENCODING_AC3     , lsx_endian_any},
+  {lsx_container_mp4     , "ec-3"            , "eac3"   , SOX_ENCODING_EAC3    , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.a6"         , "eac3"   , SOX_ENCODING_EAC3    , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.a9"         , "dts"    , SOX_ENCODING_DTS     , lsx_endian_any},
+  {lsx_container_mp4     , "dtsc"            , "dts"    , SOX_ENCODING_DTS     , lsx_endian_any},
+  {lsx_container_mp4     , "dtsh"            , "dts"    , SOX_ENCODING_DTS     , lsx_endian_any},
+  {lsx_container_mp4     , "dtsl"            , "dts"    , SOX_ENCODING_DTS     , lsx_endian_any},
+  {lsx_container_mp4     , "dtse"            , "dts"    , SOX_ENCODING_DTS     , lsx_endian_any},
+  {lsx_container_mp4     , "mlpa"            , "truehd" , SOX_ENCODING_TRUEHD  , lsx_endian_any},
+  {lsx_container_mp4     , "fLaC"            , "flac"   , SOX_ENCODING_FLAC    , lsx_endian_any},
+  {lsx_container_mp4     , "Opus"            , "opus"   , SOX_ENCODING_OPUS    , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.6b"         , "mp3"    , SOX_ENCODING_MP3     , lsx_endian_any},
+  {lsx_container_mp4     , "mp4a.69"         , "mp3"    , SOX_ENCODING_MP3     , lsx_endian_any},
+  {lsx_container_mp4     , ".mp3"            , "mp3"    , SOX_ENCODING_MP3     , lsx_endian_any},
 };
 
 /* The container each type is, and the codec it writes when its type names
- * none: Ogg has one, Vorbis, which is what `-t ogg' always meant.  The vorbis
- * and opus types are Ogg with the codec fixed: they take no other, and read
+ * none: Ogg has one, Vorbis, which is what `-t ogg' always meant, and MP4
+ * ALAC, which is what `-t m4a' did.  The vorbis and opus types are Ogg with
+ * the codec fixed, and xhe-m4a and usac-m4a MP4: they take no other, and read
  * only that one. */
 static struct {
   char const * type;
@@ -78,6 +121,11 @@ static struct {
   {"ogg"   , lsx_container_ogg     , "vorbis", sox_false},
   {"vorbis", lsx_container_ogg     , "vorbis", sox_true},
   {"opus"  , lsx_container_ogg     , "opus"  , sox_true},
+  {"m4a"     , lsx_container_mp4   , "alac"  , sox_false},
+  {"mp4"     , lsx_container_mp4   , "alac"  , sox_false},
+  {"m4b"     , lsx_container_mp4   , "alac"  , sox_false},
+  {"xhe-m4a" , lsx_container_mp4   , "usac"  , sox_true},
+  {"usac-m4a", lsx_container_mp4   , "usac"  , sox_true},
 };
 
 /* SoX orders channels as WAVE does, Vorbis as its specification, section
@@ -167,7 +215,7 @@ lsx_container_family_t lsx_container_family(char const * type)
   return container_types[container_type(type)].container;
 }
 
-lsx_codec_tag_t const * lsx_codec_tag_by_id(lsx_container_family_t container, char const * id)
+static lsx_codec_tag_t const * tag_by_id(lsx_container_family_t container, char const * id)
 {
   size_t i;
 
@@ -175,6 +223,18 @@ lsx_codec_tag_t const * lsx_codec_tag_by_id(lsx_container_family_t container, ch
     if (codec_tags[i].container == container && !strcmp(codec_tags[i].id, id))
       return &codec_tags[i];
   return NULL;
+}
+
+/* The tag of an identifier, told apart by the codec's configuration where
+ * one identifier stands for several codecs. */
+lsx_codec_tag_t const * lsx_codec_tag_by_config(lsx_container_family_t container, char const * id,
+    unsigned char const * config, size_t size)
+{
+  lsx_codec_tag_t const * tag = tag_by_id(container, id);
+
+  if (tag && tag->encoding == SOX_ENCODING_AAC && !strcmp(lsx_aac_codec(config, size), "usac"))
+    tag = lsx_codec_tag_by_codec(container, "usac", SOX_ENCODING_USAC, sox_false);
+  return tag;
 }
 
 /* The tag whose identifier the start of a stream holds. */
@@ -206,6 +266,32 @@ lsx_codec_tag_t const * lsx_codec_tag_by_codec(lsx_container_family_t container,
       return tag;
   }
   return NULL;
+}
+
+/* The audio object type an AudioSpecificConfig begins with: 5 bits, the
+ * escape value 31 meaning 32 plus the 6 bits that follow. */
+int lsx_aac_object_type(unsigned char const * config, size_t size, sox_uint32_t * object_type)
+{
+  sox_uint32_t value;
+
+  if (size == 0)
+    return SOX_EOF;
+  value = config[0] >> 3;
+  if (value == 31) {
+    if (size < 2)
+      return SOX_EOF;
+    value = 32 + (((sox_uint32_t)config[0] & 7) << 3) + (config[1] >> 5);
+  }
+  *object_type = value;
+  return SOX_SUCCESS;
+}
+
+/* The codec an AAC identifier stands for: xHE-AAC is object type 42. */
+char const * lsx_aac_codec(unsigned char const * config, size_t size)
+{
+  sox_uint32_t object_type;
+
+  return lsx_aac_object_type(config, size, &object_type) == SOX_SUCCESS && object_type == 42? "usac" : "aac";
 }
 
 /* Room for len more decoded samples behind those not yet handed out. */

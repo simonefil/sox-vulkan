@@ -42,14 +42,6 @@ typedef struct {
   unsigned packets_written;
 } priv_t;
 
-/* FFmpeg's MLP and TrueHD encoders are marked experimental and refuse to open
- * otherwise. */
-static int prepare_encoder(AVCodecContext * context)
-{
-  context->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
-  return 0;
-}
-
 /* Read up to length bytes, looping because lsx_readbuf may return fewer.
  * Returns how many were read; unlike its namesakes in the ADTS and LOAS
  * handlers it reports a short read rather than judging it, because the
@@ -154,69 +146,21 @@ static int write_packet(sox_format_t * ft, AVCodecContext const * context, AVPac
   return lsx_writebuf(ft, packet->data, (size_t)packet->size) == (size_t)packet->size ? SOX_SUCCESS : SOX_EOF;
 }
 
-/* Both are lossless, so precision is 0 and the real bit depth is reported,
- * and there is no bit rate or compression level to set.  MLP is a DVD-Audio
- * format and stops at 5.1; TrueHD decodes up to 8 channels but FFmpeg's
- * encoder writes at most 5.1.  An Atmos stream is decoded as its channel bed
- * with the object metadata warned about and dropped. */
-
-static lsx_ffmpeg_codec_definition_t const mlp_definition = {
-  AV_CODEC_ID_MLP,
-  SOX_ENCODING_MLP,
-  "MLP",
-  6,                            /* max_decode_channels */
-  sox_false,                    /* accept_unspecified_decode_layout */
-  6,                            /* max_encode_channels */
-  0,                            /* precision */
-  0,                            /* default_bit_rate */
-  0,                            /* minimum_bit_rate */
-  0,                            /* maximum_bit_rate */
-  AV_PROFILE_UNKNOWN,           /* ignored_metadata_profile */
-  NULL,                         /* ignored_metadata_name */
-  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
-  NULL,                         /* prepare_decoder */
-  prepare_encoder,              /* prepare_encoder */
-  read_packet,                  /* packet_reader */
-  write_packet,                 /* packet_writer */
-  sox_false,                    /* use_compression_level */
-  0,                            /* default_compression_level */
-  0,                            /* minimum_compression_level */
-  0,                            /* maximum_compression_level */
-  NULL                          /* select_layout */
+static lsx_ffmpeg_stream_definition_t const mlp_definition = {
+  &lsx_ffmpeg_mlp_definition, NULL, read_packet, write_packet
 };
 
-static lsx_ffmpeg_codec_definition_t const truehd_definition = {
-  AV_CODEC_ID_TRUEHD,
-  SOX_ENCODING_TRUEHD,
-  "Dolby TrueHD",
-  8,                            /* max_decode_channels */
-  sox_false,                    /* accept_unspecified_decode_layout */
-  6,                            /* max_encode_channels */
-  0,                            /* precision */
-  0,                            /* default_bit_rate */
-  0,                            /* minimum_bit_rate */
-  0,                            /* maximum_bit_rate */
-  AV_PROFILE_TRUEHD_ATMOS,      /* ignored_metadata_profile */
-  "Dolby TrueHD with Dolby Atmos", /* ignored_metadata_name */
-  AV_PROFILE_UNKNOWN,           /* required_decode_profile */
-  NULL,                         /* prepare_decoder */
-  prepare_encoder,              /* prepare_encoder */
-  read_packet,                  /* packet_reader */
-  write_packet,                 /* packet_writer */
-  sox_false,                    /* use_compression_level */
-  0,                            /* default_compression_level */
-  0,                            /* minimum_compression_level */
-  0,                            /* maximum_compression_level */
-  NULL                          /* select_layout */
+static lsx_ffmpeg_stream_definition_t const truehd_definition = {
+  &lsx_ffmpeg_truehd_definition, NULL, read_packet, write_packet
 };
 
 /* The stream type is set before the adapter is entered, since read_packet
  * runs during startread and needs it to police the major sync. */
-static int startread(sox_format_t * ft, lsx_ffmpeg_codec_definition_t const * definition)
+static int startread(sox_format_t * ft, lsx_ffmpeg_stream_definition_t const * definition)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  p->stream_type = definition->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
+  p->stream_type = definition->codec->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
   return lsx_ffmpeg_codec_startread(ft, &p->codec, definition);
 }
 
@@ -244,24 +188,11 @@ static int stopread(sox_format_t * ft)
   return lsx_ffmpeg_codec_stopread(&p->codec);
 }
 
-static int startwrite(sox_format_t * ft, lsx_ffmpeg_codec_definition_t const * definition)
+static int startwrite(sox_format_t * ft, lsx_ffmpeg_stream_definition_t const * definition)
 {
   priv_t * p = (priv_t *)ft->priv;
 
-  /* FFmpeg's encoders implement only these two depths. */
-  if (ft->encoding.bits_per_sample != 16 && ft->encoding.bits_per_sample != 24) {
-    lsx_fail_errno(ft, SOX_EFMT, "%s encoding supports 16-bit or 24-bit PCM", definition->name);
-    return SOX_EOF;
-  }
-  /* -C is rejected rather than ignored: for a lossless format it would mean
-   * nothing, and silently dropping it would look like it had taken effect. */
-  if (ft->encoding.compression != HUGE_VAL) {
-    lsx_fail_errno(ft, SOX_EINVAL,
-        "%s is lossless and does not accept a bitrate or compression "
-        "level with -C", definition->name);
-    return SOX_EOF;
-  }
-  p->stream_type = definition->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
+  p->stream_type = definition->codec->codec_id == AV_CODEC_ID_TRUEHD ? 0xba : 0xbb;
   p->starts_with_major_sync = sox_false;
   p->packets_written = 0;
   return lsx_ffmpeg_codec_startwrite(ft, &p->codec, definition);

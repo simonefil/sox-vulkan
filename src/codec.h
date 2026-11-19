@@ -32,7 +32,8 @@
  * container carries for the codec: the delay, priming frames at the start of
  * the stream that are not part of the signal; the skip on a packet, frames at
  * its start that precede the signal; and the discard on a packet, padding
- * frames at its end.  The container drops all three after decoding, and on
+ * frames at its end, which a container may give instead as the frames the
+ * packet lasts.  The container drops all three after decoding, and on
  * writing records what the encoder reports.  A packet's skip and discard are
  * taken off the samples that pushing that packet returned, which is exact for
  * a decoder that returns each packet's samples as it is pushed. */
@@ -46,7 +47,8 @@
 typedef enum {
   lsx_container_matroska,
   lsx_container_webm,
-  lsx_container_ogg
+  lsx_container_ogg,
+  lsx_container_mp4
 } lsx_container_family_t;
 
 /* Byte order a container identifier implies for the samples it carries. */
@@ -75,6 +77,8 @@ typedef struct {
   size_t frames;  /* frames the packet decodes to, padding included; 0 if unknown */
   size_t skip;    /* frames at the start of the packet that precede the signal */
   size_t discard; /* frames at the end of the packet that are padding */
+  size_t duration; /* reading: frames the container gives the packet, skip
+                      included, beyond which it is padding; 0 if it gives none */
 } lsx_packet_t;
 
 typedef struct lsx_codec lsx_codec_t;
@@ -136,12 +140,15 @@ char const * lsx_container_codec(char const * type);
 char const * lsx_container_requested(char const * type);
 sox_bool lsx_container_takes_codec(char const * type);
 lsx_container_family_t lsx_container_family(char const * type);
-lsx_codec_tag_t const * lsx_codec_tag_by_id(lsx_container_family_t container, char const * id);
+lsx_codec_tag_t const * lsx_codec_tag_by_config(lsx_container_family_t container, char const * id,
+    unsigned char const * config, size_t size);
 lsx_codec_tag_t const * lsx_codec_tag_by_magic(lsx_container_family_t container,
     unsigned char const * data, size_t size);
 lsx_codec_tag_t const * lsx_codec_tag_by_codec(lsx_container_family_t container,
     char const * codec, sox_encoding_t encoding, sox_bool big_endian);
 sox_sample_t * lsx_codec_output(lsx_codec_t * codec, size_t len);
+int lsx_aac_object_type(unsigned char const * config, size_t size, sox_uint32_t * object_type);
+char const * lsx_aac_codec(unsigned char const * config, size_t size);
 
 /* Row n serves n channels and holds, for each channel in Vorbis order, the
  * index of the same channel in SoX's, which is WAVE's. */
@@ -153,5 +160,13 @@ lsx_codec_handler_t const * lsx_vorbis_codec_fn(void);
 lsx_codec_handler_t const * lsx_opus_codec_fn(void);
 lsx_codec_handler_t const * lsx_mp3_codec_fn(void);
 lsx_codec_handler_t const * lsx_wavpack_codec_fn(void);
+lsx_codec_handler_t const * lsx_aac_codec_fn(void);
+lsx_codec_handler_t const * lsx_usac_codec_fn(void);
+lsx_codec_handler_t const * lsx_alac_codec_fn(void);
+lsx_codec_handler_t const * lsx_ac3_codec_fn(void);
+lsx_codec_handler_t const * lsx_eac3_codec_fn(void);
+lsx_codec_handler_t const * lsx_dts_codec_fn(void);
+lsx_codec_handler_t const * lsx_mlp_codec_fn(void);
+lsx_codec_handler_t const * lsx_truehd_codec_fn(void);
 
 #endif

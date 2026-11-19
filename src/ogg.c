@@ -537,6 +537,7 @@ static int read_packet(sox_format_t * ft, void * v, lsx_codec_t * codec, lsx_pac
   packet->frames = q->frames;
   packet->skip = q->skip;
   packet->discard = q->discard;
+  packet->duration = 0;
   return SOX_SUCCESS;
 }
 

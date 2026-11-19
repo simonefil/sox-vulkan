@@ -39,6 +39,7 @@
   FORMAT(lu)
   FORMAT(maud)
   FORMAT(mka)
+  FORMAT(mp4)
   FORMAT(nul)
   FORMAT(prc)
   FORMAT(raw)
@@ -107,11 +108,6 @@
   FORMAT(mlp)
   FORMAT(truehd)
   FORMAT(usac)
-#endif
-#if defined HAVE_FFMPEG_FORMATS && \
-    (defined STATIC_FFMPEG_FORMATS || !defined HAVE_LIBLTDL)
-  FORMAT(alac)
-  FORMAT(usac_m4a)
 #endif
 #if defined HAVE_OSS && (defined STATIC_OSS || !defined HAVE_LIBLTDL)
   FORMAT(oss)

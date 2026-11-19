@@ -226,7 +226,8 @@ static int choose_track(sox_format_t * ft, priv_t * p, track_t const * tracks, s
         (unsigned long)audio_count, list);
     return SOX_EOF;
   }
-  if (!audio->codec_id || !(tag = lsx_codec_tag_by_id(lsx_container_matroska, audio->codec_id))) {
+  if (!audio->codec_id || !(tag = lsx_codec_tag_by_config(lsx_container_matroska, audio->codec_id,
+      audio->private_data, audio->private_size))) {
     lsx_fail_errno(ft, SOX_EFMT, "audio codec `%s' is not supported", audio->codec_id? audio->codec_id : "");
     return SOX_EOF;
   }
@@ -487,6 +488,7 @@ static int read_packet(sox_format_t * ft, void * v, lsx_codec_t * codec UNUSED, 
   packet->frames = 0;
   packet->skip = 0;
   packet->discard = ++p->lace == p->laces? p->block_discard : 0;
+  packet->duration = 0;
   p->lace_pos += packet->size;
   return SOX_SUCCESS;
 }

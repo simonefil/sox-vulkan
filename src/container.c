@@ -133,6 +133,10 @@ static int decode_packet(sox_format_t * ft)
   else if (status == SOX_SUCCESS) {
     status = c->handler->decode(c, packet.data, packet.size);
     if (status == SOX_SUCCESS) {
+      size_t frames = c->samples_end / channels;
+
+      if (packet.duration && frames > packet.duration)
+        packet.discard = max(packet.discard, frames - packet.duration);
       c->samples_end -= min(packet.discard * channels, c->samples_end);
       c->samples_start += min(packet.skip * channels, c->samples_end);
     }

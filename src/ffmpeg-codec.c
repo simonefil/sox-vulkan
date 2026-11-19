@@ -108,6 +108,11 @@ struct lsx_ffmpeg_codec_t {
   size_t decoded_size;
   unsigned decoded_channels;
   int decoded_rate;
+  /* When decoded_in_sox_order is set, channel i of SoX's order is channel
+   * decoded_channel_source[i] of the decoded frame; otherwise the decoder's
+   * order is kept.  canonical_layout stops at eight channels. */
+  sox_bool decoded_in_sox_order;
+  int decoded_channel_source[8];
   sox_bool ignored_metadata_warning_shown; /* Both warnings are once per file. */
   sox_bool layout_warning_shown;
 
@@ -555,6 +560,41 @@ static void warn_decoded_layout(sox_format_t * ft, lsx_ffmpeg_codec_t * state, A
   state->layout_warning_shown = sox_true;
 }
 
+/* Find every speaker of SoX's layout for this channel count in the decoded
+ * one, for a definition whose back pair may stand for SoX's side pair, and
+ * set decoded_in_sox_order if they are all there.  An AAC stream written
+ * from SoX's 6.1 describes the speakers of ISO 14496-3 channel configuration
+ * 11, with the side pair as its surround pair, and FFmpeg decodes that as
+ * 6.1(back): in decoder order the surround pair would land where SoX keeps
+ * back centre. */
+static void map_decoded_channels(lsx_ffmpeg_codec_t * state, AVChannelLayout const * layout)
+{
+  AVChannelLayout canonical = {0};
+  unsigned taken = 0;
+  int i;
+
+  state->decoded_in_sox_order = sox_false;
+  if (!state->definition->back_pair_is_side ||
+      layout->order != AV_CHANNEL_ORDER_NATIVE ||
+      canonical_layout((unsigned)layout->nb_channels, &canonical) < 0 ||
+      av_channel_layout_compare(layout, &canonical) == 0)
+    return;
+  for (i = 0; i < canonical.nb_channels; ++i) {
+    enum AVChannel channel = av_channel_layout_channel_from_index(&canonical, (unsigned)i);
+    int source = av_channel_layout_index_from_channel(layout, channel);
+
+    if (source < 0)
+      source = av_channel_layout_index_from_channel(layout,
+          channel == AV_CHAN_SIDE_LEFT ? AV_CHAN_BACK_LEFT :
+          channel == AV_CHAN_SIDE_RIGHT ? AV_CHAN_BACK_RIGHT : AV_CHAN_NONE);
+    if (source < 0 || taken & (1u << source))
+      return;
+    taken |= 1u << source;
+    state->decoded_channel_source[i] = source;
+  }
+  state->decoded_in_sox_order = sox_true;
+}
+
 /* Check a freshly decoded frame against what the handler supports and against
  * the first frame, then latch its rate and channel count.  SoX fixes both for
  * the whole file at startread time, so a mid-stream change cannot be honoured
@@ -597,7 +637,9 @@ static int validate_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 
   state->decoded_channels = (unsigned)layout->nb_channels;
   state->decoded_rate = rate;
-  warn_decoded_layout(ft, state, layout);
+  map_decoded_channels(state, layout);
+  if (!state->decoded_in_sox_order)
+    warn_decoded_layout(ft, state, layout);
   return SOX_SUCCESS;
 }
 
@@ -688,9 +730,10 @@ static sox_bool supported_sample_format(enum AVSampleFormat format)
   }
 }
 
-/* Interleave a decoded frame into the state's sox-sample buffer, replacing
- * whatever was there; the caller has already consumed it.  The buffer only
- * ever grows, so a stream of equal-sized frames allocates once. */
+/* Interleave a decoded frame into the state's sox-sample buffer, in SoX's
+ * channel order where map_decoded_channels found it, replacing whatever was
+ * there; the caller has already consumed it.  The buffer only ever grows, so
+ * a stream of equal-sized frames allocates once. */
 static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   size_t required;
@@ -714,7 +757,8 @@ static int store_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
   for (sample = 0; sample < state->frame->nb_samples; ++sample)
     for (channel = 0; channel < (int)state->decoded_channels; ++channel)
       state->decoded[(size_t)sample * state->decoded_channels + channel] =
-          decoded_sample_to_sox(state->frame, sample, channel,
+          decoded_sample_to_sox(state->frame, sample,
+              state->decoded_in_sox_order ? state->decoded_channel_source[channel] : channel,
               state->decoded_channels);
   state->decoded_offset = 0;
   state->decoded_size = required;

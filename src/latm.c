@@ -280,8 +280,9 @@ too_large:
 static lsx_ffmpeg_codec_definition_t const latm_definition = {
   AV_CODEC_ID_AAC_LATM, SOX_ENCODING_AAC, "AAC LATM",
   /* A PCE-configured stream is decoded in the order the file states, which
-   * FFmpeg may report without naming speakers. */
-  8, sox_true, 0, 24,
+   * FFmpeg may report without naming speakers; the back pair is taken as for
+   * the plain AAC definition. */
+  8, sox_true, sox_true, 0, 24,
   0, 0, 0,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
   NULL, NULL, NULL, NULL, sox_false,

@@ -122,6 +122,12 @@ typedef struct lsx_ffmpeg_codec_definition {
   unsigned max_decode_channels; /* Refuse streams wider than this. */
   sox_bool accept_unspecified_decode_layout; /* Allow >6 channels with no speaker layout. */
 
+  /* Whether a decoded back pair stands for the side pair of SoX's layout
+   * when the stream has no side pair, as for AAC, whose surround pair FFmpeg
+   * reports as back speakers in 6.1.  The samples are then put in SoX's
+   * order rather than the decoder's. */
+  sox_bool back_pair_is_side;
+
   /* Encode side. */
   unsigned max_encode_channels;
 

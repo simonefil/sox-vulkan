@@ -45,10 +45,10 @@
 
 /*------------------------------- Definitions -------------------------------*/
 
-/* Force a programme config element for the layouts the numbered channel
- * configurations cannot describe, so the stream states its own channel order
- * instead of leaning on a default that means something else: quad and 6.1
- * have no number, and 7.1 has one that describes the different 7.1(wide). */
+/* Force a programme config element for quad, which no channel configuration
+ * describes, and from seven channels up, so the stream states its own channel
+ * order whichever libavcodec writes it: before 63 the encoder numbers 7.1 as
+ * configuration 7, which describes the different 7.1(wide). */
 static int prepare_aac_encoder(AVCodecContext * context)
 {
   if (context->ch_layout.nb_channels == 4 || context->ch_layout.nb_channels >= 7)
@@ -154,12 +154,14 @@ static int check_mlp_encoder(sox_format_t * ft, lsx_ffmpeg_codec_definition_t co
 }
 
 /* No fixed bit rate range: what is usable depends on the rate and channel
- * count, so the encoder is left to reject what it cannot do.  FFmpeg keeps
- * the canonical PCE sample order but reports 6.1 and 7.1 frames with no
- * speaker names, hence the unspecified layouts. */
+ * count, so the encoder is left to reject what it cannot do.  The PCE streams
+ * libavcodec before 63 writes for 6.1 and 7.1 decode with no speaker names,
+ * hence the unspecified layouts; from 63 SoX's 6.1 is written as the
+ * speakers of channel configuration 11 with the side pair as its surround
+ * pair, which FFmpeg decodes as the back pair of 6.1(back). */
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_aac_definition = {
   AV_CODEC_ID_AAC, SOX_ENCODING_AAC, "AAC",
-  8, sox_true, 8, 24,
+  8, sox_true, sox_true, 8, 24,
   128000, 0, 0,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
   prepare_aac_encoder, NULL, NULL, NULL, sox_false,
@@ -172,7 +174,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_aac_definition = {
  * so decoder order is the right order even when FFmpeg names no speakers. */
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_usac_definition = {
   AV_CODEC_ID_AAC, SOX_ENCODING_USAC, "xHE-AAC",
-  8, sox_true, 0, 24,
+  8, sox_true, sox_false, 0, 24,
   0, 0, 0,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_AAC_USAC, 62,
   NULL, NULL, NULL, NULL, sox_false,
@@ -183,7 +185,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_usac_definition = {
  * way out, and -C is a compression level, 0 to 2, 2 being FFmpeg's default. */
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_alac_definition = {
   AV_CODEC_ID_ALAC, SOX_ENCODING_ALAC, "ALAC",
-  8, sox_false, 8, 0,
+  8, sox_false, sox_false, 8, 0,
   0, 0, 0,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
   NULL, check_lossless_depth, NULL, warn_alac_layout, sox_false,
@@ -194,7 +196,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_alac_definition = {
  * the bit rate bounds are the ones it allows. */
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_ac3_definition = {
   AV_CODEC_ID_AC3, SOX_ENCODING_AC3, "AC-3",
-  6, sox_false, 6, 24,
+  6, sox_false, sox_false, 6, 24,
   448000, 32000, 640000,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
   NULL, NULL, NULL, NULL, sox_false,
@@ -203,7 +205,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_ac3_definition = {
 
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_eac3_definition = {
   AV_CODEC_ID_EAC3, SOX_ENCODING_EAC3, "E-AC-3",
-  8, sox_false, 6, 24,
+  8, sox_false, sox_false, 6, 24,
   640000, 32000, 6144000,
   AV_PROFILE_EAC3_DDP_ATMOS, "Dolby Atmos JOC/OAMD", AV_PROFILE_UNKNOWN, 0,
   NULL, NULL, NULL, NULL, sox_false,
@@ -215,7 +217,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_eac3_definition = {
  * depth reported is the one the stream was mastered at. */
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_dts_definition = {
   AV_CODEC_ID_DTS, SOX_ENCODING_DTS, "DTS",
-  8, sox_false, 6, 24,
+  8, sox_false, sox_false, 6, 24,
   768000, 32000, 3840000,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
   prepare_experimental_encoder, NULL, dts_encode_layout, warn_dts_layout, sox_true,
@@ -227,7 +229,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_dts_definition = {
  * decoded as its channel bed with the object metadata warned about. */
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_mlp_definition = {
   AV_CODEC_ID_MLP, SOX_ENCODING_MLP, "MLP",
-  6, sox_false, 6, 0,
+  6, sox_false, sox_false, 6, 0,
   0, 0, 0,
   AV_PROFILE_UNKNOWN, NULL, AV_PROFILE_UNKNOWN, 0,
   prepare_experimental_encoder, check_mlp_encoder, NULL, NULL, sox_false,
@@ -236,7 +238,7 @@ lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_mlp_definition = {
 
 lsx_ffmpeg_codec_definition_t const lsx_ffmpeg_truehd_definition = {
   AV_CODEC_ID_TRUEHD, SOX_ENCODING_TRUEHD, "Dolby TrueHD",
-  8, sox_false, 6, 0,
+  8, sox_false, sox_false, 6, 0,
   0, 0, 0,
   AV_PROFILE_TRUEHD_ATMOS, "Dolby TrueHD with Dolby Atmos", AV_PROFILE_UNKNOWN, 0,
   prepare_experimental_encoder, check_mlp_encoder, NULL, NULL, sox_false,

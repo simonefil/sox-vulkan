@@ -835,7 +835,7 @@ This lists all formats enabled in the current build. Look for:
 
 Place `--channel-layout LAYOUT` immediately before an FFmpeg-backed output file when the input channels have already been prepared in that order. The option labels the existing channels; it does not remix them. The selected layout must match the channel count and be supported by the encoder.
 
-Without `--channel-layout`, SoX uses its canonical layout when the codec offers multiple layouts for the same channel count. ALAC uses its required Apple layout. Noncanonical layouts are preserved and reported without automatic remixing.
+Without `--channel-layout`, SoX uses its canonical layout when the codec offers multiple layouts for the same channel count. ALAC uses its required Apple layout. Noncanonical layouts are preserved and reported without automatic remixing. A 7-channel AAC stream, which FFmpeg decodes as `6.1(back)` because it reports the AAC surround pair as back speakers, is read in SoX's 6.1 order, `FL FR FC LFE BC SL SR`, with the surround pair as `SL SR`.
 
 ALAC uses these noncanonical orders:
 
@@ -893,7 +893,7 @@ The build scripts download and compile the following library versions:
 | file/libmagic | 5.48 |
 | libtool/libltdl | 2.6.2 |
 | libao | 1.2.2 |
-| FFmpeg | 8.1.3 |
+| FFmpeg | 9.0.2 |
 | VkFFT | 1.3.4 |
 
 ---

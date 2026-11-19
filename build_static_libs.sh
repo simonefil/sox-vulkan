@@ -118,7 +118,7 @@ OPENCORE_AMR_VERSION="0.1.6"
 FILE_VERSION="5.48"
 LIBTOOL_VERSION="2.6.2"
 LIBAO_VERSION="1.2.2"
-FFMPEG_VERSION="8.1.3"
+FFMPEG_VERSION="9.0.2"
 # Monkey's Audio SDK and Musepack publish no checksums of their own: these are
 # the digests of the archives SoX's APE and Musepack support was verified
 # with, kept identical to the ones in build_static_libs.ps1.

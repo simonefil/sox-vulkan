@@ -33,6 +33,7 @@
 #cmakedefine HAVE_MAD_H               1
 #cmakedefine HAVE_LAME_LAME_H         1
 #cmakedefine HAVE_LAME                1
+#cmakedefine HAVE_LAME_ID3TAG         1
 #cmakedefine HAVE_TWOLAME             1
 #cmakedefine HAVE_TWOLAME_H           1
 #cmakedefine HAVE_MP3                 1

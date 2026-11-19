@@ -550,8 +550,21 @@ if(WITH_LAME)
     find_library(LAME_LIBRARY mp3lame)
     find_path(LAME_INCLUDE_DIR lame/lame.h)
     if(LAME_LIBRARY AND LAME_INCLUDE_DIR)
+        cmake_push_check_state(RESET)
         set(CMAKE_REQUIRED_INCLUDES ${LAME_INCLUDE_DIR})
         check_include_file(lame/lame.h HAVE_LAME_LAME_H)
+        # The ID3 tag API is an optional part of LAME: without it mp3.c
+        # falls back to stubs and writes MP3 files with no ID3 tags, so
+        # comments given on the command line or carried over from the input
+        # are silently lost.  id3tag_set_textinfo_utf16 is the newest of the
+        # functions mp3.c uses (the UTF-16 setters that carry non-Latin-1
+        # text), so finding it means the whole set is there.
+        # The check links a test program against the library that will
+        # actually be used; a static libmp3lame calls into libm, which has
+        # to be named for the link to succeed where it is a separate library.
+        set(CMAKE_REQUIRED_LIBRARIES ${LAME_LIBRARY} ${MATH_LIBRARY})
+        check_symbol_exists(id3tag_set_textinfo_utf16 "stdio.h;lame/lame.h" HAVE_LAME_ID3TAG)
+        cmake_pop_check_state()
         set(LAME_LIBRARIES ${LAME_LIBRARY})
         set(HAVE_LAME TRUE)
     endif()

@@ -111,7 +111,8 @@ static const char* const lame_library_names[] =
   LAME_FUNC_ID3(f,x, int, id3tag_set_genre, (lame_global_flags *, const char* genre)) \
   LAME_FUNC_ID3(f,x, size_t, id3tag_set_pad, (lame_global_flags *, size_t)) \
   LAME_FUNC_ID3(f,x, size_t, lame_get_id3v2_tag, (lame_global_flags *, unsigned char*, size_t)) \
-  LAME_FUNC_ID3(f,x, int, id3tag_set_fieldvalue, (lame_global_flags *, const char *))
+  LAME_FUNC_ID3(f,x, int, id3tag_set_textinfo_utf16, (lame_global_flags *, const char *, const unsigned short *)) \
+  LAME_FUNC_ID3(f,x, int, id3tag_set_comment_utf16, (lame_global_flags *, const char *, const unsigned short *, const unsigned short *))
 
 static const char* const twolame_library_names[] =
 {
@@ -240,47 +241,109 @@ UNUSED static size_t id3tag_set_pad_stub(lame_global_flags * gfp UNUSED, size_t 
   { return 0; }
 UNUSED static size_t lame_get_id3v2_tag_stub(lame_global_flags * gfp UNUSED, unsigned char * buffer UNUSED, size_t size UNUSED)
   { return 0; }
-UNUSED static int id3tag_set_fieldvalue_stub(lame_global_flags * gfp UNUSED, const char *fieldvalue UNUSED)
+UNUSED static int id3tag_set_textinfo_utf16_stub(lame_global_flags * gfp UNUSED, const char *id UNUSED, const unsigned short *text UNUSED)
+  { return 0; }
+UNUSED static int id3tag_set_comment_utf16_stub(lame_global_flags * gfp UNUSED, const char *lang UNUSED, const unsigned short *desc UNUSED, const unsigned short *text UNUSED)
   { return 0; }
 
 static void write_comments(sox_format_t * ft)
 {
+  /* SoX comments are UTF-8, while ID3v1 only holds Latin-1 and LAME's
+     char* setters store their argument as Latin-1 in ID3v2 too.  As LAME's
+     own frontend does, each value is therefore given twice: converted to
+     Latin-1 to the classic setter, which fills ID3v1, and converted to
+     UTF-16 to the ID3v2 setter, which replaces the Latin-1 frame the first
+     call added.  Discnumber has no ID3v1 field and only gets the second. */
+  enum { TITLE, ARTIST, ALBUM, TRACK, YEAR, COMMENT, GENRE, DISC, TAG_COUNT };
+  static const struct {
+    const char *name;
+    const char *frame_id;
+  } tags[TAG_COUNT] = {
+    [TITLE] = {"Title", "TIT2"},
+    [ARTIST] = {"Artist", "TPE1"},
+    [ALBUM] = {"Album", "TALB"},
+    [TRACK] = {"Tracknumber", "TRCK"},
+    [YEAR] = {"Year", "TYER"},
+    [COMMENT] = {"Comment", "COMM"},
+    [GENRE] = {"Genre", "TCON"},
+    [DISC] = {"Discnumber", "TPOS"},
+  };
+  /* The comment's description is empty but, being UTF-16 like the text,
+     still needs its byte order mark: LAME writes a NULL description as a
+     bare terminator, which strict readers such as FFmpeg 5 reject. */
+  static const unsigned short empty_desc[] = {0xfeff, 0};
   priv_t *p = (priv_t *) ft->priv;
-  const char* comment;
+  size_t i;
 
   p->id3tag_init(p->gfp);
   p->id3tag_set_pad(p->gfp, (size_t)ID3PADDING);
 
-  /* Note: id3tag_set_fieldvalue is not present in LAME 3.97, so we're using
-     the 3.97-compatible methods for all of the tags that 3.97 supported. */
-  /* FIXME: This is no more necessary, since support for LAME 3.97 has ended. */
-  if ((comment = sox_find_comment(ft->oob.comments, "Title")))
-    p->id3tag_set_title(p->gfp, comment);
-  if ((comment = sox_find_comment(ft->oob.comments, "Artist")))
-    p->id3tag_set_artist(p->gfp, comment);
-  if ((comment = sox_find_comment(ft->oob.comments, "Album")))
-    p->id3tag_set_album(p->gfp, comment);
-  if ((comment = sox_find_comment(ft->oob.comments, "Tracknumber")))
-    p->id3tag_set_track(p->gfp, comment);
-  if ((comment = sox_find_comment(ft->oob.comments, "Year")))
-    p->id3tag_set_year(p->gfp, comment);
-  if ((comment = sox_find_comment(ft->oob.comments, "Comment")))
-    p->id3tag_set_comment(p->gfp, comment);
-  if ((comment = sox_find_comment(ft->oob.comments, "Genre")))
-  {
-    if (p->id3tag_set_genre(p->gfp, comment))
-      lsx_warn("\"%s\" is not a recognized ID3v1 genre.", comment);
-  }
+  for (i = 0; i < TAG_COUNT; ++i) {
+    const unsigned char *in = (const unsigned char *)sox_find_comment(ft->oob.comments, tags[i].name);
+    unsigned short *utf16;
+    char *latin1;
+    size_t n16 = 0, n1 = 0;
 
-  if ((comment = sox_find_comment(ft->oob.comments, "Discnumber")))
-  {
-    char* id3tag_buf = lsx_malloc(strlen(comment) + 6);
-    if (id3tag_buf)
-    {
-      sprintf(id3tag_buf, "TPOS=%s", comment);
-      p->id3tag_set_fieldvalue(p->gfp, id3tag_buf);
-      free(id3tag_buf);
+    /* An empty value is left out, as LAME's char* setters do, rather than
+       written as an empty ID3v2 frame. */
+    if (!in || !*in)
+      continue;
+
+    /* A UTF-8 sequence never yields more UTF-16 units than it has bytes;
+       the extra two units hold the byte order mark LAME requires and the
+       terminator. */
+    utf16 = lsx_malloc((strlen((const char *)in) + 2) * sizeof(*utf16));
+    latin1 = lsx_malloc(strlen((const char *)in) + 1);
+    utf16[n16++] = 0xfeff;
+    while (*in) {
+      unsigned long c = *in;
+      int more = c >= 0xf5 ? 0 : c >= 0xf0 ? 3 : c >= 0xe0 ? 2 : c >= 0xc2 ? 1 : 0;
+      int k;
+
+      /* A byte that does not start a well-formed sequence is taken as a
+         Latin-1 character, which keeps comments read from files that
+         predate UTF-8 legible. */
+      for (k = 1; k <= more && (in[k] & 0xc0) == 0x80; ++k);
+      if (more == 0 || k <= more) {
+        ++in;
+      } else {
+        c &= 0x3f >> more;
+        for (k = 1; k <= more; ++k)
+          c = (c << 6) | (in[k] & 0x3f);
+        in += more + 1;
+        if (c > 0x10ffff)
+          c = 0xfffd;
+      }
+      if (c >= 0x10000) {
+        utf16[n16++] = (unsigned short)(0xd800 + ((c - 0x10000) >> 10));
+        utf16[n16++] = (unsigned short)(0xdc00 + (c & 0x3ff));
+      } else {
+        utf16[n16++] = (unsigned short)c;
+      }
+      latin1[n1++] = c < 0x100 ? (char)c : '?';
     }
+    utf16[n16] = 0;
+    latin1[n1] = 0;
+
+    switch (i) {
+      case TITLE: p->id3tag_set_title(p->gfp, latin1); break;
+      case ARTIST: p->id3tag_set_artist(p->gfp, latin1); break;
+      case ALBUM: p->id3tag_set_album(p->gfp, latin1); break;
+      case TRACK: p->id3tag_set_track(p->gfp, latin1); break;
+      case YEAR: p->id3tag_set_year(p->gfp, latin1); break;
+      case COMMENT: p->id3tag_set_comment(p->gfp, latin1); break;
+      case GENRE:
+        if (p->id3tag_set_genre(p->gfp, latin1))
+          lsx_warn("\"%s\" is not a recognized ID3v1 genre.", latin1);
+        break;
+    }
+    if (i == COMMENT)
+      p->id3tag_set_comment_utf16(p->gfp, NULL, empty_desc, utf16);
+    else
+      p->id3tag_set_textinfo_utf16(p->gfp, tags[i].frame_id, utf16);
+
+    free(utf16);
+    free(latin1);
   }
 }
 

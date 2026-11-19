@@ -65,6 +65,8 @@ ENABLE_ID3TAG=ON
 ENABLE_PNG=ON
 ENABLE_MAGIC=ON
 ENABLE_FFMPEG=ON
+ENABLE_APE=ON
+ENABLE_MUSEPACK=ON
 # Off by default: unlike the Windows script, which requires VULKAN_SDK up front,
 # a Unix host is not guaranteed to provide a loader, glslang and glslc.  Opt in
 # with --vulkan once those are installed.
@@ -105,8 +107,6 @@ LIBOGG_VERSION="1.3.5"
 LIBVORBIS_VERSION="1.3.7"
 FLAC_VERSION="1.4.3"
 OPUS_VERSION="1.5.2"
-OPUSFILE_VERSION="0.12"
-LIBOPUSENC_VERSION="0.3"
 LIBMAD_VERSION="0.15.1b"
 LAME_VERSION="3.100"
 TWOLAME_VERSION="0.4.0"
@@ -118,6 +118,13 @@ FILE_VERSION="5.45"
 LIBTOOL_VERSION="2.4.7"
 LIBAO_VERSION="1.2.2"
 FFMPEG_VERSION="8.1.2"
+# Monkey's Audio SDK and Musepack publish no checksums of their own: these are
+# the digests of the archives SoX's APE and Musepack support was verified
+# with, kept identical to the ones in build_static_libs.ps1.
+MAC_SDK_VERSION="13.47"
+MAC_SDK_SHA256="6aec852ecf38ef91c0b323b83356f16cc6d485f1cc7a338151e60995a87e8166"
+MUSEPACK_VERSION="r475"
+MUSEPACK_SHA256="a4b1742f997f83e1056142d556a8c20845ba764b70365ff9ccf2e3f81c427b2b"
 VKFFT_VERSION="1.3.4"
 # VkFFT ships no release tarball checksum of its own; this is the digest of the
 # GitHub-generated archive for the tag above, kept identical to the one pinned
@@ -214,6 +221,27 @@ extract_archive() {
     esac
 }
 
+# Stops the build unless the archive has the expected SHA-256 digest.
+verify_sha256() {
+    local archive="$1"
+    local expected="$2"
+    local actual
+
+    if command -v sha256sum &> /dev/null; then
+        actual="$(sha256sum "$archive" | cut -d' ' -f1)"
+    elif command -v shasum &> /dev/null; then
+        actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+    else
+        log_error "Neither sha256sum nor shasum found; cannot verify $(basename "$archive")"
+        exit 1
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        log_error "$(basename "$archive") checksum mismatch: ${actual}"
+        exit 1
+    fi
+}
+
 # Common configure flags for static libraries
 get_common_flags() {
     echo "--prefix=${STATIC_LIBS_DIR} --disable-shared --enable-static"
@@ -221,7 +249,9 @@ get_common_flags() {
 
 verify_static_dependencies() {
     local binary="$1"
-    local forbidden='(avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao)'
+    # stdc++ because the C++ runtime (Monkey's Audio SDK, Vulkan backend) is
+    # linked statically on Linux, like the codec libraries themselves.
+    local forbidden='(avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|libMAC|mpcdec|mpcenc|mpcpsy|stdc\+\+|opencore-amr|png|magic|libao)'
 
     log_info "Verifying that codec dependencies are statically linked..."
 
@@ -285,23 +315,9 @@ install_vkfft() {
     local url="https://github.com/DTolm/VkFFT/archive/refs/tags/v${VKFFT_VERSION}.tar.gz"
     local archive="${DOWNLOAD_DIR}/VkFFT-${VKFFT_VERSION}.tar.gz"
     local src="${SRC_DIR}/VkFFT-${VKFFT_VERSION}"
-    local actual
 
     download_file "$url" "$archive"
-
-    if command -v sha256sum &> /dev/null; then
-        actual="$(sha256sum "$archive" | cut -d' ' -f1)"
-    elif command -v shasum &> /dev/null; then
-        actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
-    else
-        log_error "Neither sha256sum nor shasum found; cannot verify VkFFT"
-        exit 1
-    fi
-
-    if [ "$actual" != "${VKFFT_SHA256}" ]; then
-        log_error "VkFFT archive checksum mismatch: ${actual}"
-        exit 1
-    fi
+    verify_sha256 "$archive" "${VKFFT_SHA256}"
 
     if [ ! -d "$src" ]; then
         extract_archive "$archive" "$SRC_DIR"
@@ -473,61 +489,13 @@ build_opus() {
     log_success "opus installed"
 }
 
-build_opusfile() {
-    log_info "========== Building opusfile ${OPUSFILE_VERSION} =========="
-
-    local url="https://github.com/xiph/opusfile/releases/download/v${OPUSFILE_VERSION}/opusfile-${OPUSFILE_VERSION}.tar.gz"
-    local archive="${DOWNLOAD_DIR}/opusfile-${OPUSFILE_VERSION}.tar.gz"
-    local src="${SRC_DIR}/opusfile-${OPUSFILE_VERSION}"
-
-    download_file "$url" "$archive"
-
-    if [ ! -d "$src" ]; then
-        extract_archive "$archive" "$SRC_DIR"
-    fi
-
-    cd "$src"
-
-    ./configure $(get_common_flags) \
-        --disable-http \
-        --disable-doc \
-        PKG_CONFIG_PATH="${STATIC_LIBS_DIR}/lib/pkgconfig"
-
-    make -j${JOBS}
-    make install
-
-    log_success "opusfile installed"
-}
-
-build_libopusenc() {
-    log_info "========== Building libopusenc ${LIBOPUSENC_VERSION} =========="
-
-    local url="https://github.com/xiph/libopusenc/releases/download/v${LIBOPUSENC_VERSION}/libopusenc-${LIBOPUSENC_VERSION}.tar.gz"
-    local archive="${DOWNLOAD_DIR}/libopusenc-${LIBOPUSENC_VERSION}.tar.gz"
-    local src="${SRC_DIR}/libopusenc-${LIBOPUSENC_VERSION}"
-
-    download_file "$url" "$archive"
-
-    if [ ! -d "$src" ]; then
-        extract_archive "$archive" "$SRC_DIR"
-    fi
-
-    cd "$src"
-
-    ./configure $(get_common_flags) --disable-examples PKG_CONFIG_PATH="${STATIC_LIBS_DIR}/lib/pkgconfig"
-
-    make -j${JOBS}
-    make install
-
-    log_success "libopusenc installed"
-}
-
 # FFmpeg is built --disable-everything and then opted back in, one component
-# at a time, because SoX uses a fixed and small set: the codecs behind aac.c,
-# ac3.c, eac3.c, alac.c, dts.c, mlp.c, truehd.c and usac.c, plus the mov
-# demuxer and ipod muxer alac.c needs.  A default FFmpeg build would be an
-# order of magnitude larger for nothing, and every enabled decoder is one more
-# thing linked into a static executable.
+# at a time, because SoX uses a fixed and small set: libavcodec's AAC, ALAC,
+# AC-3, E-AC-3, DTS, MLP and TrueHD codecs behind codec-ffmpeg.c, plus the
+# parsers the raw aac, latm, ac3, eac3, dts, mlp and truehd handlers frame
+# their input with.  The containers are SoX's own, so libavformat is not built.
+# A default FFmpeg build would be an order of magnitude larger for nothing, and
+# every enabled decoder is one more thing linked into a static executable.
 #
 # The BSDs need gmake: FFmpeg's generated makefiles use GNU extensions.
 build_ffmpeg() {
@@ -571,7 +539,7 @@ build_ffmpeg() {
         --disable-autodetect \
         --disable-everything \
         --enable-avcodec \
-        --enable-avformat \
+        --disable-avformat \
         --enable-avutil \
         --disable-swresample \
         --disable-avdevice \
@@ -579,10 +547,7 @@ build_ffmpeg() {
         --disable-swscale \
         --enable-decoder=aac,aac_latm,alac,ac3,eac3,dca,mlp,truehd \
         --enable-encoder=aac,alac,ac3,eac3,dca,mlp,truehd \
-        --enable-parser=aac,aac_latm,ac3,dca,mlp \
-        --enable-demuxer=mov \
-        --enable-muxer=ipod \
-        --enable-protocol=file
+        --enable-parser=aac,aac_latm,ac3,dca,mlp
 
     "${make_command}" -j"${JOBS}"
     "${make_command}" install
@@ -773,6 +738,146 @@ build_wavpack() {
     log_success "WavPack installed"
 }
 
+# Monkey's Audio SDK: libMAC, the C++ library SoX reads and writes APE with.
+#
+# The zip has no top-level directory, so it is unpacked into one of its own.
+# Two files are dropped from the build.  MD5.cpp is RSA's reference MD5, under
+# a licence of its own; SoX defines the three MD5 functions the library calls
+# itself.  MACDll.cpp is the C interface of the SDK's DLL, which SoX does not
+# use, and under MSVC it includes MFC.  The frame decoder and encoder SoX uses are declared in headers the SDK does
+# not install, so all of them are copied beside the public ones.
+build_monkeys_audio() {
+    log_info "========== Building Monkey's Audio SDK ${MAC_SDK_VERSION} =========="
+
+    local archive_name="MAC_${MAC_SDK_VERSION//./}_SDK.zip"
+    local url="https://monkeysaudio.com/files/${archive_name}"
+    local archive="${DOWNLOAD_DIR}/${archive_name}"
+    local src="${SRC_DIR}/MAC_SDK-${MAC_SDK_VERSION}"
+
+    download_file "$url" "$archive"
+    verify_sha256 "$archive" "${MAC_SDK_SHA256}"
+
+    if [ ! -d "$src" ]; then
+        mkdir -p "$src"
+        extract_archive "$archive" "$src"
+    fi
+
+    cd "$src"
+
+    sed -i.bak -e '/Source\/MACLib\/MD5\.cpp/d' -e '/Source\/MACDll\/MACDll\.cpp/d' CMakeLists.txt
+    if grep -Eq 'MACLib/MD5\.cpp|MACDll/MACDll\.cpp' CMakeLists.txt; then
+        log_error "Could not remove MD5.cpp and MACDll.cpp from the Monkey's Audio SDK build"
+        exit 1
+    fi
+
+    mkdir -p build && cd build
+
+    cmake .. $(get_cmake_flags) \
+        -DBUILD_SHARED=OFF \
+        -DBUILD_UTIL=OFF
+
+    make -j${JOBS}
+    make install
+
+    mkdir -p "${STATIC_LIBS_DIR}/include/MAC"
+    cp "${src}"/Source/Shared/*.h "${src}"/Source/MACLib/*.h "${STATIC_LIBS_DIR}/include/MAC/"
+
+    log_success "Monkey's Audio SDK installed"
+}
+
+# The CMakeLists build_musepack compiles libmpcdec, libmpcenc and libmpcpsy
+# with.  Upstream's own also configures the command-line tools, which need
+# libreplaygain and libcuefile, and libcuefile r475 no longer compiles with a
+# current clang.  The flags are upstream's: FAST_MATH and CVD_FASTLOG, which
+# SoX's encoder is compiled to match.  build_static_libs.ps1 writes the same.
+write_musepack_cmakelists() {
+    cat <<'EOF'
+cmake_minimum_required(VERSION 3.15)
+project(musepack C)
+
+set(MPC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+add_compile_definitions(FAST_MATH CVD_FASTLOG)
+if(MSVC)
+    add_compile_definitions(_CRT_SECURE_NO_DEPRECATE)
+else()
+    # The sources predate two GCC defaults.  requant.h declares its tables
+    # without extern, which links only with common symbols (GCC 10 stopped
+    # making them).  libmpcpsy's ans.c passes an int * where a
+    # const int (*)[3] is declared, which GCC 14 made an error.
+    add_compile_options(-fomit-frame-pointer -fcommon -Wno-error=incompatible-pointer-types)
+endif()
+include_directories("${MPC_ROOT}/include")
+
+add_library(mpcdec STATIC
+    ${MPC_ROOT}/libmpcdec/huffman.c
+    ${MPC_ROOT}/libmpcdec/mpc_decoder.c
+    ${MPC_ROOT}/libmpcdec/mpc_reader.c
+    ${MPC_ROOT}/libmpcdec/streaminfo.c
+    ${MPC_ROOT}/libmpcdec/mpc_bits_reader.c
+    ${MPC_ROOT}/libmpcdec/mpc_demux.c
+    ${MPC_ROOT}/libmpcdec/requant.c
+    ${MPC_ROOT}/libmpcdec/synth_filter.c
+    ${MPC_ROOT}/common/crc32.c
+)
+
+add_library(mpcenc STATIC
+    ${MPC_ROOT}/libmpcenc/analy_filter.c
+    ${MPC_ROOT}/libmpcenc/bitstream.c
+    ${MPC_ROOT}/libmpcenc/encode_sv7.c
+    ${MPC_ROOT}/libmpcenc/huffsv7.c
+    ${MPC_ROOT}/libmpcenc/quant.c
+    ${MPC_ROOT}/common/crc32.c
+)
+
+add_library(mpcpsy STATIC
+    ${MPC_ROOT}/libmpcpsy/ans.c
+    ${MPC_ROOT}/libmpcpsy/cvd.c
+    ${MPC_ROOT}/libmpcpsy/fft4g.c
+    ${MPC_ROOT}/libmpcpsy/fft_routines.c
+    ${MPC_ROOT}/libmpcpsy/profile.c
+    ${MPC_ROOT}/libmpcpsy/psy.c
+    ${MPC_ROOT}/libmpcpsy/psy_tab.c
+    ${MPC_ROOT}/common/fastmath.c
+)
+
+install(TARGETS mpcdec mpcenc mpcpsy ARCHIVE DESTINATION lib)
+file(GLOB MPC_HEADERS "${MPC_ROOT}/include/mpc/*.h")
+install(FILES ${MPC_HEADERS}
+    "${MPC_ROOT}/libmpcenc/libmpcenc.h"
+    "${MPC_ROOT}/libmpcpsy/libmpcpsy.h"
+    DESTINATION include/mpc)
+EOF
+}
+
+# Musepack: libmpcdec reads SV7 and SV8, libmpcenc and libmpcpsy write SV8.
+build_musepack() {
+    log_info "========== Building Musepack ${MUSEPACK_VERSION} =========="
+
+    local url="https://files.musepack.net/source/musepack_src_${MUSEPACK_VERSION}.tar.gz"
+    local archive="${DOWNLOAD_DIR}/musepack_src_${MUSEPACK_VERSION}.tar.gz"
+    local src="${SRC_DIR}/musepack_src_${MUSEPACK_VERSION}"
+    local libraries="${src}/sox-libraries"
+
+    download_file "$url" "$archive"
+    verify_sha256 "$archive" "${MUSEPACK_SHA256}"
+
+    if [ ! -d "$src" ]; then
+        extract_archive "$archive" "$SRC_DIR"
+    fi
+
+    mkdir -p "${libraries}/build"
+    write_musepack_cmakelists > "${libraries}/CMakeLists.txt"
+    cd "${libraries}/build"
+
+    cmake .. $(get_cmake_flags)
+
+    make -j${JOBS}
+    make install
+
+    log_success "Musepack installed"
+}
+
 build_libsndfile() {
     log_info "========== Building libsndfile ${LIBSNDFILE_VERSION} =========="
 
@@ -945,7 +1050,10 @@ show_help() {
     echo "  --no-id3tag           Exclude ID3 tag support"
     echo "  --no-png              Exclude PNG spectrogram support"
     echo "  --no-magic            Exclude file type detection (libmagic)"
-    echo "  --no-ffmpeg           Exclude FFmpeg codec and container support"
+    echo "  --no-ffmpeg           Exclude FFmpeg codec support (AAC, ALAC, AC-3,"
+    echo "                        E-AC-3, DTS, MLP, TrueHD)"
+    echo "  --no-ape              Exclude Monkey's Audio support (Monkey's Audio SDK)"
+    echo "  --no-musepack         Exclude Musepack support (libmpcdec, libmpcenc)"
     echo "  --vulkan              Enable the Vulkan FIR/DSD backend (needs a"
     echo "                        Vulkan loader, glslc and glslang headers)"
     echo "  --no-vulkan           Disable the Vulkan FIR/DSD backend (default)"
@@ -1061,6 +1169,14 @@ main() {
                 ENABLE_FFMPEG=OFF
                 shift
                 ;;
+            --no-ape)
+                ENABLE_APE=OFF
+                shift
+                ;;
+            --no-musepack)
+                ENABLE_MUSEPACK=OFF
+                shift
+                ;;
             # Audio driver options
             --no-alsa)
                 ENABLE_ALSA=OFF
@@ -1111,6 +1227,9 @@ main() {
     check_command "cmake"
     check_command "pkg-config"
     check_command "tar"
+    if [ "${ENABLE_APE}" = "ON" ]; then
+        check_command "unzip"
+    fi
     if [ "${ENABLE_AO}" = "ON" ]; then
         check_command "autoreconf"
     fi
@@ -1147,6 +1266,8 @@ main() {
     echo "    PNG:        ${ENABLE_PNG}"
     echo "    Magic:      ${ENABLE_MAGIC}"
     echo "    FFmpeg:     ${ENABLE_FFMPEG}"
+    echo "    APE:        ${ENABLE_APE}"
+    echo "    Musepack:   ${ENABLE_MUSEPACK}"
     echo "    Vulkan:     ${ENABLE_VULKAN}"
     echo "  Audio Drivers:"
     echo "    ALSA:       ${ENABLE_ALSA}"
@@ -1182,12 +1303,18 @@ main() {
 
     if [ "${ENABLE_OPUS}" = "ON" ]; then
         build_opus
-        build_opusfile
-        build_libopusenc
     fi
 
     if [ "${ENABLE_FFMPEG}" = "ON" ]; then
         build_ffmpeg
+    fi
+
+    if [ "${ENABLE_APE}" = "ON" ]; then
+        build_monkeys_audio
+    fi
+
+    if [ "${ENABLE_MUSEPACK}" = "ON" ]; then
+        build_musepack
     fi
 
     if [ "${ENABLE_MP3}" = "ON" ]; then
@@ -1266,6 +1393,15 @@ main() {
         )
     fi
 
+    # The Monkey's Audio SDK and the Vulkan backend are C++.  On Linux the C++
+    # runtime is linked statically, like the codec libraries, so the binary does
+    # not depend on the host's libstdc++ version; macOS links the system libc++,
+    # which every release has.
+    CXX_RUNTIME_CMAKE_ARGS=()
+    if [ "${PLATFORM}" = "Linux" ] && { [ "${ENABLE_APE}" = "ON" ] || [ "${ENABLE_VULKAN}" = "ON" ]; }; then
+        CXX_RUNTIME_CMAKE_ARGS+=("-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc")
+    fi
+
     mkdir -p "${SOX_BUILD_DIR}"
     cd "${SOX_BUILD_DIR}"
 
@@ -1276,7 +1412,9 @@ main() {
         -DCMAKE_PREFIX_PATH="${STATIC_LIBS_DIR}" \
         -DSTATIC_LIBS_DIR="${STATIC_LIBS_DIR}" \
         -DWITH_FFMPEG_CODECS=${ENABLE_FFMPEG} \
-        -DWITH_FFMPEG_FORMATS=${ENABLE_FFMPEG} \
+        -DWITH_APE=${ENABLE_APE} \
+        -DWITH_MUSEPACK=${ENABLE_MUSEPACK} \
+        "${CXX_RUNTIME_CMAKE_ARGS[@]}" \
         -DWITH_ALSA=${ENABLE_ALSA} \
         -DWITH_COREAUDIO=${ENABLE_COREAUDIO} \
         -DWITH_OSS=${ENABLE_OSS} \

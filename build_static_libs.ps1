@@ -24,6 +24,8 @@ param(
     [switch]$NoId3tag,
     [switch]$NoPng,
     [switch]$NoFfmpeg,
+    [switch]$NoApe,
+    [switch]$NoMusepack,
 
     # Optional acceleration backend (disabled by default)
     [switch]$Vulkan,
@@ -57,6 +59,8 @@ $EnableSndfile = -not $NoSndfile
 $EnableId3tag = -not $NoId3tag
 $EnablePng = -not $NoPng
 $EnableFfmpeg = -not $NoFfmpeg
+$EnableApe = -not $NoApe
+$EnableMusepack = -not $NoMusepack
 $EnableVulkan = $Vulkan
 
 # ------------------------------------------------------------------------------
@@ -73,8 +77,6 @@ $Versions = @{
     libvorbis = "1.3.7"
     flac = "1.4.3"
     opus = "1.5.2"
-    opusfile = "0.12"
-    libopusenc = "0.3"
     lame = "3.100"
     twolame = "0.4.0"
     wavpack = "5.7.0"
@@ -82,6 +84,8 @@ $Versions = @{
     libmad = "0.15.1b"
     libid3tag = "0.15.1b"
     ffmpeg = "8.1.2"
+    mac = "13.47"
+    musepack = "r475"
     vkfft = "1.3.4"
 }
 
@@ -318,6 +322,14 @@ function Extract-Archive($archive, $dest) {
     }
 }
 
+# Stops the build unless the archive has the expected SHA-256 digest.
+function Test-Sha256($archive, $expected) {
+    $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "$(Split-Path -Leaf $archive) checksum mismatch: $actual"
+    }
+}
+
 function Get-CMakeFlags {
     return @(
         "-DCMAKE_INSTALL_PREFIX=$StaticLibsDir"
@@ -367,10 +379,7 @@ function Install-VkFFT {
     $expectedSha256 = "b61055393adb3adc79009fe12401cbfbbdfba584e665e9c35fcbf4b32fb31f30"
 
     Download-File $url $archive
-    $actualSha256 = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualSha256 -ne $expectedSha256) {
-        throw "VkFFT archive checksum mismatch: $actualSha256"
-    }
+    Test-Sha256 $archive $expectedSha256
 
     if (-not (Test-Path $src)) {
         Extract-Archive $archive $SrcDir
@@ -517,140 +526,6 @@ function Build-Opus {
     )
 
     Write-Success "opus installed"
-}
-
-function Build-Opusfile {
-    Write-Info "========== Building opusfile $($Versions.opusfile) =========="
-
-    $url = "https://github.com/xiph/opusfile/releases/download/v$($Versions.opusfile)/opusfile-$($Versions.opusfile).tar.gz"
-    $archive = Join-Path $DownloadDir "opusfile-$($Versions.opusfile).tar.gz"
-    $src = Join-Path $SrcDir "opusfile-$($Versions.opusfile)"
-
-    Download-File $url $archive
-
-    if (-not (Test-Path $src)) {
-        Extract-Archive $archive $SrcDir
-    }
-
-    # opusfile doesn't have CMake, we need to create a CMakeLists.txt
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-
-    # Always recreate to ensure correct version
-    $cmakeContent = @"
-cmake_minimum_required(VERSION 3.14)
-project(opusfile C)
-
-# Find opus and ogg from static_libs
-find_path(OPUS_INCLUDE_DIR opus/opus.h)
-find_library(OPUS_LIBRARY opus)
-find_path(OGG_INCLUDE_DIR ogg/ogg.h)
-find_library(OGG_LIBRARY ogg)
-
-add_library(opusfile STATIC
-    src/info.c
-    src/internal.c
-    src/opusfile.c
-    src/stream.c
-)
-
-# Include opus headers directly (opusfile expects opus/*.h in include path)
-target_include_directories(opusfile PUBLIC
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/include>
-    `$<INSTALL_INTERFACE:include>
-)
-
-target_include_directories(opusfile PRIVATE
-    `${OPUS_INCLUDE_DIR}
-    `${OPUS_INCLUDE_DIR}/opus
-    `${OGG_INCLUDE_DIR}
-)
-
-target_link_libraries(opusfile PUBLIC `${OPUS_LIBRARY} `${OGG_LIBRARY})
-
-target_compile_definitions(opusfile PRIVATE
-    _CRT_SECURE_NO_WARNINGS
-)
-
-if(MSVC)
-    target_compile_options(opusfile PRIVATE /wd4244 /wd4267)
-endif()
-
-install(TARGETS opusfile ARCHIVE DESTINATION lib)
-install(FILES include/opusfile.h DESTINATION include/opus)
-"@
-    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
-
-    Build-CMakeProject $src
-
-    Write-Success "opusfile installed"
-}
-
-function Build-Libopusenc {
-    Write-Info "========== Building libopusenc $($Versions.libopusenc) =========="
-
-    $url = "https://github.com/xiph/libopusenc/releases/download/v$($Versions.libopusenc)/libopusenc-$($Versions.libopusenc).tar.gz"
-    $archive = Join-Path $DownloadDir "libopusenc-$($Versions.libopusenc).tar.gz"
-    $src = Join-Path $SrcDir "libopusenc-$($Versions.libopusenc)"
-
-    Download-File $url $archive
-
-    if (-not (Test-Path $src)) {
-        Extract-Archive $archive $SrcDir
-    }
-
-    # libopusenc doesn't provide CMake, so create a minimal static-library build.
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-    $cmakeContent = @"
-cmake_minimum_required(VERSION 3.14)
-project(libopusenc C)
-
-find_path(OPUS_INCLUDE_DIR opus/opus.h)
-find_library(OPUS_LIBRARY opus)
-
-add_library(opusenc STATIC
-    src/ogg_packer.c
-    src/opus_header.c
-    src/opusenc.c
-    src/picture.c
-    src/resample.c
-    src/unicode_support.c
-)
-
-target_include_directories(opusenc PUBLIC
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/include>
-    `$<INSTALL_INTERFACE:include/opus>
-)
-
-target_include_directories(opusenc PRIVATE
-    `${CMAKE_CURRENT_SOURCE_DIR}/src
-    `${OPUS_INCLUDE_DIR}
-    `${OPUS_INCLUDE_DIR}/opus
-)
-
-target_link_libraries(opusenc PUBLIC `${OPUS_LIBRARY})
-
-target_compile_definitions(opusenc PRIVATE
-    OPE_BUILD
-    OUTSIDE_SPEEX
-    RANDOM_PREFIX=libopusenc
-    RESAMPLE_FULL_SINC_TABLE=1
-    PACKAGE_NAME="libopusenc"
-    PACKAGE_VERSION="$($Versions.libopusenc)"
-    _CRT_SECURE_NO_WARNINGS
-)
-
-if(MSVC)
-    target_compile_options(opusenc PRIVATE /wd4244 /wd4267)
-endif()
-
-install(TARGETS opusenc ARCHIVE DESTINATION lib)
-install(FILES include/opusenc.h DESTINATION include/opus)
-"@
-    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
-
-    Build-CMakeProject $src
-
-    Write-Success "libopusenc installed"
 }
 
 function Build-Libmad {
@@ -1056,6 +931,139 @@ function Build-Wavpack {
     Write-Success "WavPack installed"
 }
 
+# Monkey's Audio SDK: libMAC, the C++ library SoX reads and writes APE with.
+#
+# The zip has no top-level directory, so it is unpacked into one of its own.
+# Two files are dropped from the build. MD5.cpp is RSA's reference MD5, under
+# a licence of its own; SoX defines the three MD5 functions the library calls
+# itself. MACDll.cpp is the C interface of the SDK's DLL, which SoX does not
+# use, and under MSVC it includes MFC. The frame decoder and encoder SoX uses are declared in headers the SDK does
+# not install, so all of them are copied beside the public ones. The C++
+# runtime is the static one every other library here uses (Get-CMakeFlags).
+function Build-MonkeysAudio {
+    Write-Info "========== Building Monkey's Audio SDK $($Versions.mac) =========="
+
+    $archiveName = "MAC_$($Versions.mac.Replace('.', ''))_SDK.zip"
+    $url = "https://monkeysaudio.com/files/$archiveName"
+    $archive = Join-Path $DownloadDir $archiveName
+    $src = Join-Path $SrcDir "MAC_SDK-$($Versions.mac)"
+    $expectedSha256 = "6aec852ecf38ef91c0b323b83356f16cc6d485f1cc7a338151e60995a87e8166"
+
+    Download-File $url $archive
+    Test-Sha256 $archive $expectedSha256
+
+    if (-not (Test-Path $src)) {
+        Extract-Archive $archive $src
+    }
+
+    $cmakeFile = Join-Path $src "CMakeLists.txt"
+    $cmakeLines = (Get-Content -LiteralPath $cmakeFile) -notmatch 'Source/MACLib/MD5\.cpp|Source/MACDll/MACDll\.cpp'
+    Set-Content -LiteralPath $cmakeFile -Value $cmakeLines
+    if (Select-String -LiteralPath $cmakeFile -Pattern 'MACLib/MD5\.cpp|MACDll/MACDll\.cpp' -Quiet) {
+        throw "Could not remove MD5.cpp and MACDll.cpp from the Monkey's Audio SDK build"
+    }
+
+    Build-CMakeProject $src @(
+        "-DBUILD_SHARED=OFF"
+        "-DBUILD_UTIL=OFF"
+    )
+
+    $headerDir = Join-Path $StaticLibsDir "include\MAC"
+    New-Item -ItemType Directory -Path $headerDir -Force | Out-Null
+    Copy-Item (Join-Path $src "Source\Shared\*.h") $headerDir -Force
+    Copy-Item (Join-Path $src "Source\MACLib\*.h") $headerDir -Force
+
+    Write-Success "Monkey's Audio SDK installed"
+}
+
+# Musepack: libmpcdec reads SV7 and SV8, libmpcenc and libmpcpsy write SV8.
+#
+# Only the three libraries are compiled, from a CMakeLists of our own beside
+# the sources. Upstream's also configures the command-line tools, which need
+# libreplaygain and libcuefile, and libcuefile r475 no longer compiles with a
+# current clang. The flags are upstream's: FAST_MATH and CVD_FASTLOG, which
+# SoX's encoder is compiled to match. build_static_libs.sh writes the same.
+function Build-Musepack {
+    Write-Info "========== Building Musepack $($Versions.musepack) =========="
+
+    $url = "https://files.musepack.net/source/musepack_src_$($Versions.musepack).tar.gz"
+    $archive = Join-Path $DownloadDir "musepack_src_$($Versions.musepack).tar.gz"
+    $src = Join-Path $SrcDir "musepack_src_$($Versions.musepack)"
+    $libraries = Join-Path $src "sox-libraries"
+    $expectedSha256 = "a4b1742f997f83e1056142d556a8c20845ba764b70365ff9ccf2e3f81c427b2b"
+
+    Download-File $url $archive
+    Test-Sha256 $archive $expectedSha256
+
+    if (-not (Test-Path $src)) {
+        Extract-Archive $archive $SrcDir
+    }
+
+    New-Item -ItemType Directory -Path $libraries -Force | Out-Null
+    $cmakeContent = @'
+cmake_minimum_required(VERSION 3.15)
+project(musepack C)
+
+set(MPC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+add_compile_definitions(FAST_MATH CVD_FASTLOG)
+if(MSVC)
+    add_compile_definitions(_CRT_SECURE_NO_DEPRECATE)
+else()
+    # The sources predate two GCC defaults.  requant.h declares its tables
+    # without extern, which links only with common symbols (GCC 10 stopped
+    # making them).  libmpcpsy's ans.c passes an int * where a
+    # const int (*)[3] is declared, which GCC 14 made an error.
+    add_compile_options(-fomit-frame-pointer -fcommon -Wno-error=incompatible-pointer-types)
+endif()
+include_directories("${MPC_ROOT}/include")
+
+add_library(mpcdec STATIC
+    ${MPC_ROOT}/libmpcdec/huffman.c
+    ${MPC_ROOT}/libmpcdec/mpc_decoder.c
+    ${MPC_ROOT}/libmpcdec/mpc_reader.c
+    ${MPC_ROOT}/libmpcdec/streaminfo.c
+    ${MPC_ROOT}/libmpcdec/mpc_bits_reader.c
+    ${MPC_ROOT}/libmpcdec/mpc_demux.c
+    ${MPC_ROOT}/libmpcdec/requant.c
+    ${MPC_ROOT}/libmpcdec/synth_filter.c
+    ${MPC_ROOT}/common/crc32.c
+)
+
+add_library(mpcenc STATIC
+    ${MPC_ROOT}/libmpcenc/analy_filter.c
+    ${MPC_ROOT}/libmpcenc/bitstream.c
+    ${MPC_ROOT}/libmpcenc/encode_sv7.c
+    ${MPC_ROOT}/libmpcenc/huffsv7.c
+    ${MPC_ROOT}/libmpcenc/quant.c
+    ${MPC_ROOT}/common/crc32.c
+)
+
+add_library(mpcpsy STATIC
+    ${MPC_ROOT}/libmpcpsy/ans.c
+    ${MPC_ROOT}/libmpcpsy/cvd.c
+    ${MPC_ROOT}/libmpcpsy/fft4g.c
+    ${MPC_ROOT}/libmpcpsy/fft_routines.c
+    ${MPC_ROOT}/libmpcpsy/profile.c
+    ${MPC_ROOT}/libmpcpsy/psy.c
+    ${MPC_ROOT}/libmpcpsy/psy_tab.c
+    ${MPC_ROOT}/common/fastmath.c
+)
+
+install(TARGETS mpcdec mpcenc mpcpsy ARCHIVE DESTINATION lib)
+file(GLOB MPC_HEADERS "${MPC_ROOT}/include/mpc/*.h")
+install(FILES ${MPC_HEADERS}
+    "${MPC_ROOT}/libmpcenc/libmpcenc.h"
+    "${MPC_ROOT}/libmpcpsy/libmpcpsy.h"
+    DESTINATION include/mpc)
+'@
+    Set-Content -Path (Join-Path $libraries "CMakeLists.txt") -Value $cmakeContent -Force
+
+    Build-CMakeProject $libraries
+
+    Write-Success "Musepack installed"
+}
+
 function Build-Libsndfile {
     Write-Info "========== Building libsndfile $($Versions.libsndfile) =========="
 
@@ -1162,7 +1170,8 @@ function Patch-FfmpegMsvcEmptyCbsTable($src) {
 # script text so that a path containing a space or a quote cannot break it.
 #
 # The component selection matches build_static_libs.sh exactly; the two must
-# stay in step, since they produce the same library for the same SoX sources.
+# stay in step, since they produce the same library for the same SoX sources:
+# libavcodec's codecs and parsers only, since the containers are SoX's own.
 function Build-Ffmpeg {
     Write-Info "========== Building FFmpeg $($Versions.ffmpeg) =========="
 
@@ -1229,7 +1238,7 @@ cd "$build"
   --disable-autodetect \
   --disable-everything \
   --enable-avcodec \
-  --enable-avformat \
+  --disable-avformat \
   --enable-avutil \
   --disable-swresample \
   --disable-avdevice \
@@ -1238,9 +1247,6 @@ cd "$build"
   --enable-decoder=aac,aac_latm,alac,ac3,eac3,dca,mlp,truehd \
   --enable-encoder=aac,alac,ac3,eac3,dca,mlp,truehd \
   --enable-parser=aac,aac_latm,ac3,dca,mlp \
-  --enable-demuxer=mov \
-  --enable-muxer=ipod \
-  --enable-protocol=file \
   "$@"
 make -j"$SOX_BUILD_JOBS"
 make install
@@ -1286,7 +1292,7 @@ function Test-StaticDependencies($binary) {
     # while the codec libraries that must not appear are exactly the ones this
     # script builds. msys- catches an FFmpeg accidentally linked against the
     # MSYS2 runtime, which would run here and nowhere else.
-    $forbidden = "avcodec|avformat|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|opencore-amr|png|magic|libao|msys-"
+    $forbidden = "avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|mp3lame|twolame|wavpack|MACDll|libMAC|mpcdec|mpcenc|mpcpsy|opencore-amr|png|magic|libao|msys-"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {
         throw "Unexpected dynamic dependency detected:`n$($unexpected -join [Environment]::NewLine)"
@@ -1348,7 +1354,10 @@ function Show-Help {
     Write-Host "  -NoSndfile          Exclude libsndfile support"
     Write-Host "  -NoId3tag           Exclude ID3 tag support"
     Write-Host "  -NoPng              Exclude PNG spectrogram support"
-    Write-Host "  -NoFfmpeg           Exclude FFmpeg codec and container support"
+    Write-Host "  -NoFfmpeg           Exclude FFmpeg codec support (AAC, ALAC, AC-3,"
+    Write-Host "                      E-AC-3, DTS, MLP, TrueHD)"
+    Write-Host "  -NoApe              Exclude Monkey's Audio support (Monkey's Audio SDK)"
+    Write-Host "  -NoMusepack         Exclude Musepack support (libmpcdec, libmpcenc)"
     Write-Host ""
     Write-Host "Vulkan Backend (disabled by default):"
     Write-Host "  -Vulkan             Enable the Vulkan rate, FIR, and DSD backends"
@@ -1459,6 +1468,8 @@ function Main {
     Write-Host "    ID3 Tag:    $EnableId3tag"
     Write-Host "    PNG:        $EnablePng"
     Write-Host "    FFmpeg:     $EnableFfmpeg"
+    Write-Host "    APE:        $EnableApe"
+    Write-Host "    Musepack:   $EnableMusepack"
     Write-Host "  Acceleration:"
     Write-Host "    Vulkan DSD: $EnableVulkan"
     Write-Host "  Audio Drivers:"
@@ -1491,12 +1502,18 @@ function Main {
 
     if ($EnableOpus) {
         Build-Opus
-        Build-Opusfile
-        Build-Libopusenc
     }
 
     if ($EnableFfmpeg) {
         Build-Ffmpeg
+    }
+
+    if ($EnableApe) {
+        Build-MonkeysAudio
+    }
+
+    if ($EnableMusepack) {
+        Build-Musepack
     }
 
     if ($EnableMp3) {
@@ -1547,7 +1564,8 @@ function Main {
             "-DSOX_REQUIRE_OPENMP=ON"
             "-DWITH_VULKAN=$($EnableVulkan.ToString().ToUpperInvariant())"
             "-DWITH_FFMPEG_CODECS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
-            "-DWITH_FFMPEG_FORMATS=$($EnableFfmpeg.ToString().ToUpperInvariant())"
+            "-DWITH_APE=$($EnableApe.ToString().ToUpperInvariant())"
+            "-DWITH_MUSEPACK=$($EnableMusepack.ToString().ToUpperInvariant())"
         )
 
         # Add audio driver options

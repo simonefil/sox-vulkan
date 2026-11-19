@@ -168,11 +168,31 @@ static size_t leading_id3v2_size(unsigned char const * data, size_t length)
 }
 
 #ifdef HAVE_FFMPEG_FORMATS
-/* An MP4 file whose brands include M4A.  The leading atom is ftyp, holding a
- * major brand and then a list of compatible ones, four bytes each; both are
- * examined, since an M4A file often declares some other major brand and lists
- * M4A among the compatible ones.  The search is bounded by the atom's own
- * size as well as by what was read, so it cannot wander into the next atom.
+/* Whether a four-byte ftyp brand names an MP4 or QuickTime file that can
+ * carry audio.  M4A is only Apple's label for one; files written by other
+ * tools declare the generic ISO and MP4 brands instead. */
+static sox_bool is_mp4_audio_brand(unsigned char const * brand)
+{
+  static char const brands[][4] = {
+    {'M','4','A',' '}, {'M','4','B',' '}, {'M','4','P',' '},
+    {'i','s','o','m'}, {'i','s','o','2'}, {'i','s','o','4'},
+    {'i','s','o','5'}, {'i','s','o','6'},
+    {'m','p','4','1'}, {'m','p','4','2'}, {'q','t',' ',' '}
+  };
+  size_t i;
+
+  for (i = 0; i < array_length(brands); ++i)
+    if (!memcmp(brand, brands[i], 4))
+      return sox_true;
+  return sox_false;
+}
+
+/* An MP4 file with an audio-capable brand.  The leading atom is ftyp, holding
+ * a major brand and then a list of compatible ones, four bytes each; both are
+ * examined, since a file often declares some other major brand and lists a
+ * known one among the compatible ones.  The search is bounded by the atom's
+ * own size as well as by what was read, so it cannot wander into the next
+ * atom.
  *
  * Only ALAC is claimed here.  An MP4 carrying anything else matches too and
  * is then rejected when the container adapter finds no ALAC stream, which is
@@ -189,10 +209,10 @@ static sox_bool is_m4a_header(unsigned char const * data, size_t length)
   if (atom_size < 12)
     return sox_false;
   limit = min(atom_size, length);
-  if (!memcmp(data + 8, "M4A ", 4))
+  if (is_mp4_audio_brand(data + 8))
     return sox_true;
   for (position = 16; position + 4 <= limit; position += 4)
-    if (!memcmp(data + position, "M4A ", 4))
+    if (is_mp4_audio_brand(data + position))
       return sox_true;
   return sox_false;
 }

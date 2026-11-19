@@ -226,6 +226,7 @@ typedef struct mp3_priv_t {
   mad_timer_t             Timer;
   ptrdiff_t               cursamp;
   size_t                  FrameCount;
+  sox_bool                eof_guard;
   LSX_DLENTRIES_TO_PTRS(MAD_FUNC_ENTRIES, mad_dl);
 #endif /*HAVE_MAD_H*/
 
@@ -296,7 +297,19 @@ static int sox_mp3_input(sox_format_t * ft)
     size_t bytes_read;
     size_t remaining;
 
-    remaining = p->Stream.bufend - p->Stream.next_frame;
+    /* Once the guarded tail needs more input, EOF is final.  startread also
+     * calls us to replay a valid first frame, which still needs rebinding even
+     * if the guard was supplied while probing that frame. */
+    if (p->eof_guard && p->Stream.error == MAD_ERROR_BUFLEN)
+        return SOX_EOF;
+
+    remaining = p->Stream.next_frame ?
+        (size_t)(p->Stream.bufend - p->Stream.next_frame) : 0;
+    if (!p->eof_guard && (remaining > p->mp3_buffer_size ||
+        (remaining == p->mp3_buffer_size && p->Stream.error == MAD_ERROR_BUFLEN))) {
+        lsx_fail_errno(ft, SOX_EFMT, "MP3 frame exceeds input buffer");
+        return SOX_EOF;
+    }
 
     /* libmad does not consume all the buffer it's given. Some
      * data, part of a truncated frame, is left unused at the
@@ -308,16 +321,29 @@ static int sox_mp3_input(sox_format_t * ft)
      * TODO: Is 2016 bytes the size of the largest frame?
      * (448000*(1152/32000))/8
      */
-    memmove(p->mp3_buffer, p->Stream.next_frame, remaining);
+    if (remaining)
+        memmove(p->mp3_buffer, p->Stream.next_frame, remaining);
+    /* Never leave MAD pointing at the old offsets after moving its tail. */
+    p->mad_stream_buffer(&p->Stream, p->mp3_buffer, remaining);
 
-    bytes_read = lsx_readbuf(ft, p->mp3_buffer+remaining,
-                            p->mp3_buffer_size-remaining);
-    if (bytes_read == 0)
-    {
-        return SOX_EOF;
+    if (!p->eof_guard && remaining < p->mp3_buffer_size) {
+        bytes_read = lsx_readbuf(ft, p->mp3_buffer+remaining,
+                                p->mp3_buffer_size-remaining);
+        if (lsx_error(ft))
+            return SOX_EOF;
+        remaining += bytes_read;
+        if (lsx_eof(ft)) {
+            /* libmad requires readable lookahead beyond the last real frame.
+             * This storage is reserved separately from the input capacity. */
+            memset(p->mp3_buffer + remaining, 0, MAD_BUFFER_GUARD);
+            remaining += MAD_BUFFER_GUARD;
+            p->eof_guard = sox_true;
+        }
+        else if (bytes_read == 0)
+            return SOX_EOF;
     }
 
-    p->mad_stream_buffer(&p->Stream, p->mp3_buffer, bytes_read+remaining);
+    p->mad_stream_buffer(&p->Stream, p->mp3_buffer, remaining);
     p->Stream.error = 0;
 
     return SOX_SUCCESS;
@@ -398,7 +424,13 @@ static int startread(sox_format_t * ft)
     return SOX_EOF;
 
   p->mp3_buffer_size = sox_globals.bufsiz;
-  p->mp3_buffer = lsx_malloc(p->mp3_buffer_size);
+  if (!p->mp3_buffer_size || p->mp3_buffer_size > (size_t)-1 - MAD_BUFFER_GUARD) {
+    lsx_fail_errno(ft, SOX_ENOMEM, "Invalid MP3 input buffer size");
+    LSX_DLLIBRARY_CLOSE(p, mad_dl);
+    return SOX_EOF;
+  }
+  p->mp3_buffer = lsx_malloc(p->mp3_buffer_size + MAD_BUFFER_GUARD);
+  p->eof_guard = sox_false;
 
   ft->signal.length = SOX_UNSPEC;
   if (ft->seekable) {
@@ -424,7 +456,7 @@ static int startread(sox_format_t * ft)
    */
   ReadSize = lsx_readbuf(ft, p->mp3_buffer, p->mp3_buffer_size);
   if (ReadSize != p->mp3_buffer_size && lsx_error(ft))
-    return SOX_EOF;
+    goto error;
 
   p->mad_stream_buffer(&p->Stream, p->mp3_buffer, ReadSize);
 
@@ -439,7 +471,7 @@ static int startread(sox_format_t * ft)
       if (p->Stream.error == MAD_ERROR_BUFLEN)
       {
           if (sox_mp3_input(ft) == SOX_EOF)
-              return SOX_EOF;
+              goto error;
 
           continue;
       }
@@ -458,7 +490,7 @@ static int startread(sox_format_t * ft)
   if (p->Stream.error)
   {
       lsx_fail_errno(ft,SOX_EOF,"No valid MP3 frame found");
-      return SOX_EOF;
+      goto error;
   }
 
   switch(p->Frame.header.mode)
@@ -471,7 +503,7 @@ static int startread(sox_format_t * ft)
           break;
       default:
           lsx_fail_errno(ft, SOX_EFMT, "Cannot determine number of channels");
-          return SOX_EOF;
+          goto error;
   }
 
   ft->signal.precision = MP3_MAD_PRECISION;
@@ -485,12 +517,24 @@ static int startread(sox_format_t * ft)
   if (!sox_mp3_vbrtag(ft))
       p->Stream.next_frame = p->Stream.this_frame;
 
+  p->mad_frame_finish(&p->Frame);
   p->mad_frame_init(&p->Frame);
-  sox_mp3_input(ft);
+  if (sox_mp3_input(ft) == SOX_EOF)
+      goto error;
 
   p->cursamp = 0;
 
   return SOX_SUCCESS;
+
+error:
+  /* A failed startread is not followed by stopread.  All paths here have
+   * initialized MAD; preserve the failure diagnostics while releasing it. */
+  mad_synth_finish(&p->Synth);
+  p->mad_frame_finish(&p->Frame);
+  p->mad_stream_finish(&p->Stream);
+  free(p->mp3_buffer);
+  LSX_DLLIBRARY_CLOSE(p, mad_dl);
+  return SOX_EOF;
 }
 
 /*
@@ -593,6 +637,7 @@ static int sox_mp3seek(sox_format_t * ft, uint64_t offset)
   lsx_rewind(ft);
   mad_timer_reset(&p->Timer);
   p->FrameCount = 0;
+  p->eof_guard = sox_false;
 
   /* They where opened in startread */
   mad_synth_finish(&p->Synth);
@@ -602,6 +647,7 @@ static int sox_mp3seek(sox_format_t * ft, uint64_t offset)
   p->mad_stream_init(&p->Stream);
   p->mad_frame_init(&p->Frame);
   p->mad_synth_init(&p->Synth);
+  p->cursamp = 0;
 
   offset /= ft->signal.channels;
   to_skip_samples = offset;
@@ -609,9 +655,11 @@ static int sox_mp3seek(sox_format_t * ft, uint64_t offset)
   while(sox_true) {  /* Read data from the MP3 file */
     size_t padding = 0;
     size_t read;
-    size_t leftover = p->Stream.bufend - p->Stream.next_frame;
+    size_t leftover = p->Stream.next_frame ?
+        (size_t)(p->Stream.bufend - p->Stream.next_frame) : 0;
 
-    memmove(p->mp3_buffer, p->Stream.this_frame, leftover);
+    if (leftover)
+      memmove(p->mp3_buffer, p->Stream.this_frame, leftover);
     read = lsx_readbuf(ft, p->mp3_buffer + leftover, p->mp3_buffer_size - leftover);
     if (read == 0) {
       lsx_debug("seek failure. unexpected EOF (frames=%" PRIuPTR " leftover=%" PRIuPTR ")", p->FrameCount, leftover);

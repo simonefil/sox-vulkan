@@ -4,7 +4,10 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 
 - Optional Vulkan acceleration for resampling, FIR filtering, and PCM-to-DSD conversion, with `fast`, `precise`, and `reference` numerical profiles and device-resident effect chains.
 - Extended PCM-to-DSD conversion from DSD64 through DSD1024, with selectable high-order CPU modulators (`sdm`) and a parallel Vulkan MASH-2/FSM modulator (`sdm-vulkan`) that trades noise performance for an order of magnitude in speed.
-- FFmpeg-backed AC-3, E-AC-3, AAC, ALAC, TrueHD, MLP, DTS, DTS-HD, and xHE-AAC/USAC support.
+- Native Matroska (`mka`, `mkv`, `webm`), Ogg and MP4 (`m4a`, `mp4`, `m4b`) containers, read and written with any codec they can hold; the codec is named after the container type, as in `-t mka:flac`.
+- Native codecs inside the containers (FLAC, Vorbis, Opus, MP3, WavPack, PCM, Monkey's Audio, Musepack); FFmpeg's libavcodec only for AC-3, E-AC-3, AAC, ALAC, TrueHD, MLP, DTS, DTS-HD and xHE-AAC/USAC.
+- Gapless MP3: the encoder delay and padding in the LAME header are trimmed.
+- The `crossfeed` effect, Bauer's stereophonic-to-binaural filter as in libbs2b.
 - Reproducible static release builds for Windows, macOS, Linux, and FreeBSD; bundled codec libraries are linked statically.
 
 ---
@@ -202,7 +205,7 @@ Unix: `./build_static_libs.sh --library`; Windows: `pwsh -File .\build_static_li
 Builds only `libsox` and its dependencies; the executable remains the default.
 Output: `output/library/libsox.a` (Unix) or `output\library\libsox.lib` (Windows), plus `sox.h`.
 Library mode always keeps `static_libs`, `build-library` (including internal GSM/LPC10), and dependency sources, like `--keep-build` / `-KeepBuild`.
-Consumers must also link the existing dependency archives in those directories and the required native libraries/OpenMP runtime.
+Consumers must also link the existing dependency archives in those directories (with the Monkey's Audio SDK and Musepack, `libMAC`, `libmpcdec`, `libmpcenc` and `libmpcpsy`), the C++ runtime, and the required native libraries/OpenMP runtime.
 The archives are not merged; no executable is copied or tested in library mode.
 Vulkan and PulseAudio are rejected before downloads in library mode.
 
@@ -263,23 +266,45 @@ Vulkan and PulseAudio are rejected before downloads in library mode.
 |-------|-------------|-----------|
 | OGG/Vorbis | Ogg container with Vorbis audio | libogg, libvorbis |
 | FLAC | Free Lossless Audio Codec | libFLAC |
-| Opus | Modern low-latency codec (decode and encode) | libopus, opusfile, libopusenc |
+| Opus | Modern low-latency codec (decode and encode) | libopus |
 | AC-3 | ATSC A/52 elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | E-AC-3 | Dolby Digital Plus elementary stream (decode and encode) | FFmpeg libavcodec, libavutil |
 | AAC/ADTS | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | AAC/LOAS-LATM | AAC-LC encode; AAC-LC, HE-AAC and HE-AACv2 decode | FFmpeg libavcodec, libavutil |
 | xHE-AAC/USAC | LOAS/LATM elementary stream (decode only) | FFmpeg libavcodec, libavutil |
-| ALAC/M4A | Apple Lossless in an M4A container (decode and encode) | FFmpeg libavcodec, libavformat, libavutil |
+| ALAC | Apple Lossless (decode and encode) | FFmpeg libavcodec, libavutil |
 | Dolby TrueHD | Elementary stream (decode and experimental encode) | FFmpeg libavcodec, libavutil |
 | MLP | Meridian Lossless Packing elementary stream (decode and experimental encode) | FFmpeg libavcodec, libavutil |
 | DTS | Core elementary stream decode and experimental encode; DTS extensions and DTS-HD decode | FFmpeg libavcodec, libavutil |
-| MP3 | MPEG Audio Layer III | libmad (decoder), LAME (encoder) |
+| MP3 | MPEG Audio Layer III, gapless | libmad (decoder), LAME (encoder) |
 | MP2 | MPEG Audio Layer II | TwoLAME (encoder) |
 | WavPack | Lossless audio compression | libwavpack |
+| Monkey's Audio | APE files, version 3.93 and later (decode and encode) | Monkey's Audio SDK |
+| Musepack | SV7 and SV8 decode, SV8 encode | libmpcdec, libmpcenc, libmpcpsy |
 | DSD | DSF and DSDIFF/DFF read and write; WSD read | Built in |
 | libsndfile | Multi-format audio I/O | libsndfile |
 | ID3 Tag | MP3 metadata support | libid3tag |
 | PNG | Spectrogram output | libpng, zlib |
+
+### Containers
+
+Matroska, Ogg and MP4 are SoX's own; FFmpeg does not take part in them.
+The type names the container and, after a colon, the codec: `-t mka:flac`,
+`-t ogg:opus`, `-t m4a:aac`. Reading takes the codec from the file, so the
+container alone is enough; a codec named there picks the first track in that
+codec. Writing without a codec uses the container's default: Vorbis for
+`ogg`, ALAC for `m4a`, `mp4` and `m4b`. `mka` has no default.
+
+| Container | Types | Codecs |
+|-----------|-------|--------|
+| Matroska | `mka`, `mkv` | PCM, FLAC, Vorbis, Opus, MP3, WavPack, AAC, xHE-AAC/USAC, ALAC, AC-3, E-AC-3, DTS, MLP, TrueHD |
+| WebM | `webm` | Vorbis, Opus |
+| Ogg | `ogg`, `vorbis`, `opus` | Vorbis, Opus, FLAC |
+| MP4 | `m4a`, `mp4`, `m4b`, `xhe-m4a`, `usac-m4a` | AAC, xHE-AAC/USAC, ALAC, FLAC, Opus, MP3, AC-3, E-AC-3, DTS, TrueHD |
+
+On a pipe, Matroska is written with an unknown size and MP4 as a fragmented
+file; an MP4 whose index follows the audio is read from a file only.
+`sox --help` lists the codecs of the build on its `AUDIO CODECS` line.
 
 ### Additional codecs (Linux/macOS/BSD only)
 
@@ -320,6 +345,8 @@ Vulkan and PulseAudio are rejected before downloads in library mode.
 | `-NoMp3` | Exclude MP3 support (libmad + LAME) |
 | `-NoMp2` | Exclude MP2 support (TwoLAME) |
 | `-NoWavpack` | Exclude WavPack support |
+| `-NoApe` | Exclude Monkey's Audio support |
+| `-NoMusepack` | Exclude Musepack support |
 | `-NoSndfile` | Exclude libsndfile support |
 | `-NoFfmpeg` | Exclude FFmpeg-backed format support |
 | `-NoId3tag` | Exclude ID3 tag support |
@@ -355,6 +382,8 @@ Vulkan and PulseAudio are rejected before downloads in library mode.
 | `--no-mp3` | Exclude MP3 support (libmad + LAME) |
 | `--no-mp2` | Exclude MP2 support (TwoLAME) |
 | `--no-wavpack` | Exclude WavPack support |
+| `--no-ape` | Exclude Monkey's Audio support |
+| `--no-musepack` | Exclude Musepack support |
 | `--no-sndfile` | Exclude libsndfile support |
 | `--no-ffmpeg` | Exclude FFmpeg-backed format support |
 | `--no-amr` | Exclude AMR support |
@@ -737,20 +766,24 @@ This lists all formats enabled in the current build. Look for:
 
 - `flac` - FLAC support
 - `mp3` - MP3 support
-- `ogg` - OGG/Vorbis support
-- `opus` - Opus support
+- `ogg` - Ogg with Vorbis, Opus or FLAC
+- `opus` - Ogg Opus
+- `mka`, `mkv` - Matroska
+- `webm` - WebM
 - `ac3` - AC-3 elementary stream support
 - `eac3`, `ec3` - E-AC-3 elementary stream support
 - `aac`, `adts` - AAC with ADTS framing
 - `latm`, `loas` - AAC with LOAS/LATM framing
 - `usac`, `xheaac`, `xhe-aac` - xHE-AAC/USAC with LOAS/LATM framing
-- `m4a` - Apple Lossless in an M4A container
+- `m4a`, `mp4`, `m4b` - MP4
 - `truehd`, `thd` - Dolby TrueHD elementary stream
 - `mlp` - Meridian Lossless Packing elementary stream
 - `dts` - DTS core and extended elementary streams
 - `dtshd` - DTS-HD elementary streams (decode only)
 - `wav` - WAV support
-- `wavpack` - WavPack support
+- `wv` - WavPack support
+- `ape` - Monkey's Audio
+- `mpc` - Musepack
 - `dsf`, `dff` - DSD stream read and write
 - `wsd` - WSD stream read
 
@@ -848,13 +881,13 @@ The build scripts download and compile the following library versions:
 | libvorbis | 1.3.7 |
 | FLAC | 1.4.3 |
 | opus | 1.5.2 |
-| opusfile | 0.12 |
-| libopusenc | 0.3 |
 | libmad | 0.15.1b |
 | LAME | 3.100 |
 | TwoLAME | 0.4.0 |
 | libid3tag | 0.15.1b |
 | WavPack | 5.7.0 |
+| Monkey's Audio SDK | 13.47 |
+| Musepack | r475 |
 | libsndfile | 1.2.2 |
 | opencore-amr | 0.1.6 |
 | file/libmagic | 5.45 |

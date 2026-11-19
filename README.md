@@ -288,12 +288,12 @@ Vulkan and PulseAudio are rejected before downloads in library mode.
 
 ### Containers
 
-Matroska, Ogg and MP4 are SoX's own; FFmpeg does not take part in them.
+SoX reads and writes Matroska, Ogg and MP4 with its own code.
 The type names the container and, after a colon, the codec: `-t mka:flac`,
 `-t ogg:opus`, `-t m4a:aac`. Reading takes the codec from the file, so the
 container alone is enough; a codec named there picks the first track in that
-codec. Writing without a codec uses the container's default: Vorbis for
-`ogg`, ALAC for `m4a`, `mp4` and `m4b`. `mka` has no default.
+codec. Writing to `mka` takes the codec from the type; the other containers
+have a default: Vorbis for `ogg`, ALAC for `m4a`, `mp4` and `m4b`.
 
 | Container | Types | Codecs |
 |-----------|-------|--------|

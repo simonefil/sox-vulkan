@@ -638,6 +638,9 @@ typedef enum sox_encoding_t {
   SOX_ENCODING_TRUEHD    , /**< Dolby TrueHD lossless compression */
   SOX_ENCODING_MLP       , /**< Meridian Lossless Packing */
   SOX_ENCODING_DTS       , /**< DTS Coherent Acoustics compression */
+  SOX_ENCODING_APE       , /**< Monkey's Audio lossless compression */
+  SOX_ENCODING_APEF      , /**< Monkey's Audio with float samples */
+  SOX_ENCODING_MUSEPACK  , /**< Musepack compression */
 
   SOX_ENCODINGS            /**< End of list marker */
 } sox_encoding_t;

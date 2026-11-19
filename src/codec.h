@@ -48,7 +48,9 @@ typedef enum {
   lsx_container_matroska,
   lsx_container_webm,
   lsx_container_ogg,
-  lsx_container_mp4
+  lsx_container_mp4,
+  lsx_container_ape,
+  lsx_container_musepack
 } lsx_container_family_t;
 
 /* Byte order a container identifier implies for the samples it carries. */
@@ -168,5 +170,8 @@ lsx_codec_handler_t const * lsx_eac3_codec_fn(void);
 lsx_codec_handler_t const * lsx_dts_codec_fn(void);
 lsx_codec_handler_t const * lsx_mlp_codec_fn(void);
 lsx_codec_handler_t const * lsx_truehd_codec_fn(void);
+lsx_codec_handler_t const * lsx_ape_codec_fn(void);
+lsx_codec_handler_t const * lsx_mpc7_codec_fn(void);
+lsx_codec_handler_t const * lsx_mpc8_codec_fn(void);
 
 #endif

@@ -23,6 +23,7 @@
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
 #include <libavutil/error.h>
+#include <libavutil/log.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
 
@@ -203,6 +204,35 @@ static int open_codec(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool en
   return SOX_SUCCESS;
 }
 
+/* FFmpeg's own messages, which would otherwise go straight to stderr,
+ * through SoX's verbosity: its errors are SoX warnings, its warnings show
+ * from -V3 and its informational chatter, such as the AAC encoder's average
+ * quantiser, from -V4.  The failures that matter reach the user anyway, as
+ * the SoX errors fail_av makes of them. */
+static void log_message(void * context, int level, char const * format, va_list arguments)
+{
+  AVClass const * const * class = context;
+  char const * name = class && *class? (*class)->item_name(context) : "library";
+  char message[1024];
+  size_t length;
+
+  if (level > AV_LOG_DEBUG)
+    return;
+  vsnprintf(message, sizeof(message), format, arguments);
+  length = strlen(message);
+  while (length && (message[length - 1] == '\n' || message[length - 1] == '\r'))
+    message[--length] = '\0';
+  if (!length)
+    return;
+  if (level <= AV_LOG_ERROR)
+    lsx_warn("FFmpeg %s: %s", name, message);
+  else if (level <= AV_LOG_WARNING)
+    lsx_report("FFmpeg %s: %s", name, message);
+  else if (level <= AV_LOG_INFO)
+    lsx_debug("FFmpeg %s: %s", name, message);
+  else lsx_debug_more("FFmpeg %s: %s", name, message);
+}
+
 /* Free everything the state owns and clear the caller's pointer.  Tolerates a
  * partly built state, so the failure paths in allocate_state and the two
  * start functions can all unwind through it. */
@@ -234,6 +264,7 @@ static int allocate_state(
 {
   lsx_ffmpeg_codec_t * p = lsx_calloc(1, sizeof(*p));
 
+  av_log_set_callback(log_message);
   p->definition = definition;
   if (!encoding && (unsigned)(avcodec_version() >> 16) < definition->minimum_decoder_version) {
     lsx_fail_errno(ft, SOX_EFMT, "%s decoding requires libavcodec %u or later", definition->name,

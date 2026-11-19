@@ -68,6 +68,7 @@ typedef struct {
 } lsx_container_t;
 
 int lsx_codec_start_decode(lsx_codec_t * codec, sox_bool comments);
+int lsx_container_read_magic(sox_format_t * ft, unsigned char magic[4], sox_uint64_t * offset);
 int lsx_container_check_chained(sox_format_t * ft, lsx_codec_params_t const * first,
     lsx_codec_params_t const * chained);
 int lsx_container_restart(sox_format_t * ft, lsx_codec_params_t const * params, sox_bool stream_start);

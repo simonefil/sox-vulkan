@@ -82,6 +82,9 @@
 #if defined HAVE_AO && (defined STATIC_AO || !defined HAVE_LIBLTDL)
   FORMAT(ao)
 #endif
+#if defined HAVE_APE && (defined STATIC_APE || !defined HAVE_LIBLTDL)
+  FORMAT(ape)
+#endif
 #if defined HAVE_COREAUDIO && (defined STATIC_COREAUDIO || !defined HAVE_LIBLTDL)
   FORMAT(coreaudio)
 #endif
@@ -96,6 +99,9 @@
 #endif
 #if defined HAVE_MP3 && (defined STATIC_MP3 || !defined HAVE_LIBLTDL)
   FORMAT(mp3)
+#endif
+#if defined HAVE_MUSEPACK && (defined STATIC_MUSEPACK || !defined HAVE_LIBLTDL)
+  FORMAT(mpc)
 #endif
 #if defined HAVE_FFMPEG_CODECS && \
     (defined STATIC_FFMPEG_CODECS || !defined HAVE_LIBLTDL)

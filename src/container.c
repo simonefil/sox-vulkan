@@ -45,6 +45,39 @@ int lsx_codec_start_decode(lsx_codec_t * codec, sox_bool comments)
   return status;
 }
 
+/* The four bytes a file begins with after any ID3v2 tags, which taggers
+ * also put in front of formats that have tags of their own, and where they
+ * are.  The tags are read through rather than sought past, so that a pipe
+ * will do. */
+int lsx_container_read_magic(sox_format_t * ft, unsigned char magic[4], sox_uint64_t * offset)
+{
+  unsigned char h[6];
+
+  *offset = 0;
+  if (lsx_readbuf(ft, magic, 4) != 4)
+    goto truncated;
+  while (!memcmp(magic, "ID3", 3)) {
+    size_t size;
+
+    if (lsx_readbuf(ft, h, 6) != 6)
+      goto truncated;
+    if ((h[2] | h[3] | h[4] | h[5]) & 0x80) {
+      lsx_fail_errno(ft, SOX_EHDR, "invalid ID3v2 tag");
+      return SOX_EOF;
+    }
+    size = ((size_t)h[2] << 21) + ((size_t)h[3] << 14) + ((size_t)h[4] << 7) + h[5] +
+        (magic[3] == 4 && (h[1] & 0x10)? 10 : 0);
+    if (lsx_skipbytes(ft, size) != SOX_SUCCESS || lsx_readbuf(ft, magic, 4) != 4)
+      goto truncated;
+    *offset += 10 + size;
+  }
+  return SOX_SUCCESS;
+
+truncated:
+  lsx_fail_errno(ft, SOX_EHDR, "file truncated");
+  return SOX_EOF;
+}
+
 /* The codec stopped, and started again on params, which it takes over: at
  * the start of a stream chained after the last, whose delay is then dropped
  * as at the start of the file, or after a seek, which counts it in. */

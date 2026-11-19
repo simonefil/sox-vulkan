@@ -1156,6 +1156,29 @@ if(HAVE_FFMPEG_CODECS)
     endif()
 endif()
 
+# Monkey's Audio format, with the SDK's C++ frame decoder and encoder
+if(HAVE_APE)
+    enable_language(CXX)
+    target_sources(libsox PRIVATE ape.c codec-ape.c ape-mac.cpp)
+    target_link_libraries(libsox PRIVATE ${MAC_LIBRARY})
+    target_include_directories(libsox PRIVATE ${MAC_INCLUDE_DIR})
+    target_compile_definitions(libsox PRIVATE STATIC_APE)
+endif()
+
+# Musepack format
+if(HAVE_MUSEPACK)
+    target_sources(libsox PRIVATE musepack.c codec-musepack.c)
+    target_link_libraries(libsox PRIVATE ${MPCDEC_LIBRARY})
+    target_include_directories(libsox PRIVATE ${MPCDEC_INCLUDE_DIR})
+    target_compile_definitions(libsox PRIVATE STATIC_MUSEPACK)
+    if(HAVE_MPC_ENCODER)
+        target_link_libraries(libsox PRIVATE ${MPCENC_LIBRARY} ${MPCPSY_LIBRARY})
+        target_include_directories(libsox PRIVATE ${MPCENC_INCLUDE_DIR})
+        # The math the libraries were built with, as mpcenc is.
+        set_source_files_properties(codec-musepack.c PROPERTIES COMPILE_DEFINITIONS FAST_MATH)
+    endif()
+endif()
+
 # MP3 format (mad/lame/twolame)
 if(HAVE_MP3)
     target_sources(libsox PRIVATE mp3.c codec-mp3.c)

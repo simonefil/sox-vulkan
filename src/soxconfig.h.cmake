@@ -41,6 +41,9 @@
 #cmakedefine HAVE_FFMPEG_CODECS       1
 #cmakedefine HAVE_SNDFILE             1
 #cmakedefine HAVE_WAVPACK             1
+#cmakedefine HAVE_APE                 1
+#cmakedefine HAVE_MUSEPACK            1
+#cmakedefine HAVE_MPC_ENCODER         1
 
 /* Other features */
 #cmakedefine HAVE_LADSPA_H            1

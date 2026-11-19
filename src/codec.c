@@ -49,6 +49,13 @@ static lsx_codec_handler_t const * (* const codec_fns[])(void) = {
   lsx_mlp_codec_fn,
   lsx_truehd_codec_fn,
 #endif
+#if defined HAVE_APE && (defined STATIC_APE || !defined HAVE_LIBLTDL)
+  lsx_ape_codec_fn,
+#endif
+#if defined HAVE_MUSEPACK && (defined STATIC_MUSEPACK || !defined HAVE_LIBLTDL)
+  lsx_mpc7_codec_fn,
+  lsx_mpc8_codec_fn,
+#endif
 };
 
 /* Every identifier a container uses for a codec.  A codec the build lacks
@@ -57,7 +64,8 @@ static lsx_codec_handler_t const * (* const codec_fns[])(void) = {
  * begins with, and MP4 by its sample entry, or for an MPEG-4 audio entry by
  * the object type its decoder configuration gives, as in mp4a.40.  An AAC
  * identifier stands for xHE-AAC too, which its configuration tells apart.
- * Where a codec has several, the first is the one written. */
+ * Monkey's Audio and Musepack files name theirs by the bytes they begin
+ * with.  Where a codec has several, the first is the one written. */
 static lsx_codec_tag_t const codec_tags[] = {
   {lsx_container_matroska, "A_PCM/INT/LIT"   , "pcm"    , SOX_ENCODING_SIGN2   , lsx_endian_little},
   {lsx_container_matroska, "A_PCM/INT/BIG"   , "pcm"    , SOX_ENCODING_SIGN2   , lsx_endian_big},
@@ -102,13 +110,17 @@ static lsx_codec_tag_t const codec_tags[] = {
   {lsx_container_mp4     , "mp4a.6b"         , "mp3"    , SOX_ENCODING_MP3     , lsx_endian_any},
   {lsx_container_mp4     , "mp4a.69"         , "mp3"    , SOX_ENCODING_MP3     , lsx_endian_any},
   {lsx_container_mp4     , ".mp3"            , "mp3"    , SOX_ENCODING_MP3     , lsx_endian_any},
+  {lsx_container_ape     , "MAC "            , "ape"    , SOX_ENCODING_APE     , lsx_endian_any},
+  {lsx_container_ape     , "MACF"            , "ape"    , SOX_ENCODING_APEF    , lsx_endian_any},
+  {lsx_container_musepack, "MPCK"            , "mpc8"   , SOX_ENCODING_MUSEPACK, lsx_endian_any},
 };
 
 /* The container each type is, and the codec it writes when its type names
  * none: Ogg has one, Vorbis, which is what `-t ogg' always meant, and MP4
  * ALAC, which is what `-t m4a' did.  The vorbis and opus types are Ogg with
  * the codec fixed, and xhe-m4a and usac-m4a MP4: they take no other, and read
- * only that one. */
+ * only that one.  A Monkey's Audio file holds its own codec only, and a
+ * Musepack file either stream version, of which only SV8 is written. */
 static struct {
   char const * type;
   lsx_container_family_t container;
@@ -126,6 +138,8 @@ static struct {
   {"m4b"     , lsx_container_mp4   , "alac"  , sox_false},
   {"xhe-m4a" , lsx_container_mp4   , "usac"  , sox_true},
   {"usac-m4a", lsx_container_mp4   , "usac"  , sox_true},
+  {"ape"     , lsx_container_ape   , "ape"   , sox_true},
+  {"mpc"     , lsx_container_musepack, "mpc8", sox_false},
 };
 
 /* SoX orders channels as WAVE does, Vorbis as its specification, section

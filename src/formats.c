@@ -193,7 +193,9 @@ static sox_bool is_dts_header(unsigned char const * data, size_t length)
       data[2] == 0x00 && data[3] == 0xe8 &&
       (data[4] & 0xf0) == 0xf0 && data[5] == 0x07;
 }
+#endif
 
+#if defined HAVE_FFMPEG_CODECS || defined HAVE_APE || defined HAVE_MUSEPACK
 /* Total size of an ID3v2 tag at the front of data, footer included, or 0 if
  * there is none.  AAC files routinely open with one, which would otherwise
  * hide the frame header the ADTS probe is looking for.  The checks are what
@@ -213,6 +215,26 @@ static size_t leading_id3v2_size(unsigned char const * data, size_t length)
   if (data[3] == 4 && (data[5] & 0x10))
     size += 10;
   return size;
+}
+
+/* Where what follows the ID3v2 tags at the front of data begins, the files
+ * that may hold several stacked tags being covered.  A tag reaching past what
+ * was read gives the length read, so that no bytes from inside a tag are
+ * tested. */
+static size_t id3v2_end(unsigned char const * data, size_t length)
+{
+  size_t offset = 0;
+
+  while (offset < length) {
+    size_t size = leading_id3v2_size(data + offset, length - offset);
+
+    if (!size)
+      break;
+    if (size > length - offset)
+      return length;
+    offset += size;
+  }
+  return offset;
 }
 
 #endif
@@ -255,6 +277,23 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   }
   if (is_mp4_header((unsigned char const *)data, len))
     return "m4a";
+#if defined HAVE_APE || defined HAVE_MUSEPACK
+  /* Monkey's Audio and Musepack files begin with their magic, after any
+   * ID3v2 tags. */
+  {
+    unsigned char const * bytes = (unsigned char const *)data + id3v2_end((unsigned char const *)data, len);
+    size_t left = len - (size_t)(bytes - (unsigned char const *)data);
+
+#ifdef HAVE_APE
+    if (left >= 4 && (!memcmp(bytes, "MAC ", 4) || !memcmp(bytes, "MACF", 4)))
+      return "ape";
+#endif
+#ifdef HAVE_MUSEPACK
+    if (left >= 4 && (!memcmp(bytes, "MPCK", 4) || (!memcmp(bytes, "MP+", 3) && (bytes[3] & 0x0f) == 7)))
+      return "mpc";
+#endif
+  }
+#endif
 #ifdef HAVE_FFMPEG_CODECS
   /* These probes run before the CHECK lines that follow rather than after,
    * because a bitstream with no magic number at offset zero can happen to
@@ -282,25 +321,11 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
         return "latm";
     }
   }
-  /* Skip any ID3v2 tags before looking for an ADTS frame.  The loop handles
-   * files with several stacked tags; a tag reaching past what was read means
-   * the frame header is beyond the probe window, so the search stops rather
-   * than testing bytes from inside the tag. */
+  /* AAC files routinely open with ID3v2 tags. */
   {
     unsigned char const * bytes = (unsigned char const *)data;
-    size_t offset = 0;
+    size_t offset = id3v2_end(bytes, len);
 
-    while (offset < len) {
-      size_t id3v2_size = leading_id3v2_size(bytes + offset, len - offset);
-
-      if (!id3v2_size)
-        break;
-      if (id3v2_size > len - offset) {
-        offset = len;
-        break;
-      }
-      offset += id3v2_size;
-    }
     if (offset < len && is_adts_header(bytes + offset, len - offset))
       return "aac";
   }
@@ -410,6 +435,9 @@ static sox_encodings_info_t const s_sox_encodings_info[] = {
   {sox_encodings_none  , "TrueHD"        , "Dolby TrueHD"},
   {sox_encodings_none  , "MLP"           , "Meridian Lossless Packing"},
   {sox_encodings_lossy2, "DTS"           , "DTS Coherent Acoustics"},
+  {sox_encodings_none  , "APE"           , "Monkey's Audio"},
+  {sox_encodings_none  , "F.P. APE"      , "Floating Point Monkey's Audio"},
+  {sox_encodings_lossy2, "Musepack"      , "Musepack"},
 };
 
 assert_static(array_length(s_sox_encodings_info) == SOX_ENCODINGS,
@@ -431,6 +459,11 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_FLAC:       return !(bits_per_sample & 7) && (bits_per_sample >> 3) - 1 < 4? bits_per_sample: 0;
     case SOX_ENCODING_ALAC:       return bits_per_sample == 16 ||
                                          bits_per_sample == 20 ||
+                                         bits_per_sample == 24 ||
+                                         bits_per_sample == 32 ?
+                                         bits_per_sample : 0;
+    case SOX_ENCODING_APE:        return bits_per_sample == 8 ||
+                                         bits_per_sample == 16 ||
                                          bits_per_sample == 24 ||
                                          bits_per_sample == 32 ?
                                          bits_per_sample : 0;
@@ -472,11 +505,13 @@ unsigned sox_precision(sox_encoding_t encoding, unsigned bits_per_sample)
     case SOX_ENCODING_EAC3:
     case SOX_ENCODING_AAC:
     case SOX_ENCODING_USAC:
+    case SOX_ENCODING_MUSEPACK:
     case SOX_ENCODING_AMR_WB:
     case SOX_ENCODING_AMR_NB:
     case SOX_ENCODING_LPC10:      return !bits_per_sample? 16: 0;
 
     case SOX_ENCODING_WAVPACKF:
+    case SOX_ENCODING_APEF:
     case SOX_ENCODING_FLOAT:      return bits_per_sample == 32 ? 25: bits_per_sample == 64 ? 54: 0;
     case SOX_ENCODING_FLOAT_TEXT: return !bits_per_sample? 54: 0;
 

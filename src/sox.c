@@ -272,21 +272,24 @@ static void cleanup(void)
    * Preserve its diagnostics first, close it, and only then freeze the timer
    * and assemble captures. */
   if (file_count && ofile->ft) {
-    char *failed_output = NULL;
+    char *output = NULL;
 
+    /* An output that fails in closing is as incomplete as one that failed
+     * before, and is removed too. */
     write_output_diagnostics();
-    if (!success && ofile->ft->io_type == lsx_io_file) {
+    if (ofile->ft->io_type == lsx_io_file) {
       struct stat st;
       if (!stat(ofile->ft->filename, &st) &&
           (st.st_mode & S_IFMT) == S_IFREG)
-        failed_output = lsx_strdup(ofile->ft->filename);
+        output = lsx_strdup(ofile->ft->filename);
     }
     if (sox_close(ofile->ft) != SOX_SUCCESS)
       success = 0;
     ofile->ft = NULL;
-    if (failed_output) {
-      unlink(failed_output);
-      free(failed_output);
+    if (output) {
+      if (!success)
+        unlink(output);
+      free(output);
     }
   }
   write_diagnostics();
@@ -3117,6 +3120,7 @@ int main(int argc, char **argv)
   size_t i;
   char mybase[6];
   int err;
+  sox_bool output_failed = sox_false; /* an output closed before the last failed */
 
   gettimeofday(&load_timeofday, NULL);
   myname = argv[0];
@@ -3298,7 +3302,8 @@ int main(int argc, char **argv)
 
     if (!save_output_eff)
     {
-      sox_close(ofile->ft);
+      if (sox_close(ofile->ft) != SOX_SUCCESS)
+        output_failed = sox_true;
       ofile->ft = NULL;
     }
   }
@@ -3326,9 +3331,9 @@ int main(int argc, char **argv)
   /* SOX_EOF is also the normal end-of-stream signal.  Other statuses are
    * execution failures and must leave success false so cleanup removes a
    * partial output file. */
-  success = err == SOX_SUCCESS || err == SOX_EOF;
+  success = !output_failed && (err == SOX_SUCCESS || err == SOX_EOF);
 
   cleanup();
 
-  return !!err;
+  return err != SOX_SUCCESS || !success;
 }

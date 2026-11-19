@@ -1613,13 +1613,24 @@ int sox_close(sox_format_t * ft)
     else result = ft->handler.stopwrite? (*ft->handler.stopwrite)(ft) : SOX_SUCCESS;
   }
 
+  /* An output's failure is reported here, as nothing is left of the format
+   * afterwards to report it from: the handler's own or, failing none, the
+   * error in flushing what was still buffered, such as a full disk. */
+  if (ft->mode == 'w' && result != SOX_SUCCESS)
+    lsx_fail("error writing `%s': %s", ft->filename, ft->sox_errstr[0]? ft->sox_errstr : sox_strerror(ft->sox_errno));
   if (ft->fp == stdin) {
     sox_globals.stdin_in_use_by = NULL;
   } else if (ft->fp == stdout) {
-    fflush(stdout);
+    if (fflush(stdout) && ft->mode == 'w' && result == SOX_SUCCESS) {
+      lsx_fail("error writing `%s': %s", ft->filename, strerror(errno));
+      result = SOX_EOF;
+    }
     sox_globals.stdout_in_use_by = NULL;
   } else if (ft->fp) {
-    xfclose(ft->fp, ft->io_type);
+    if (xfclose(ft->fp, ft->io_type) && ft->mode == 'w' && ft->io_type == lsx_io_file && result == SOX_SUCCESS) {
+      lsx_fail("error writing `%s': %s", ft->filename, strerror(errno));
+      result = SOX_EOF;
+    }
   }
 
   free(ft->priv);

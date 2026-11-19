@@ -24,6 +24,7 @@
 #include "soxconfig.h"
 #include "sox.h"
 #include "util.h"
+#include "codec.h"
 #include "diagnostics.h"
 
 #include <ctype.h>
@@ -2048,6 +2049,9 @@ static void display_supported_formats(void)
   for (i = 0; i < formats; i++)
     printf(" %s", format_list[i]);
   putchar('\n');
+
+  /* What the containers among the formats can hold, in this build. */
+  printf("AUDIO CODECS: %s\n", lsx_codec_names());
 
   printf("PLAYLIST FORMATS: m3u pls\nAUDIO DEVICE DRIVERS:");
   for (i = formats = 0; sox_format_fns[i].fn; ++i) {

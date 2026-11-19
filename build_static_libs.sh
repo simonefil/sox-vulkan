@@ -75,6 +75,7 @@ ENABLE_VULKAN=OFF
 # build, so a rebuild is incremental rather than starting over.  The Windows
 # script spells the same option -KeepBuild.
 KEEP_BUILD=OFF
+LIBRARY=OFF
 
 # ------------------------------------------------------------------------------
 # AUDIO DRIVER OPTIONS (platform-specific defaults)
@@ -1037,6 +1038,7 @@ show_help() {
     echo "  --jobs, -j N          Number of parallel build jobs (default: auto)"
     echo "  --clean               Remove build and output directories"
     echo "  --help, -h            Show this help message"
+    echo "  --library             Build static libsox + header; keep libraries and build tree"
     echo ""
     echo "Codec Options (all enabled by default, use to exclude):"
     echo "  --no-ogg              Exclude OGG/Vorbis support"
@@ -1103,10 +1105,18 @@ main() {
                 shift 2
                 ;;
             --clean)
+                if [ "${LIBRARY}" = "ON" ]; then
+                    SOX_BUILD_DIR="${SCRIPT_DIR}/build-library"
+                    OUTPUT_DIR="${SCRIPT_DIR}/output/library"
+                fi
                 log_info "Cleaning build directories..."
                 rm -rf "${BUILD_DIR}" "${STATIC_LIBS_DIR}" "${SOX_BUILD_DIR}" "${OUTPUT_DIR}"
                 log_success "Clean complete"
                 exit 0
+                ;;
+            --library)
+                LIBRARY=ON
+                shift
                 ;;
             # Codec exclusion options
             --no-ogg)
@@ -1221,6 +1231,15 @@ main() {
         esac
     done
 
+    if [ "${LIBRARY}" = "ON" ]; then
+        SOX_BUILD_DIR="${SCRIPT_DIR}/build-library"
+        OUTPUT_DIR="${SCRIPT_DIR}/output/library"
+        KEEP_BUILD=ON
+        if [ "${ENABLE_VULKAN}" = "ON" ] || [ "${ENABLE_PULSEAUDIO}" = "ON" ]; then
+            log_error "--library cannot use Vulkan or PulseAudio: third-party shared runtimes are required."
+            exit 1
+        fi
+    fi
     # Check required tools
     log_info "Checking required tools..."
     check_command "make"
@@ -1423,25 +1442,36 @@ main() {
         -DWITH_VULKAN=${ENABLE_VULKAN} \
         "${OPENMP_CMAKE_ARGS[@]}"
 
-    cmake --build . --config Release -j${JOBS}
+    if [ "${LIBRARY}" = "ON" ]; then
+        cmake --build . --config Release --target libsox -j${JOBS}
+    else
+        cmake --build . --config Release -j${JOBS}
+    fi
 
     log_success "SoX built successfully!"
 
-    verify_static_dependencies "${SOX_BUILD_DIR}/src/sox"
-
-    # Copy binary to output directory
-    log_info "Copying sox binary to output directory..."
-    mkdir -p "${OUTPUT_DIR}"
-
-    if [ -f "${SOX_BUILD_DIR}/src/sox" ]; then
-        cp "${SOX_BUILD_DIR}/src/sox" "${OUTPUT_DIR}/"
-        chmod +x "${OUTPUT_DIR}/sox"
+    if [ "${LIBRARY}" = "ON" ]; then
+        mkdir -p "${OUTPUT_DIR}"
+        cp "${SOX_BUILD_DIR}/src/liblibsox.a" "${OUTPUT_DIR}/libsox.a"
+        cp "${SCRIPT_DIR}/src/sox.h" "${OUTPUT_DIR}/sox.h"
+        log_info "Library mode keeps static_libs and build-library (including GSM/LPC10 dependencies)."
     else
-        log_error "sox binary not found!"
-        exit 1
-    fi
+        verify_static_dependencies "${SOX_BUILD_DIR}/src/sox"
 
-    log_success "Binary copied to: ${OUTPUT_DIR}/sox"
+        # Copy binary to output directory
+        log_info "Copying sox binary to output directory..."
+        mkdir -p "${OUTPUT_DIR}"
+
+        if [ -f "${SOX_BUILD_DIR}/src/sox" ]; then
+            cp "${SOX_BUILD_DIR}/src/sox" "${OUTPUT_DIR}/"
+            chmod +x "${OUTPUT_DIR}/sox"
+        else
+            log_error "sox binary not found!"
+            exit 1
+        fi
+
+        log_success "Binary copied to: ${OUTPUT_DIR}/sox"
+    fi
 
     # Cleanup temporary files
     if [ "${KEEP_BUILD}" = "OFF" ]; then
@@ -1460,11 +1490,16 @@ main() {
     log_success "Build complete!"
     echo "=============================================="
     echo ""
-    echo "Output binary: ${OUTPUT_DIR}/sox"
-    echo ""
+    if [ "${LIBRARY}" = "ON" ]; then
+        echo "Output library: ${OUTPUT_DIR}/libsox.a"
+        echo "Header: ${OUTPUT_DIR}/sox.h"
+    else
+        echo "Output binary: ${OUTPUT_DIR}/sox"
+        echo ""
 
-    # Show sox info
-    "${OUTPUT_DIR}/sox" --version
+        # Show sox info
+        "${OUTPUT_DIR}/sox" --version
+    fi
     echo ""
 }
 

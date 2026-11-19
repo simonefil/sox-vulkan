@@ -12,6 +12,7 @@ param(
     [switch]$Clean,
     [switch]$KeepBuild,
     [switch]$Help,
+    [switch]$Library,
 
     # Codec exclusion options (all enabled by default)
     [switch]$NoOgg,
@@ -1343,6 +1344,7 @@ function Show-Help {
     Write-Host "  -Clean              Remove build and output directories"
     Write-Host "  -KeepBuild          Keep downloaded sources, static libraries, and build directories"
     Write-Host "  -Help               Show this help message"
+    Write-Host "  -Library            Build static libsox + header; keep libraries and build tree"
     Write-Host ""
     Write-Host "Codec Options (all enabled by default, use to exclude):"
     Write-Host "  -NoOgg              Exclude OGG/Vorbis support"
@@ -1388,6 +1390,15 @@ function Main {
 
     if ($Help) {
         Show-Help
+    }
+
+    if ($Library) {
+        $SoxBuildDir = Join-Path $ScriptDir "build-library"
+        $OutputDir = Join-Path $ScriptDir "output\library"
+        $KeepBuild = $true
+        if ($EnableVulkan) {
+            throw "-Library cannot use -Vulkan: third-party shared runtimes are required."
+        }
     }
 
     if ($Clean) {
@@ -1582,7 +1593,11 @@ function Main {
 
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
-        & $script:CMakePath --build . --config Release --parallel $Jobs
+        if ($Library) {
+            & $script:CMakePath --build . --config Release --target libsox --parallel $Jobs
+        } else {
+            & $script:CMakePath --build . --config Release --parallel $Jobs
+        }
         if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
     }
     finally {
@@ -1591,38 +1606,49 @@ function Main {
 
     Write-Success "SoX built successfully!"
 
-    $soxExe = Join-Path $SoxBuildDir "src\Release\sox.exe"
-    if (-not (Test-Path $soxExe)) {
-        $soxExe = Join-Path $SoxBuildDir "src\sox.exe"
-    }
-    if (-not (Test-Path $soxExe)) {
-        throw "sox.exe not found after build"
-    }
-    Test-StaticDependencies $soxExe
-    Test-SoxExecutable $soxExe
-
-    # Copy binary and non-codec runtime dependencies to output directory
-    Write-Info "Copying SoX and runtime dependencies to output directory..."
-    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-
-    if (Test-Path $soxExe) {
-        Copy-Item $soxExe $OutputDir
-    } else {
-        Write-Err "sox.exe not found!"
-        exit 1
-    }
-
-    if ($EnableVulkan) {
-        $glslangDll = Join-Path (Split-Path -Parent $soxExe) "glslang.dll"
-        if (-not (Test-Path $glslangDll)) {
-            throw "glslang.dll was not copied beside sox.exe by the Vulkan build"
+    if ($Library) {
+        $soxLib = Join-Path $SoxBuildDir "src\Release\libsox.lib"
+        if (-not (Test-Path -LiteralPath $soxLib)) {
+            $soxLib = Join-Path $SoxBuildDir "src\libsox.lib"
         }
-        Copy-Item $glslangDll $OutputDir
-    }
+        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+        Copy-Item -LiteralPath $soxLib -Destination (Join-Path $OutputDir "libsox.lib")
+        Copy-Item -LiteralPath (Join-Path $ScriptDir "src\sox.h") -Destination $OutputDir
+        Write-Info "Library mode keeps static_libs and build-library (including GSM/LPC10 dependencies)."
+    } else {
+        $soxExe = Join-Path $SoxBuildDir "src\Release\sox.exe"
+        if (-not (Test-Path $soxExe)) {
+            $soxExe = Join-Path $SoxBuildDir "src\sox.exe"
+        }
+        if (-not (Test-Path $soxExe)) {
+            throw "sox.exe not found after build"
+        }
+        Test-StaticDependencies $soxExe
+        Test-SoxExecutable $soxExe
 
-    Write-Success "Binary copied to: $OutputDir\sox.exe"
-    if ($EnableVulkan) {
-        Write-Success "Vulkan runtime copied to: $OutputDir\glslang.dll"
+        # Copy binary and non-codec runtime dependencies to output directory
+        Write-Info "Copying SoX and runtime dependencies to output directory..."
+        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+
+        if (Test-Path $soxExe) {
+            Copy-Item $soxExe $OutputDir
+        } else {
+            Write-Err "sox.exe not found!"
+            exit 1
+        }
+
+        if ($EnableVulkan) {
+            $glslangDll = Join-Path (Split-Path -Parent $soxExe) "glslang.dll"
+            if (-not (Test-Path $glslangDll)) {
+                throw "glslang.dll was not copied beside sox.exe by the Vulkan build"
+            }
+            Copy-Item $glslangDll $OutputDir
+        }
+
+        Write-Success "Binary copied to: $OutputDir\sox.exe"
+        if ($EnableVulkan) {
+            Write-Success "Vulkan runtime copied to: $OutputDir\glslang.dll"
+        }
     }
 
     if ($KeepBuild) {
@@ -1640,9 +1666,14 @@ function Main {
     Write-Success "Build complete!"
     Write-Host "=============================================="
     Write-Host ""
-    Write-Host "Output binary: $OutputDir\sox.exe"
-    if ($EnableVulkan) {
-        Write-Host "Vulkan runtime: $OutputDir\glslang.dll"
+    if ($Library) {
+        Write-Host "Output library: $OutputDir\libsox.lib"
+        Write-Host "Header: $OutputDir\sox.h"
+    } else {
+        Write-Host "Output binary: $OutputDir\sox.exe"
+        if ($EnableVulkan) {
+            Write-Host "Vulkan runtime: $OutputDir\glslang.dll"
+        }
     }
     Write-Host ""
 }

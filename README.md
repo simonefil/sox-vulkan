@@ -196,6 +196,16 @@ Output:
 - Windows: `output\sox.exe`
 - Linux/macOS/BSD: `output/sox`
 
+### Static library instead of the executable
+
+Unix: `./build_static_libs.sh --library`; Windows: `pwsh -File .\build_static_libs.ps1 -Library`.
+Builds only `libsox` and its dependencies; the executable remains the default.
+Output: `output/library/libsox.a` (Unix) or `output\library\libsox.lib` (Windows), plus `sox.h`.
+Library mode always keeps `static_libs`, `build-library` (including internal GSM/LPC10), and dependency sources, like `--keep-build` / `-KeepBuild`.
+Consumers must also link the existing dependency archives in those directories and the required native libraries/OpenMP runtime.
+The archives are not merged; no executable is copied or tested in library mode.
+Vulkan and PulseAudio are rejected before downloads in library mode.
+
 ### Build with custom options
 
 **Windows:**

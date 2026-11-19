@@ -83,12 +83,12 @@ static int write_packet(void * opaque, uint8_t const * buffer, int size)
   return count == (size_t)size ? size : AVERROR(EIO);
 }
 
-/* Seek or, for the AVSEEK_SIZE pseudo-whence, report the file length.  ENOSYS
- * is the documented way to tell libavformat an operation is unavailable, so
- * it is what a non-seekable file and an unknown length both answer; the
- * muxers and demuxers then fall back to a streaming strategy instead of
- * failing.  AVSEEK_FORCE carries no meaning for a plain file and is masked
- * off.  Returns the resulting absolute position, as the API expects. */
+/* Seek or, for the AVSEEK_SIZE pseudo-whence, report the file length.  Only
+ * installed on a seekable file; see allocate_io.  ENOSYS is the documented
+ * way to tell libavformat an operation is unavailable, so it is what an
+ * unknown length answers.  AVSEEK_FORCE carries no meaning for a plain file
+ * and is masked off.  Returns the resulting absolute position, as the API
+ * expects. */
 static int64_t seek(void * opaque, int64_t offset, int whence)
 {
   lsx_ffmpeg_container_t * state = opaque;
@@ -102,8 +102,6 @@ static int64_t seek(void * opaque, int64_t offset, int whence)
       return AVERROR(ENOSYS);
     return length <= INT64_MAX ? (int64_t)length : AVERROR(EOVERFLOW);
   }
-  if (!ft->seekable)
-    return AVERROR(ENOSYS);
   whence &= ~AVSEEK_FORCE;
   position = (off_t)offset;
   if ((int64_t)position != offset)
@@ -116,7 +114,10 @@ static int64_t seek(void * opaque, int64_t offset, int whence)
 
 /* Build the custom AVIOContext.  Only one of the two data callbacks is
  * installed, matching the direction; installing both would let libavformat
- * believe the file is bidirectional.  The buffer must come from av_malloc,
+ * believe the file is bidirectional.  Likewise the seek callback is installed
+ * only on a seekable file: given one, libavformat marks the context seekable
+ * and tries to seek over data it skips, which a pipe refuses, whereas without
+ * one it reads forward and discards.  The buffer must come from av_malloc,
  * since libavformat may reallocate it with its own allocator. */
 static int allocate_io(sox_format_t * ft, lsx_ffmpeg_container_t * state, sox_bool writing)
 {
@@ -126,7 +127,7 @@ static int allocate_io(sox_format_t * ft, lsx_ffmpeg_container_t * state, sox_bo
     return SOX_EOF;
   state->io = avio_alloc_context(buffer, AVIO_BUFFER_SIZE,
       writing, state, writing ? NULL : read_packet,
-      writing ? write_packet : NULL, seek);
+      writing ? write_packet : NULL, ft->seekable ? seek : NULL);
   if (state->io == NULL) {
     av_free(buffer);
     return SOX_EOF;

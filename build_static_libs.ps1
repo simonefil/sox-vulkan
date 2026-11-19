@@ -938,7 +938,9 @@ function Build-Wavpack {
 # Two files are dropped from the build. MD5.cpp is RSA's reference MD5, under
 # a licence of its own; SoX defines the three MD5 functions the library calls
 # itself. MACDll.cpp is the C interface of the SDK's DLL, which SoX does not
-# use, and under MSVC it includes MFC. The frame decoder and encoder SoX uses are declared in headers the SDK does
+# use, and under MSVC it includes MFC. The SDK's GCC warning options are
+# dropped too: cl reads -Wextra as /W with a non-numeric level and stops. The
+# frame decoder and encoder SoX uses are declared in headers the SDK does
 # not install, so all of them are copied beside the public ones. The C++
 # runtime is the static one every other library here uses (Get-CMakeFlags).
 function Build-MonkeysAudio {
@@ -958,10 +960,10 @@ function Build-MonkeysAudio {
     }
 
     $cmakeFile = Join-Path $src "CMakeLists.txt"
-    $cmakeLines = (Get-Content -LiteralPath $cmakeFile) -notmatch 'Source/MACLib/MD5\.cpp|Source/MACDll/MACDll\.cpp'
+    $cmakeLines = (Get-Content -LiteralPath $cmakeFile) -notmatch 'Source/MACLib/MD5\.cpp|Source/MACDll/MACDll\.cpp|add_compile_options\(-Wall -Wextra\)'
     Set-Content -LiteralPath $cmakeFile -Value $cmakeLines
-    if (Select-String -LiteralPath $cmakeFile -Pattern 'MACLib/MD5\.cpp|MACDll/MACDll\.cpp' -Quiet) {
-        throw "Could not remove MD5.cpp and MACDll.cpp from the Monkey's Audio SDK build"
+    if (Select-String -LiteralPath $cmakeFile -Pattern 'MACLib/MD5\.cpp|MACDll/MACDll\.cpp|-Wextra' -Quiet) {
+        throw "Could not remove MD5.cpp, MACDll.cpp and -Wextra from the Monkey's Audio SDK build"
     }
 
     Build-CMakeProject $src @(
@@ -984,6 +986,10 @@ function Build-MonkeysAudio {
 # libreplaygain and libcuefile, and libcuefile r475 no longer compiles with a
 # current clang. The flags are upstream's: FAST_MATH and CVD_FASTLOG, which
 # SoX's encoder is compiled to match. build_static_libs.sh writes the same.
+#
+# The SV8 bit reader and writer each keep a table named log2, which the UCRT
+# headers already declare as the C99 function, and cl refuses the clash. The
+# two tables are renamed mpc_log2 in the sources; nothing else uses the name.
 function Build-Musepack {
     Write-Info "========== Building Musepack $($Versions.musepack) =========="
 
@@ -998,6 +1004,12 @@ function Build-Musepack {
 
     if (-not (Test-Path $src)) {
         Extract-Archive $archive $SrcDir
+    }
+
+    foreach ($file in @("libmpcdec\mpc_bits_reader.c", "libmpcenc\bitstream.c")) {
+        $path = Join-Path $src $file
+        $text = [IO.File]::ReadAllText($path) -replace '\blog2\[', 'mpc_log2['
+        [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
     }
 
     New-Item -ItemType Directory -Path $libraries -Force | Out-Null

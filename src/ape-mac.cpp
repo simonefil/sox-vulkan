@@ -43,10 +43,10 @@
 static void set_format(APE::WAVEFORMATEX * format, unsigned channels, unsigned bits_per_sample, unsigned rate)
 {
   format->wFormatTag = WAVE_FORMAT_PCM;
-  format->nChannels = static_cast<APE::WORD>(channels);
+  format->nChannels = static_cast<APE::uint16>(channels);
   format->nSamplesPerSec = rate;
-  format->wBitsPerSample = static_cast<APE::WORD>(bits_per_sample);
-  format->nBlockAlign = static_cast<APE::WORD>(channels * bits_per_sample / 8);
+  format->wBitsPerSample = static_cast<APE::uint16>(bits_per_sample);
+  format->nBlockAlign = static_cast<APE::uint16>(channels * bits_per_sample / 8);
   format->nAvgBytesPerSec = rate * format->nBlockAlign;
   format->cbSize = 0;
 }

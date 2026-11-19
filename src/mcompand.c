@@ -246,7 +246,7 @@ static int start(sox_effect_t * effp)
 
     /* Allocate the delay buffer */
     if (c->delay_buf_size > 0)
-      l->delay_buf = lsx_calloc(sizeof(long), c->delay_buf_size);
+      l->delay_buf = lsx_calloc(sizeof(*l->delay_buf), c->delay_buf_size);
     l->delay_buf_ptr = 0;
     l->delay_buf_cnt = 0;
 

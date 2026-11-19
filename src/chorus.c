@@ -104,9 +104,9 @@ static int sox_chorus_getopts(sox_effect_t * effp, int argc, char **argv)
         sscanf(argv[i++], "%lf", &chorus->in_gain);
         sscanf(argv[i++], "%lf", &chorus->out_gain);
         while ( i < argc ) {
-                if ( chorus->num_chorus > MAX_CHORUS )
+                if ( chorus->num_chorus >= MAX_CHORUS )
                 {
-                        lsx_fail("chorus: to many delays, use less than %i delays", MAX_CHORUS);
+                        lsx_fail("chorus: too many delays, use at most %i delays", MAX_CHORUS);
                         return (SOX_EOF);
                 }
                 sscanf(argv[i++], "%lf", &chorus->delay[chorus->num_chorus]);

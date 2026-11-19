@@ -33,7 +33,7 @@ static lsx_codec_handler_t const * (* const codec_fns[])(void) = {
 #if defined HAVE_OPUS && (defined STATIC_OPUS || !defined HAVE_LIBLTDL)
   lsx_opus_codec_fn,
 #endif
-#if defined HAVE_MP3 && defined STATIC_MP3 && defined HAVE_MAD_H && defined HAVE_LAME
+#if defined HAVE_MP3 && (defined STATIC_MP3 || !defined HAVE_LIBLTDL) && defined HAVE_MAD_H
   lsx_mp3_codec_fn,
 #endif
 #if defined HAVE_WAVPACK && (defined STATIC_WAVPACK || !defined HAVE_LIBLTDL)

@@ -197,14 +197,6 @@ void lsx_id3_read_tag(sox_format_t * ft, sox_bool search)
         free(utf8);
       }
     }
-    if ((utf8 = utf8_id3tag_findframe(info.tag, "TLEN", 0))) {
-      unsigned long tlen = strtoul((char *)utf8, NULL, 10);
-      if (tlen > 0 && tlen < ULONG_MAX) {
-        ft->signal.length= tlen; /* In ms; convert to samples later */
-        lsx_debug("got exact duration from ID3 TLEN");
-      }
-      free(utf8);
-    }
   }
   while (info.head) {
     struct tag_info_node * head = info.head;

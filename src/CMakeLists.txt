@@ -1183,7 +1183,7 @@ endif()
 
 # MP3 format (mad/lame/twolame)
 if(HAVE_MP3)
-    target_sources(libsox PRIVATE mp3.c codec-mp3.c)
+    target_sources(libsox PRIVATE mp3.c codec-mp3.c mpeg-audio.c)
     target_link_libraries(libsox PRIVATE ${MP3_LIBRARIES})
     target_compile_definitions(libsox PRIVATE STATIC_MP3)
     if(HAVE_MAD_H)

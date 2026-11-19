@@ -67,6 +67,9 @@ typedef struct {
   sox_bool eof;
 } lsx_container_t;
 
+/* MPEG audio elementary streams, which the mp3 format reads through. */
+extern lsx_container_ops_t const lsx_mpeg_audio_ops;
+
 int lsx_codec_start_decode(lsx_codec_t * codec, sox_bool comments);
 int lsx_container_read_magic(sox_format_t * ft, unsigned char magic[4], sox_uint64_t * offset);
 int lsx_container_check_chained(sox_format_t * ft, lsx_codec_params_t const * first,

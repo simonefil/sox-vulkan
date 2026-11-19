@@ -1,16 +1,14 @@
 /* MP3 support for SoX
  *
- * Uses libmad for MP3 decoding
- * libmp3lame for MP3 encoding
- * and libtwolame for MP2 encoding
+ * Uses libmp3lame for MP3 encoding
+ * and libtwolame for MP2 encoding.
+ * Reading goes through the MPEG audio container and the MP3 codec.
  *
  * Written by Fabrizio Gennari <fabrizio.ge@tiscali.it>
- *
- * The decoding part is based on the decoder-tutorial program madlld
- * written by Bertrand Petit <madlld@phoe.fmug.org>,
  */
 
 #include "sox_i.h"
+#include "container.h"
 #include <string.h>
 
 #if defined(HAVE_LAME_LAME_H) || defined(HAVE_LAME_H) || defined(DL_LAME)
@@ -22,10 +20,6 @@
 #endif
 
 #if defined(HAVE_MAD_H) || defined(HAVE_LAME) || defined(HAVE_TWOLAME)
-
-#ifdef HAVE_MAD_H
-#include <mad.h>
-#endif
 
 #if defined(HAVE_LAME_LAME_H)
 #include <lame/lame.h>
@@ -39,40 +33,12 @@ typedef enum {
 } vbr_mode;
 #endif
 
-#if defined(HAVE_ID3TAG) && (defined(HAVE_IO_H) || defined(HAVE_UNISTD_H))
-#define USING_ID3TAG 1
-#endif
-
-#ifdef USING_ID3TAG
-  #include <id3tag.h>
-  #include "id3.h"
-#if defined(HAVE_UNISTD_H)
-  #include <unistd.h>
-#elif defined(HAVE_IO_H)
-  #include <io.h>
-#endif
-#else
-  #define ID3_TAG_FLAG_FOOTERPRESENT 0x10
-#endif
-
 #ifdef HAVE_TWOLAME_H
   #include <twolame.h>
 #endif
 
 #ifndef HAVE_LIBLTDL
   #undef DL_LAME
-  #undef DL_MAD
-#endif
-
-/* Under Windows, importing data from DLLs is a dicey proposition. This is true
- * when using dlopen, but also true if linking directly against the DLL if the
- * header does not mark the data as __declspec(dllexport), which mad.h does not.
- * Sidestep the issue by defining our own mad_timer_zero. This is needed because
- * mad_timer_zero is used in some of the mad.h macros.
- */
-#ifdef HAVE_MAD_H
-#define mad_timer_zero mad_timer_zero_stub
-static mad_timer_t const mad_timer_zero_stub = {0, 0};
 #endif
 
 #define MAXFRAMESIZE 2880
@@ -80,46 +46,6 @@ static mad_timer_t const mad_timer_zero_stub = {0, 0};
 
 /* LAME takes float values as input. */
 #define MP3_LAME_PRECISION 24
-
-/* MAD returns values with MAD_F_FRACBITS (28) bits of precision, though it's
-   not certain that all of them are meaningful. Default to 16 bits to
-   align with most users expectation of output file should be 16 bits. */
-#define MP3_MAD_PRECISION  16
-
-static const char* const mad_library_names[] =
-{
-#ifdef DL_MAD
-    "libmad",
-    "libmad-0",
-    "cygmad-0",
-#endif
-    NULL
-};
-
-#ifdef DL_MAD
-  #define MAD_FUNC LSX_DLENTRY_DYNAMIC
-#else
-  #define MAD_FUNC LSX_DLENTRY_STATIC
-#endif
-
-#define MAD_FUNC_ENTRIES(f,x) \
-  MAD_FUNC(f,x, void, mad_stream_buffer, (struct mad_stream *, unsigned char const *, unsigned long)) \
-  MAD_FUNC(f,x, void, mad_stream_skip, (struct mad_stream *, unsigned long)) \
-  MAD_FUNC(f,x, int, mad_stream_sync, (struct mad_stream *)) \
-  MAD_FUNC(f,x, void, mad_stream_init, (struct mad_stream *)) \
-  MAD_FUNC(f,x, void, mad_frame_init, (struct mad_frame *)) \
-  MAD_FUNC(f,x, void, mad_synth_init, (struct mad_synth *)) \
-  MAD_FUNC(f,x, int, mad_frame_decode, (struct mad_frame *, struct mad_stream *)) \
-  MAD_FUNC(f,x, void, mad_timer_add, (mad_timer_t *, mad_timer_t)) \
-  MAD_FUNC(f,x, void, mad_synth_frame, (struct mad_synth *, struct mad_frame const *)) \
-  MAD_FUNC(f,x, char const *, mad_stream_errorstr, (struct mad_stream const *)) \
-  MAD_FUNC(f,x, void, mad_frame_finish, (struct mad_frame *)) \
-  MAD_FUNC(f,x, void, mad_stream_finish, (struct mad_stream *)) \
-  MAD_FUNC(f,x, unsigned long, mad_bit_read, (struct mad_bitptr *, unsigned int)) \
-  MAD_FUNC(f,x, int, mad_header_decode, (struct mad_header *, struct mad_stream *)) \
-  MAD_FUNC(f,x, void, mad_header_init, (struct mad_header *)) \
-  MAD_FUNC(f,x, signed long, mad_timer_count, (mad_timer_t, enum mad_units)) \
-  MAD_FUNC(f,x, void, mad_timer_multiply, (mad_timer_t *, signed long))
 
 static const char* const lame_library_names[] =
 {
@@ -214,27 +140,15 @@ static const char* const twolame_library_names[] =
   TWOLAME_FUNC(f,x, int, twolame_encode_flush, (twolame_options *, unsigned char *, int)) \
   TWOLAME_FUNC(f,x, void, twolame_close, (twolame_options **))
 
+#if defined(HAVE_LAME) || defined(HAVE_TWOLAME)
+
 /* Private data */
 typedef struct mp3_priv_t {
   unsigned char *mp3_buffer;
   size_t mp3_buffer_size;
-
-#ifdef HAVE_MAD_H
-  struct mad_stream       Stream;
-  struct mad_frame        Frame;
-  struct mad_synth        Synth;
-  mad_timer_t             Timer;
-  ptrdiff_t               cursamp;
-  size_t                  FrameCount;
-  sox_bool                eof_guard;
-  LSX_DLENTRIES_TO_PTRS(MAD_FUNC_ENTRIES, mad_dl);
-#endif /*HAVE_MAD_H*/
-
-#if defined(HAVE_LAME) || defined(HAVE_TWOLAME)
   float *pcm_buffer;
   size_t pcm_buffer_size;
   char mp2;
-#endif
 
 #ifdef HAVE_LAME
   lame_global_flags *gfp;
@@ -249,490 +163,22 @@ typedef struct mp3_priv_t {
 #endif
 } priv_t;
 
-#ifdef HAVE_MAD_H
+/* Reading keeps the container's state in the same private data. */
+#define PRIV_SIZE max(sizeof(priv_t), sizeof(lsx_container_t))
 
-/* This function merges the functions tagtype() and id3_tag_query()
-   from MAD's libid3tag, so we don't have to link to it
-   Returns 0 if the frame is not an ID3 tag, tag length if it is */
+#else
+#define PRIV_SIZE sizeof(lsx_container_t)
+#endif
 
-static int tagtype(const unsigned char *data, size_t length)
-{
-    if (length >= 3 && data[0] == 'T' && data[1] == 'A' && data[2] == 'G')
-    {
-        return 128; /* ID3V1 */
-    }
-
-    if (length >= 10 &&
-        (data[0] == 'I' && data[1] == 'D' && data[2] == '3') &&
-        data[3] < 0xff && data[4] < 0xff &&
-        data[6] < 0x80 && data[7] < 0x80 && data[8] < 0x80 && data[9] < 0x80)
-    {     /* ID3V2 */
-        unsigned char flags;
-        unsigned int size;
-        flags = data[5];
-        size = 10 + (data[6]<<21) + (data[7]<<14) + (data[8]<<7) + data[9];
-        if (flags & ID3_TAG_FLAG_FOOTERPRESENT)
-            size += 10;
-        for (; size < length && !data[size]; ++size);  /* Consume padding */
-        return size;
-    }
-
-    return 0;
-}
-
-#endif /*HAVE_MAD_H*/
-
-#include "mp3-util.h"
-
-#ifdef HAVE_MAD_H
-
-/*
- * (Re)fill the stream buffer that is to be decoded.  If any data
- * still exists in the buffer then they are first shifted to be
- * front of the stream buffer.
- */
-static int sox_mp3_input(sox_format_t * ft)
-{
-    priv_t *p = (priv_t *) ft->priv;
-    size_t bytes_read;
-    size_t remaining;
-
-    /* Once the guarded tail needs more input, EOF is final.  startread also
-     * calls us to replay a valid first frame, which still needs rebinding even
-     * if the guard was supplied while probing that frame. */
-    if (p->eof_guard && p->Stream.error == MAD_ERROR_BUFLEN)
-        return SOX_EOF;
-
-    remaining = p->Stream.next_frame ?
-        (size_t)(p->Stream.bufend - p->Stream.next_frame) : 0;
-    if (!p->eof_guard && (remaining > p->mp3_buffer_size ||
-        (remaining == p->mp3_buffer_size && p->Stream.error == MAD_ERROR_BUFLEN))) {
-        lsx_fail_errno(ft, SOX_EFMT, "MP3 frame exceeds input buffer");
-        return SOX_EOF;
-    }
-
-    /* libmad does not consume all the buffer it's given. Some
-     * data, part of a truncated frame, is left unused at the
-     * end of the buffer. That data must be put back at the
-     * beginning of the buffer and taken in account for
-     * refilling the buffer. This means that the input buffer
-     * must be large enough to hold a complete frame at the
-     * highest observable bit-rate (currently 448 kb/s).
-     * TODO: Is 2016 bytes the size of the largest frame?
-     * (448000*(1152/32000))/8
-     */
-    if (remaining)
-        memmove(p->mp3_buffer, p->Stream.next_frame, remaining);
-    /* Never leave MAD pointing at the old offsets after moving its tail. */
-    p->mad_stream_buffer(&p->Stream, p->mp3_buffer, remaining);
-
-    if (!p->eof_guard && remaining < p->mp3_buffer_size) {
-        bytes_read = lsx_readbuf(ft, p->mp3_buffer+remaining,
-                                p->mp3_buffer_size-remaining);
-        if (lsx_error(ft))
-            return SOX_EOF;
-        remaining += bytes_read;
-        if (lsx_eof(ft)) {
-            /* libmad requires readable lookahead beyond the last real frame.
-             * This storage is reserved separately from the input capacity. */
-            memset(p->mp3_buffer + remaining, 0, MAD_BUFFER_GUARD);
-            remaining += MAD_BUFFER_GUARD;
-            p->eof_guard = sox_true;
-        }
-        else if (bytes_read == 0)
-            return SOX_EOF;
-    }
-
-    p->mad_stream_buffer(&p->Stream, p->mp3_buffer, remaining);
-    p->Stream.error = 0;
-
-    return SOX_SUCCESS;
-}
-
-/* Attempts to read an ID3 tag at the current location in stream and
- * consume it all.  Returns SOX_EOF if no tag is found.  Its up to
- * caller to recover.
- * */
-static int sox_mp3_inputtag(sox_format_t * ft)
-{
-    priv_t *p = (priv_t *) ft->priv;
-    int rc = SOX_EOF;
-    size_t remaining;
-    size_t tagsize;
-
-
-    /* FIXME: This needs some more work if we are to ever
-     * look at the ID3 frame.  This is because the Stream
-     * may not be able to hold the complete ID3 frame.
-     * We should consume the whole frame inside tagtype()
-     * instead of outside of tagframe().  That would support
-     * recovering when Stream contains less then 8-bytes (header)
-     * and also when ID3v2 is bigger then Stream buffer size.
-     * Need to pass in stream so that buffer can be
-     * consumed as well as letting additional data to be
-     * read in.
-     */
-    remaining = p->Stream.bufend - p->Stream.next_frame;
-    if ((tagsize = tagtype(p->Stream.this_frame, remaining)))
-    {
-        p->mad_stream_skip(&p->Stream, tagsize);
-        rc = SOX_SUCCESS;
-    }
-
-    /* We know that a valid frame hasn't been found yet
-     * so help libmad out and go back into frame seek mode.
-     * This is true whether an ID3 tag was found or not.
-     */
-    p->mad_stream_sync(&p->Stream);
-
-    return rc;
-}
-
-static sox_bool sox_mp3_vbrtag(sox_format_t *ft)
-{
-    priv_t *p = ft->priv;
-    struct mad_bitptr *anc = &p->Stream.anc_ptr;
-
-    if (p->Frame.header.layer != MAD_LAYER_III)
-        return sox_false;
-
-    if (p->Stream.anc_bitlen < 32)
-        return sox_false;
-
-    if (!memcmp(anc->byte, "Xing", 4) ||
-        !memcmp(anc->byte, "Info", 4))
-        return sox_true;
-
-    return sox_false;
-}
-
+#if defined HAVE_MAD_H && (defined STATIC_MP3 || !defined HAVE_LIBLTDL)
 static int startread(sox_format_t * ft)
 {
-  priv_t *p = (priv_t *) ft->priv;
-  size_t ReadSize;
-  sox_bool ignore_length = ft->signal.length == SOX_IGNORE_LENGTH;
-  int open_library_result;
-
-  LSX_DLLIBRARY_OPEN(
-      p,
-      mad_dl,
-      MAD_FUNC_ENTRIES,
-      "MAD decoder library",
-      mad_library_names,
-      open_library_result);
-  if (open_library_result)
-    return SOX_EOF;
-
-  p->mp3_buffer_size = sox_globals.bufsiz;
-  if (!p->mp3_buffer_size || p->mp3_buffer_size > (size_t)-1 - MAD_BUFFER_GUARD) {
-    lsx_fail_errno(ft, SOX_ENOMEM, "Invalid MP3 input buffer size");
-    LSX_DLLIBRARY_CLOSE(p, mad_dl);
-    return SOX_EOF;
-  }
-  p->mp3_buffer = lsx_malloc(p->mp3_buffer_size + MAD_BUFFER_GUARD);
-  p->eof_guard = sox_false;
-
-  ft->signal.length = SOX_UNSPEC;
-  if (ft->seekable) {
-#ifdef USING_ID3TAG
-    lsx_id3_read_tag(ft, sox_true);
-    lsx_rewind(ft);
-    if (!ft->signal.length)
-#endif
-      if (!ignore_length)
-        ft->signal.length = mp3_duration(ft);
-  }
-
-  p->mad_stream_init(&p->Stream);
-  p->mad_frame_init(&p->Frame);
-  p->mad_synth_init(&p->Synth);
-  mad_timer_reset(&p->Timer);
-
-  ft->encoding.encoding = SOX_ENCODING_MP3;
-
-  /* Decode at least one valid frame to find out the input
-   * format.  The decoded frame will be saved off so that it
-   * can be processed later.
-   */
-  ReadSize = lsx_readbuf(ft, p->mp3_buffer, p->mp3_buffer_size);
-  if (ReadSize != p->mp3_buffer_size && lsx_error(ft))
-    goto error;
-
-  p->mad_stream_buffer(&p->Stream, p->mp3_buffer, ReadSize);
-
-  /* Find a valid frame before starting up.  This makes sure
-   * that we have a valid MP3 and also skips past ID3v2 tags
-   * at the beginning of the audio file.
-   */
-  p->Stream.error = 0;
-  while (p->mad_frame_decode(&p->Frame,&p->Stream))
-  {
-      /* check whether input buffer needs a refill */
-      if (p->Stream.error == MAD_ERROR_BUFLEN)
-      {
-          if (sox_mp3_input(ft) == SOX_EOF)
-              goto error;
-
-          continue;
-      }
-
-      /* Consume any ID3 tags */
-      sox_mp3_inputtag(ft);
-
-      /* FIXME: We should probably detect when we've read
-       * a bunch of non-ID3 data and still haven't found a
-       * frame.  In that case we can abort early without
-       * scanning the whole file.
-       */
-      p->Stream.error = 0;
-  }
-
-  if (p->Stream.error)
-  {
-      lsx_fail_errno(ft,SOX_EOF,"No valid MP3 frame found");
-      goto error;
-  }
-
-  switch(p->Frame.header.mode)
-  {
-      case MAD_MODE_SINGLE_CHANNEL:
-      case MAD_MODE_DUAL_CHANNEL:
-      case MAD_MODE_JOINT_STEREO:
-      case MAD_MODE_STEREO:
-          ft->signal.channels = MAD_NCHANNELS(&p->Frame.header);
-          break;
-      default:
-          lsx_fail_errno(ft, SOX_EFMT, "Cannot determine number of channels");
-          goto error;
-  }
-
-  ft->signal.precision = MP3_MAD_PRECISION;
-  ft->signal.rate=p->Frame.header.samplerate;
-  if (ignore_length)
-    ft->signal.length = SOX_UNSPEC;
-  else {
-    ft->signal.length *= ft->signal.channels;  /* Keep separate from line above! */
-  }
-
-  if (!sox_mp3_vbrtag(ft))
-      p->Stream.next_frame = p->Stream.this_frame;
-
-  p->mad_frame_finish(&p->Frame);
-  p->mad_frame_init(&p->Frame);
-  if (sox_mp3_input(ft) == SOX_EOF)
-      goto error;
-
-  p->cursamp = 0;
-
-  return SOX_SUCCESS;
-
-error:
-  /* A failed startread is not followed by stopread.  All paths here have
-   * initialized MAD; preserve the failure diagnostics while releasing it. */
-  mad_synth_finish(&p->Synth);
-  p->mad_frame_finish(&p->Frame);
-  p->mad_stream_finish(&p->Stream);
-  free(p->mp3_buffer);
-  LSX_DLLIBRARY_CLOSE(p, mad_dl);
-  return SOX_EOF;
+  return lsx_container_startread(ft, &lsx_mpeg_audio_ops);
 }
-
-/*
- * Read up to len samples from p->Synth
- * If needed, read some more MP3 data, decode them and synth them
- * Place in buf[].
- * Return number of samples read.
- */
-static size_t sox_mp3read(sox_format_t * ft, sox_sample_t *buf, size_t len)
-{
-    priv_t *p = (priv_t *) ft->priv;
-    size_t donow,i,done=0;
-    mad_fixed_t sample;
-    size_t chan;
-
-    do {
-        size_t x = (p->Synth.pcm.length - p->cursamp)*ft->signal.channels;
-        donow=min(len, x);
-        i=0;
-        while(i<donow){
-            for(chan=0;chan<ft->signal.channels;chan++){
-                sample=p->Synth.pcm.samples[chan][p->cursamp];
-                if (sample < -MAD_F_ONE)
-                    sample=-MAD_F_ONE;
-                else if (sample >= MAD_F_ONE)
-                    sample=MAD_F_ONE-1;
-                /* mad_fixed_t has MAD_F_FRACBITS fractional bits; dividing by
-                 * their scale is exact and says what the shift used to say. */
-                *buf++=(sox_sample_t)sample / (double)MAD_F_ONE;
-                i++;
-            }
-            p->cursamp++;
-        };
-
-        len-=donow;
-        done+=donow;
-
-        if (len==0) break;
-
-        /* check whether input buffer needs a refill */
-        if (p->Stream.error == MAD_ERROR_BUFLEN)
-        {
-            if (sox_mp3_input(ft) == SOX_EOF) {
-                lsx_debug("sox_mp3_input EOF");
-                break;
-            }
-        }
-
-        if (p->mad_frame_decode(&p->Frame,&p->Stream))
-        {
-            if(MAD_RECOVERABLE(p->Stream.error))
-            {
-                sox_mp3_inputtag(ft);
-                continue;
-            }
-            else
-            {
-                if (p->Stream.error == MAD_ERROR_BUFLEN)
-                    continue;
-                else
-                {
-                    lsx_report("unrecoverable frame level error (%s).",
-                              p->mad_stream_errorstr(&p->Stream));
-                    break;
-                }
-            }
-        }
-        p->FrameCount++;
-        p->mad_timer_add(&p->Timer,p->Frame.header.duration);
-        p->mad_synth_frame(&p->Synth,&p->Frame);
-        p->cursamp=0;
-    } while(1);
-
-    return done;
-}
-
-static int stopread(sox_format_t * ft)
-{
-  priv_t *p=(priv_t*) ft->priv;
-
-  mad_synth_finish(&p->Synth);
-  p->mad_frame_finish(&p->Frame);
-  p->mad_stream_finish(&p->Stream);
-
-  free(p->mp3_buffer);
-  LSX_DLLIBRARY_CLOSE(p, mad_dl);
-  return SOX_SUCCESS;
-}
-
-static int sox_mp3seek(sox_format_t * ft, uint64_t offset)
-{
-  priv_t   * p = (priv_t *) ft->priv;
-  size_t   initial_bitrate = p->Frame.header.bitrate;
-  size_t   tagsize = 0, consumed = 0;
-  sox_bool vbr = sox_false; /* Variable Bit Rate */
-  sox_bool depadded = sox_false;
-  uint64_t to_skip_samples = 0;
-
-  /* Reset all */
-  lsx_rewind(ft);
-  mad_timer_reset(&p->Timer);
-  p->FrameCount = 0;
-  p->eof_guard = sox_false;
-
-  /* They where opened in startread */
-  mad_synth_finish(&p->Synth);
-  p->mad_frame_finish(&p->Frame);
-  p->mad_stream_finish(&p->Stream);
-
-  p->mad_stream_init(&p->Stream);
-  p->mad_frame_init(&p->Frame);
-  p->mad_synth_init(&p->Synth);
-  p->cursamp = 0;
-
-  offset /= ft->signal.channels;
-  to_skip_samples = offset;
-
-  while(sox_true) {  /* Read data from the MP3 file */
-    size_t padding = 0;
-    size_t read;
-    size_t leftover = p->Stream.next_frame ?
-        (size_t)(p->Stream.bufend - p->Stream.next_frame) : 0;
-
-    if (leftover)
-      memmove(p->mp3_buffer, p->Stream.this_frame, leftover);
-    read = lsx_readbuf(ft, p->mp3_buffer + leftover, p->mp3_buffer_size - leftover);
-    if (read == 0) {
-      lsx_debug("seek failure. unexpected EOF (frames=%" PRIuPTR " leftover=%" PRIuPTR ")", p->FrameCount, leftover);
-      break;
-    }
-    for (; !depadded && padding < read && !p->mp3_buffer[padding]; ++padding);
-    depadded = sox_true;
-    p->mad_stream_buffer(&p->Stream, p->mp3_buffer + padding, leftover + read - padding);
-
-    while (sox_true) {  /* Decode frame headers */
-      static unsigned short samples;
-      p->Stream.error = MAD_ERROR_NONE;
-
-      /* Not an audio frame */
-      if (p->mad_header_decode(&p->Frame.header, &p->Stream) == -1) {
-        if (p->Stream.error == MAD_ERROR_BUFLEN)
-          break;  /* Normal behaviour; get some more data from the file */
-        if (!MAD_RECOVERABLE(p->Stream.error)) {
-          lsx_warn("unrecoverable MAD error");
-          break;
-        }
-        if (p->Stream.error == MAD_ERROR_LOSTSYNC) {
-          unsigned available = (p->Stream.bufend - p->Stream.this_frame);
-          tagsize = tagtype(p->Stream.this_frame, (size_t) available);
-          if (tagsize) {   /* It's some ID3 tags, so just skip */
-            if (tagsize >= available) {
-              lsx_seeki(ft, (off_t)(tagsize - available), SEEK_CUR);
-              depadded = sox_false;
-            }
-            p->mad_stream_skip(&p->Stream, min(tagsize, available));
-          }
-          else lsx_warn("MAD lost sync");
-        }
-        else lsx_warn("recoverable MAD error");
-        continue;
-      }
-
-      consumed += p->Stream.next_frame - p->Stream.this_frame;
-      vbr      |= (p->Frame.header.bitrate != initial_bitrate);
-
-      samples = 32 * MAD_NSBSAMPLES(&p->Frame.header);
-
-      p->FrameCount++;
-      p->mad_timer_add(&p->Timer, p->Frame.header.duration);
-
-      if(to_skip_samples <= samples)
-      {
-        p->mad_frame_decode(&p->Frame,&p->Stream);
-        p->mad_synth_frame(&p->Synth, &p->Frame);
-        p->cursamp = to_skip_samples;
-        return SOX_SUCCESS;
-      }
-      else to_skip_samples -= samples;
-
-      /* If not VBR, we can extrapolate frame size */
-      if (p->FrameCount == 64 && !vbr) {
-        p->FrameCount = offset / samples;
-        to_skip_samples = offset % samples;
-
-        if (SOX_SUCCESS != lsx_seeki(ft, (off_t)(p->FrameCount * consumed / 64 + tagsize), SEEK_SET))
-          return SOX_EOF;
-
-        /* Reset Stream for refilling buffer */
-        p->mad_stream_finish(&p->Stream);
-        p->mad_stream_init(&p->Stream);
-        break;
-      }
-    }
-  };
-
-  return SOX_EOF;
-}
-#else /* !HAVE_MAD_H */
+#define sox_mp3read lsx_container_read
+#define stopread lsx_container_stopread
+#define sox_mp3seek lsx_container_seek
+#else
 static int startread(sox_format_t * ft)
 {
   lsx_fail_errno(ft,SOX_EOF,"SoX was compiled without MP3 decoding support");
@@ -741,7 +187,7 @@ static int startread(sox_format_t * ft)
 #define sox_mp3read NULL
 #define stopread NULL
 #define sox_mp3seek NULL
-#endif /*HAVE_MAD_H*/
+#endif
 
 #ifdef HAVE_LAME
 
@@ -796,6 +242,47 @@ UNUSED static size_t lame_get_id3v2_tag_stub(lame_global_flags * gfp UNUSED, uns
   { return 0; }
 UNUSED static int id3tag_set_fieldvalue_stub(lame_global_flags * gfp UNUSED, const char *fieldvalue UNUSED)
   { return 0; }
+
+static void write_comments(sox_format_t * ft)
+{
+  priv_t *p = (priv_t *) ft->priv;
+  const char* comment;
+
+  p->id3tag_init(p->gfp);
+  p->id3tag_set_pad(p->gfp, (size_t)ID3PADDING);
+
+  /* Note: id3tag_set_fieldvalue is not present in LAME 3.97, so we're using
+     the 3.97-compatible methods for all of the tags that 3.97 supported. */
+  /* FIXME: This is no more necessary, since support for LAME 3.97 has ended. */
+  if ((comment = sox_find_comment(ft->oob.comments, "Title")))
+    p->id3tag_set_title(p->gfp, comment);
+  if ((comment = sox_find_comment(ft->oob.comments, "Artist")))
+    p->id3tag_set_artist(p->gfp, comment);
+  if ((comment = sox_find_comment(ft->oob.comments, "Album")))
+    p->id3tag_set_album(p->gfp, comment);
+  if ((comment = sox_find_comment(ft->oob.comments, "Tracknumber")))
+    p->id3tag_set_track(p->gfp, comment);
+  if ((comment = sox_find_comment(ft->oob.comments, "Year")))
+    p->id3tag_set_year(p->gfp, comment);
+  if ((comment = sox_find_comment(ft->oob.comments, "Comment")))
+    p->id3tag_set_comment(p->gfp, comment);
+  if ((comment = sox_find_comment(ft->oob.comments, "Genre")))
+  {
+    if (p->id3tag_set_genre(p->gfp, comment))
+      lsx_warn("\"%s\" is not a recognized ID3v1 genre.", comment);
+  }
+
+  if ((comment = sox_find_comment(ft->oob.comments, "Discnumber")))
+  {
+    char* id3tag_buf = lsx_malloc(strlen(comment) + 6);
+    if (id3tag_buf)
+    {
+      sprintf(id3tag_buf, "TPOS=%s", comment);
+      p->id3tag_set_fieldvalue(p->gfp, id3tag_buf);
+      free(id3tag_buf);
+    }
+  }
+}
 
 static int get_id3v2_tag_size(sox_format_t * ft)
 {
@@ -1361,7 +848,7 @@ LSX_FORMAT_HANDLER(mp3)
     "MPEG Layer 2/3 lossy audio compression", names, 0,
     startread, sox_mp3read, stopread,
     startwrite, sox_mp3write, stopwrite,
-    sox_mp3seek, write_encodings, write_rates, sizeof(priv_t)
+    sox_mp3seek, write_encodings, write_rates, PRIV_SIZE
   };
   return &handler;
 }

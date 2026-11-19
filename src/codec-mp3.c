@@ -28,20 +28,25 @@
  * and the padding LAME adds at the end is discard on the last packets.  A
  * stream whose first frame is a Xing or LAME information frame, as an MP3
  * file has, says the same in that frame: it is dropped, and the delay and
- * padding it gives are applied here when the container gives none. */
+ * padding it gives are applied here when the container gives none.
+ *
+ * Decoding needs only libmad and encoding LAME, so that a build without
+ * LAME still reads. */
 
 #include "codec.h"
 
-#if defined HAVE_MP3 && defined STATIC_MP3 && defined HAVE_MAD_H && defined HAVE_LAME
+#if defined HAVE_MP3 && (defined STATIC_MP3 || !defined HAVE_LIBLTDL) && defined HAVE_MAD_H
 
-#include <math.h>
 #include <string.h>
 
 #include <mad.h>
+#ifdef HAVE_LAME
+#include <math.h>
 #if defined HAVE_LAME_LAME_H
 #include <lame/lame.h>
 #else
 #include <lame.h>
+#endif
 #endif
 
 #define DECODER_DELAY 529
@@ -64,6 +69,7 @@ typedef struct {
   unsigned char reservoir[RESERVOIR_SIZE];
   size_t reservoir_size;
 
+#ifdef HAVE_LAME
   /* Encoding */
   lame_global_flags * gfp;
   float * left, * right;
@@ -71,6 +77,7 @@ typedef struct {
   unsigned char * output; /* LAME's output, not yet cut into frames */
   size_t output_size, output_alloc;
   sox_uint64_t input_frames, coded_frames;
+#endif
 } priv_t;
 
 /* The length of the Layer III frame whose header data begins, or 0. */
@@ -107,8 +114,11 @@ static int start_decode(lsx_codec_t * codec)
   return SOX_SUCCESS;
 }
 
-/* Whether the frame is an information frame, and if it gives the delay and
- * padding, the frames to drop and where the signal ends. */
+/* Whether the frame is an information frame, and if its LAME extension gives
+ * the delay and padding, the frames to drop and where the signal ends.  The
+ * frame is where the main data would begin were there no CRC, which LAME
+ * leaves out of the count even when it sets the flag for it, as FFmpeg does
+ * in reading. */
 static sox_bool information_frame(priv_t * p, unsigned char const * data, size_t size)
 {
   unsigned frames, pos, flags;
@@ -117,7 +127,7 @@ static sox_bool information_frame(priv_t * p, unsigned char const * data, size_t
 
   if (!frame_size(data, size, &frames))
     return sox_false;
-  pos = 4 + (mpeg1? (mono? 17 : 32) : (mono? 9 : 17)) + (data[1] & 1? 0 : 2);
+  pos = 4 + (mpeg1? (mono? 17 : 32) : (mono? 9 : 17));
   if (pos + 8 > size || (memcmp(data + pos, "Xing", 4) && memcmp(data + pos, "Info", 4)))
     return sox_false;
   flags = data[pos + 7];
@@ -129,11 +139,12 @@ static sox_bool information_frame(priv_t * p, unsigned char const * data, size_t
     pos += 4;
   }
   pos += (flags & 2? 4 : 0) + (flags & 4? 100 : 0) + (flags & 8? 4 : 0);
-  if (count && pos + 24 <= size) {
+  if (count && pos + 24 <= size &&
+      (!memcmp(data + pos, "LAME", 4) || !memcmp(data + pos, "Lavf", 4) || !memcmp(data + pos, "Lavc", 4))) {
     unsigned delay = (unsigned)data[pos + 21] << 4 | data[pos + 22] >> 4;
     unsigned padding = (unsigned)(data[pos + 22] & 15) << 8 | data[pos + 23];
 
-    if (delay + padding && count * frames > delay + padding) {
+    if (count * frames > delay + padding) {
       p->skip = delay + DECODER_DELAY;
       p->end = count * frames + DECODER_DELAY - padding;
     }
@@ -142,7 +153,11 @@ static sox_bool information_frame(priv_t * p, unsigned char const * data, size_t
 }
 
 /* Each frame of the packet in turn, as a frame of silence where it cannot be
- * decoded but says how long it is, so that the timeline holds. */
+ * decoded but says how long it is, so that the timeline holds.
+ *
+ * A free-format frame gives no bit rate, which libmad finds from where the
+ * next frame begins, beyond the packet; the packet being the frame, the rate
+ * is instead the least one for which libmad makes the frame as long. */
 static int decode(lsx_codec_t * codec, unsigned char const * data, size_t size)
 {
   priv_t * p = codec->priv;
@@ -155,6 +170,15 @@ static int decode(lsx_codec_t * codec, unsigned char const * data, size_t size)
     if (codec->params.delay)
       p->skip = p->end = 0;
     return SOX_SUCCESS;
+  }
+  if (size >= 4 && data[0] == 0xff && (data[1] & 0xe0) == 0xe0 && !(data[2] >> 4) && ((data[2] >> 2) & 3) != 3) {
+    static unsigned long const rates[3] = {44100, 48000, 32000};
+    unsigned version = (data[1] >> 3) & 3, layer = 4 - ((data[1] >> 1) & 3), pad = (data[2] >> 1) & 1;
+    unsigned long rate = rates[(data[2] >> 2) & 3] >> (version == 3? 0 : version == 2? 1 : 2);
+    unsigned long slots = layer == 1? 12 : layer == 3 && version != 3? 72 : 144;
+    unsigned long units = (unsigned long)(layer == 1? size / 4 : size) - pad;
+
+    p->stream.freerate = (units * rate + slots - 1) / slots;
   }
   if (p->input_size < size + MAD_BUFFER_GUARD) {
     p->input_size = size + MAD_BUFFER_GUARD;
@@ -239,6 +263,8 @@ static void stop_decode(lsx_codec_t * codec)
   mad_stream_finish(&p->stream);
   free(p->input);
 }
+
+#ifdef HAVE_LAME
 
 static void lame_error(char const * format, va_list args)
 {
@@ -403,6 +429,12 @@ static void stop_encode(lsx_codec_t * codec)
   free(p->left);
   free(p->output);
 }
+
+#else
+#define start_encode NULL
+#define encode NULL
+#define stop_encode NULL
+#endif
 
 lsx_codec_handler_t const * lsx_mp3_codec_fn(void)
 {

@@ -182,16 +182,18 @@ static int decode_packet(sox_format_t * ft)
 }
 
 /* The codec comes from the file; a codec named in the type only has to
- * agree with it.  The first packet is decoded here, so that what a codec
- * learns only from its packets is known when the format is reported.  The
- * length is the container's own count of frames where it has an exact one,
- * and is otherwise left unknown: a duration is rounded, and a length that
- * was off by a sample would cut the signal. */
+ * agree with it, and a format handler that reads through this layer without
+ * being a container type, as mp3 does, names none.  The first packet is
+ * decoded here, so that what a codec learns only from its packets is known
+ * when the format is reported.  The length is the container's own count of
+ * frames where it has an exact one, and is otherwise left unknown: a
+ * duration is rounded, and a length that was off by a sample would cut the
+ * signal. */
 int lsx_container_startread(sox_format_t * ft, lsx_container_ops_t const * ops)
 {
   lsx_container_t * p = ft->priv;
   lsx_codec_t * c = &p->codec;
-  char const * requested = lsx_container_requested(ft->filetype);
+  char const * requested = ft->handler.flags & SOX_FILE_CONTAINER? lsx_container_requested(ft->filetype) : NULL;
   char const * codec_name;
   sox_uint64_t length = 0;
 

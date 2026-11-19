@@ -48,15 +48,15 @@ struct lsx_ffmpeg_container_t {
 };
 
 /* Report an FFmpeg failure as a SoX error; always returns SOX_EOF.  The
- * messages below name M4A directly rather than format_name, since that is the
- * only container routed through here. */
+ * message names the file's SoX type rather than the libavformat format, since
+ * the type is what the user asked for or what detection reported. */
 static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int av_error)
 {
   char message[AV_ERROR_MAX_STRING_SIZE];
 
   if (av_strerror(av_error, message, sizeof(message)) < 0)
     strcpy(message, "unknown FFmpeg error");
-  lsx_fail_errno(ft, sox_error, "%s: %s", operation, message);
+  lsx_fail_errno(ft, sox_error, "%s (%s): %s", operation, ft->filetype, message);
   return SOX_EOF;
 }
 
@@ -223,13 +223,13 @@ int lsx_ffmpeg_container_startread(
       break;
     }
   if (p->stream_index < 0) {
-    lsx_fail_errno(ft, SOX_EFMT, "M4A file does not contain the requested audio codec");
+    lsx_fail_errno(ft, SOX_EFMT, "%s file does not contain the requested audio codec", ft->filetype);
     destroy_state(&p);
     return SOX_EOF;
   }
   result = avcodec_parameters_to_context(codec_context, p->format->streams[p->stream_index]->codecpar);
   if (result < 0) {
-    fail_av(ft, SOX_EHDR, "Unable to configure FFmpeg decoder from M4A", result);
+    fail_av(ft, SOX_EHDR, "Unable to configure FFmpeg decoder", result);
     destroy_state(&p);
     return SOX_EOF;
   }
@@ -266,7 +266,7 @@ int lsx_ffmpeg_container_read_packet(sox_format_t * ft, lsx_ffmpeg_container_t *
     if (result == AVERROR_EOF)
       return 0;
     if (result < 0)
-      return fail_av(ft, SOX_EHDR, "Unable to read compressed packet from M4A", result);
+      return fail_av(ft, SOX_EHDR, "Unable to read compressed packet", result);
     if (packet->stream_index == state->stream_index)
       return 1;
     av_packet_unref(packet);
@@ -292,7 +292,7 @@ int lsx_ffmpeg_container_startwrite(
   p->writing = sox_true;
   if (!ft->seekable) {
     free(p);
-    lsx_fail_errno(ft, SOX_EFMT, "M4A output requires a seekable file");
+    lsx_fail_errno(ft, SOX_EFMT, "%s output requires a seekable file", ft->filetype);
     return SOX_EOF;
   }
   result = avformat_alloc_output_context2(&p->format, NULL, format_name, ft->filename);
@@ -313,13 +313,13 @@ int lsx_ffmpeg_container_startwrite(
   p->format->flags |= AVFMT_FLAG_CUSTOM_IO;
   stream = avformat_new_stream(p->format, NULL);
   if (stream == NULL) {
-    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate M4A audio stream");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to allocate %s audio stream", ft->filetype);
     destroy_state(&p);
     return SOX_EOF;
   }
   result = avcodec_parameters_from_context(stream->codecpar, codec_context);
   if (result < 0) {
-    fail_av(ft, SOX_EFMT, "Unable to configure M4A audio stream", result);
+    fail_av(ft, SOX_EFMT, "Unable to configure audio stream", result);
     destroy_state(&p);
     return SOX_EOF;
   }
@@ -336,7 +336,7 @@ int lsx_ffmpeg_container_startwrite(
   result = avformat_write_header(p->format, &options);
   av_dict_free(&options);
   if (result < 0) {
-    fail_av(ft, SOX_EFMT, "Unable to write M4A header", result);
+    fail_av(ft, SOX_EFMT, "Unable to write container header", result);
     destroy_state(&p);
     return SOX_EOF;
   }
@@ -360,14 +360,14 @@ int lsx_ffmpeg_container_write_packet(
   int result;
 
   if (copy == NULL) {
-    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to copy compressed packet for M4A");
+    lsx_fail_errno(ft, SOX_ENOMEM, "Unable to copy compressed packet for %s", ft->filetype);
     return SOX_EOF;
   }
   av_packet_rescale_ts(copy, codec_context->time_base, stream->time_base);
   copy->stream_index = state->stream_index;
   result = av_interleaved_write_frame(state->format, copy);
   av_packet_free(&copy);
-  return result < 0 ? fail_av(ft, SOX_EFMT, "Unable to write compressed packet to M4A", result) : SOX_SUCCESS;
+  return result < 0 ? fail_av(ft, SOX_EFMT, "Unable to write compressed packet", result) : SOX_SUCCESS;
 }
 
 int lsx_ffmpeg_container_stopwrite(sox_format_t * ft, lsx_ffmpeg_container_t ** state)
@@ -382,7 +382,7 @@ int lsx_ffmpeg_container_stopwrite(sox_format_t * ft, lsx_ffmpeg_container_t ** 
     int av_result = av_write_trailer(p->format);
 
     if (av_result < 0)
-      result = fail_av(ft, SOX_EFMT, "Unable to finalize M4A container", av_result);
+      result = fail_av(ft, SOX_EFMT, "Unable to finalize container", av_result);
   }
   destroy_state(state);
   return result;

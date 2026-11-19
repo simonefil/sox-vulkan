@@ -520,16 +520,18 @@ static void read_itunes_smpb(priv_t * p, span_t moov)
   }
 }
 
-/* The one audio track, its sample table, and the defaults its fragments
- * take. */
+/* The audio track to read, its sample table, and the defaults its
+ * fragments take: the first whose codec SoX knows, or the first in the codec
+ * the type names.  With several, the others are listed in a warning. */
 static int read_moov(sox_format_t * ft, priv_t * p, span_t moov, lsx_codec_params_t * params, char const * * codec_name)
 {
+  char const * wanted = lsx_container_requested(ft->filetype);
   track_t * tracks = NULL, * audio = NULL;
-  size_t count = 0, audio_count = 0, pos = 0;
+  size_t count = 0, audio_count = 0, pos = 0, i;
   sox_uint32_t movie_timescale = 0;
-  lsx_codec_tag_t const * tag;
+  lsx_codec_tag_t const * tag = NULL;
   span_t b, mvex;
-  char type[4], id[16];
+  char type[4], id[16], list[200] = "";
   int status = SOX_EOF;
 
   while (next_box(moov, &pos, type, &b)) {
@@ -539,33 +541,47 @@ static int read_moov(sox_format_t * ft, priv_t * p, span_t moov, lsx_codec_param
       tracks = lsx_realloc(tracks, (count + 1) * sizeof(*tracks));
       memset(&tracks[count], 0, sizeof(*tracks));
       read_trak(b, &tracks[count]);
-      if (tracks[count].audio) {
-        audio = &tracks[count];
-        ++audio_count;
-      }
       ++count;
     }
   }
+  for (i = 0; i < count; ++i)
+    if (tracks[i].audio) {
+      lsx_codec_params_t entry = {0};
+      lsx_codec_tag_t const * found;
+      size_t len = strlen(list);
+
+      if (read_entry(ft, tracks[i].stsd, &entry, id, sizeof(id)) != SOX_SUCCESS)
+        goto end;
+      found = lsx_codec_tag_by_config(lsx_container_mp4, id, entry.private_data, entry.private_size);
+      snprintf(list + len, sizeof(list) - len, "%s#%lu %s %g Hz %u ch", len? "; " : "",
+          (unsigned long)tracks[i].id, id, entry.rate, entry.channels);
+      ++audio_count;
+      if (!audio && found && (!wanted || !strcasecmp(found->codec, wanted))) {
+        audio = &tracks[i];
+        tag = found;
+        *params = entry;
+      }
+      else free(entry.private_data);
+    }
   if (!audio_count) {
     lsx_fail_errno(ft, SOX_EFMT, "no audio track");
     goto end;
   }
-  if (audio_count > 1) {
-    lsx_fail_errno(ft, SOX_EFMT, "%lu audio tracks, and choosing one is not supported", (unsigned long)audio_count);
+  if (!audio) {
+    if (wanted)
+      lsx_fail_errno(ft, SOX_EFMT, "no audio track in codec `%s': %s", wanted, list);
+    else lsx_fail_errno(ft, SOX_EFMT, "no audio track in a supported codec: %s", list);
     goto end;
   }
+  if (audio_count > 1)
+    lsx_warn("%lu audio tracks, of which the %s one #%lu is read: %s", (unsigned long)audio_count,
+        tag->codec, (unsigned long)audio->id, list);
   if (!audio->timescale) {
     lsx_fail_errno(ft, SOX_EHDR, "MP4 audio track has no timescale");
     goto end;
   }
   p->track_id = audio->id;
   p->timescale = audio->timescale;
-  if (read_entry(ft, audio->stsd, params, id, sizeof(id)) != SOX_SUCCESS)
-    goto end;
-  if (!(tag = lsx_codec_tag_by_config(lsx_container_mp4, id, params->private_data, params->private_size))) {
-    lsx_fail_errno(ft, SOX_EFMT, "audio codec `%s' is not supported", id);
-    goto end;
-  }
   *codec_name = tag->codec;
   params->encoding = tag->encoding;
   if (!params->rate)

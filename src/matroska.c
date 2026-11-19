@@ -195,42 +195,48 @@ static int read_track_entry(sox_format_t * ft, sox_uint64_t size, track_t * t)
   return status == SOX_SUCCESS && !more? SOX_SUCCESS : SOX_EOF;
 }
 
-/* The one audio track, as the parameters and codec to decode it with.  A
- * file with several is refused, listing them, until there is a rule for
- * choosing among them. */
+/* The audio track to read, as the parameters and codec to decode it with:
+ * the first whose codec SoX knows, or the first in the codec the type
+ * names.  With several, the others are listed in a warning. */
 static int choose_track(sox_format_t * ft, priv_t * p, track_t const * tracks, size_t count,
     lsx_codec_params_t * params, char const * * codec_name)
 {
+  char const * wanted = lsx_container_requested(ft->filetype);
   track_t const * audio = NULL;
-  lsx_codec_tag_t const * tag;
+  lsx_codec_tag_t const * tag = NULL;
   size_t i, audio_count = 0;
   char list[200] = "";
 
   for (i = 0; i < count; ++i)
     if (tracks[i].type == MKV_TRACK_TYPE_AUDIO) {
+      track_t const * t = &tracks[i];
+      lsx_codec_tag_t const * found = t->codec_id? lsx_codec_tag_by_config(lsx_container_matroska,
+          t->codec_id, t->private_data, t->private_size) : NULL;
       size_t len = strlen(list);
 
-      audio = &tracks[i];
       snprintf(list + len, sizeof(list) - len, "%s#%lu %s %g Hz %lu ch%s%s%s", len? "; " : "",
-          (unsigned long)audio->number, audio->codec_id? audio->codec_id : "?", audio->rate,
-          (unsigned long)audio->channels, audio->name? " `" : "", audio->name? audio->name : "",
-          audio->name? "'" : "");
+          (unsigned long)t->number, t->codec_id? t->codec_id : "?", t->rate,
+          (unsigned long)t->channels, t->name? " `" : "", t->name? t->name : "",
+          t->name? "'" : "");
       ++audio_count;
+      if (!audio && found && (!wanted || !strcasecmp(found->codec, wanted))) {
+        audio = t;
+        tag = found;
+      }
     }
   if (!audio_count) {
     lsx_fail_errno(ft, SOX_EFMT, "no audio track");
     return SOX_EOF;
   }
-  if (audio_count > 1) {
-    lsx_fail_errno(ft, SOX_EFMT, "%lu audio tracks, and choosing one is not supported: %s",
-        (unsigned long)audio_count, list);
+  if (!audio) {
+    if (wanted)
+      lsx_fail_errno(ft, SOX_EFMT, "no audio track in codec `%s': %s", wanted, list);
+    else lsx_fail_errno(ft, SOX_EFMT, "no audio track in a supported codec: %s", list);
     return SOX_EOF;
   }
-  if (!audio->codec_id || !(tag = lsx_codec_tag_by_config(lsx_container_matroska, audio->codec_id,
-      audio->private_data, audio->private_size))) {
-    lsx_fail_errno(ft, SOX_EFMT, "audio codec `%s' is not supported", audio->codec_id? audio->codec_id : "");
-    return SOX_EOF;
-  }
+  if (audio_count > 1)
+    lsx_warn("%lu audio tracks, of which the %s one #%lu is read: %s", (unsigned long)audio_count,
+        tag->codec, (unsigned long)audio->number, list);
   if (audio->encoded) {
     lsx_fail_errno(ft, SOX_EFMT, "compressed or encrypted tracks are not supported");
     return SOX_EOF;

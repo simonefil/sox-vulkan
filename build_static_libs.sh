@@ -108,6 +108,12 @@ LIBOGG_VERSION="1.3.6"
 LIBVORBIS_VERSION="1.3.7"
 FLAC_VERSION="1.5.0"
 OPUS_VERSION="1.6.1"
+# Opus 1.6 is published only on downloads.xiph.org, which redirects to
+# ftp.osuosl.org: its certificate chains to SSL.com TLS RSA Root CA 2022, a
+# root older macOS releases do not trust.  The archive is therefore fetched
+# without certificate verification and checked against the digest Xiph lists
+# in https://downloads.xiph.org/releases/opus/SHA256SUMS.txt.
+OPUS_SHA256="6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
 LIBMAD_VERSION="0.16.5"
 LAME_VERSION="4.0"
 TWOLAME_VERSION="0.4.0"
@@ -169,9 +175,12 @@ check_command() {
     fi
 }
 
+# A third argument "--insecure" skips certificate verification; the caller
+# must then check the archive's digest with verify_sha256.
 download_file() {
     local url="$1"
     local output="$2"
+    local insecure="${3:-}"
     local temporary="${output}.tmp.$$"
 
     if [ -f "$output" ]; then
@@ -183,12 +192,12 @@ download_file() {
 
     rm -f "$temporary"
     if command -v curl &> /dev/null; then
-        if ! curl --fail --location --output "$temporary" "$url"; then
+        if ! curl --fail --location ${insecure:+--insecure} --output "$temporary" "$url"; then
             rm -f "$temporary"
             return 1
         fi
     elif command -v wget &> /dev/null; then
-        if ! wget -O "$temporary" "$url"; then
+        if ! wget ${insecure:+--no-check-certificate} -O "$temporary" "$url"; then
             rm -f "$temporary"
             return 1
         fi
@@ -475,7 +484,8 @@ build_opus() {
     local archive="${DOWNLOAD_DIR}/opus-${OPUS_VERSION}.tar.gz"
     local src="${SRC_DIR}/opus-${OPUS_VERSION}"
 
-    download_file "$url" "$archive"
+    download_file "$url" "$archive" --insecure
+    verify_sha256 "$archive" "${OPUS_SHA256}"
 
     if [ ! -d "$src" ]; then
         extract_archive "$archive" "$SRC_DIR"

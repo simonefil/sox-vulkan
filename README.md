@@ -206,7 +206,7 @@ Builds only `libsox` and its dependencies; the executable remains the default.
 Output: `output/library/libsox.a` (Unix) or `output\library\libsox.lib` (Windows), plus `sox.h`.
 Library mode always keeps `static_libs`, `build-library` (including internal GSM/LPC10), and dependency sources, like `--keep-build` / `-KeepBuild`.
 Consumers must also link the existing dependency archives in those directories (with the Monkey's Audio SDK and Musepack, `libMAC`, `libmpcdec`, `libmpcenc` and `libmpcpsy`), the C++ runtime, and the required native libraries/OpenMP runtime.
-The archives are not merged; no executable is copied or tested in library mode.
+Each dependency stays in its own archive, and library mode produces only the library and `sox.h`.
 Vulkan and PulseAudio are rejected before downloads in library mode.
 
 ### Build with custom options

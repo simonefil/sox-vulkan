@@ -1165,6 +1165,12 @@ if(HAVE_APE)
     target_link_libraries(libsox PRIVATE ${MAC_LIBRARY} Threads::Threads)
     target_include_directories(libsox PRIVATE ${MAC_INCLUDE_DIR})
     target_compile_definitions(libsox PRIVATE STATIC_APE)
+    # The SDK builds itself with PLATFORM_LINUX on every Unix but macOS, while
+    # its All.h detects only __linux__ and falls back to Windows elsewhere
+    # (FreeBSD): SoX's side has to name the same platform.
+    if(NOT WIN32 AND NOT APPLE)
+        target_compile_definitions(libsox PRIVATE PLATFORM_LINUX)
+    endif()
 endif()
 
 # Musepack format

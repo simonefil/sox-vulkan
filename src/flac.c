@@ -157,15 +157,22 @@ static FLAC__StreamDecoderWriteStatus decoder_write_callback(FLAC__StreamDecoder
   unsigned channel;
   unsigned nsamples = frame->header.blocksize;
   unsigned sample = 0;
-  size_t actual = nsamples * p->channels;
+  size_t actual;
 
   (void) flac;
 
+  /* senza STREAMINFO il formato viene dal primo frame */
+  if (!p->sample_rate) {
+    p->bits_per_sample = frame->header.bits_per_sample;
+    p->channels = frame->header.channels;
+    p->sample_rate = frame->header.sample_rate;
+  }
+  actual = nsamples * p->channels;
   if (frame->header.bits_per_sample != p->bits_per_sample || frame->header.channels != p->channels || frame->header.sample_rate != p->sample_rate) {
     lsx_fail_errno(ft, SOX_EINVAL, "FLAC ERROR: parameters differ between frame and header");
     return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
   }
-  if (dst == NULL) {
+  if (dst == NULL && p->number_of_requested_samples) {
     lsx_warn("FLAC ERROR: entered write callback without a buffer (SoX bug)");
     return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
   }
@@ -178,7 +185,8 @@ static FLAC__StreamDecoderWriteStatus decoder_write_callback(FLAC__StreamDecoder
     p->number_of_leftover_samples = to_stash;
     nsamples = p->number_of_requested_samples / p->channels;
 
-    p->req_buffer += p->number_of_requested_samples;
+    if (p->req_buffer)
+      p->req_buffer += p->number_of_requested_samples;
     p->number_of_requested_samples = 0;
   } else {
     p->req_buffer += actual;
@@ -246,6 +254,17 @@ static int start_read(sox_format_t * const ft)
   if (FLAC__stream_decoder_get_state(p->decoder) > FLAC__STREAM_DECODER_END_OF_STREAM) {
     lsx_fail_errno(ft, SOX_EHDR, "FLAC ERROR during metadata decoding");
     return SOX_EOF;
+  }
+
+  /* Frame senza STREAMINFO, come dopo un seek del server: si decodifica il primo
+   * frame, che dà il formato e resta da leggere come avanzo */
+  if (!p->sample_rate) {
+    p->req_buffer = NULL;
+    p->number_of_requested_samples = 0;
+    if (!FLAC__stream_decoder_process_single(p->decoder) || !p->sample_rate) {
+      lsx_fail_errno(ft, SOX_EHDR, "FLAC stream without STREAMINFO whose first frame does not give the format");
+      return SOX_EOF;
+    }
   }
 
   ft->encoding.encoding = SOX_ENCODING_FLAC;

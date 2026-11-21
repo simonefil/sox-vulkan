@@ -2077,8 +2077,8 @@ static int create(sox_effect_t * effp, int argc, char **argv)
  * only costs taps.
  *
  * The figures are each profile's measured SNR, as listed in the README: a
- * single float, a split-float pair, and a double-double. The first caps -v
- * and deeper (-v asks for about 175 dB); the other two cap only -z, whose
+ * single float, a split-float pair, and a double-double. The first caps -e
+ * and deeper (-e asks for about 150 dB); the other two cap only -z, whose
  * 638 dB exceeds both. */
 static double rate_dsd_arithmetic_ceiling(void)
 {

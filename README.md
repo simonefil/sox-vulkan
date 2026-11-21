@@ -638,7 +638,7 @@ is unchanged.
 | Conversion comes first | `vol`, `gain`, `trim` apply to the PCM, after `rate`. An effect in front of the conversion is an error, with or without a Vulkan flag. DSD-to-DSD chains are untouched. |
 | Band ceiling | 20 kHz at DSD64, 30 kHz at DSD128, 60 kHz at DSD256, 90 kHz above. Past it a DSD stream holds shaped noise. |
 | One DSD64 filter | The ceiling binds at every output rate: flat to 19.5 kHz, stopped at 20 kHz, from 44.1 kHz to 384 kHz. DSD64 decoded to 96 or 192 kHz is empty above 20 kHz. |
-| Stop-band depth | The requested quality, capped by the profile's own SNR. Only the `fast` cap binds, and only from `-e` up. |
+| Stop-band depth | The requested quality, capped by the profile's own SNR. The `fast` cap binds from `-e` up; the `precise` and `reference` caps bind only for `-z`. |
 | Buffer | `--buffer 524288` or larger. One dispatch per call, so the default costs almost everything the device gains: DSD512 to 44.1 kHz on `--vulkan-fast` runs at 7.2× at the default and 69.7× at `524288`, same M5 Pro. |
 
 DSD to PCM, stereo, 10-second input, to 44.1 kHz, `--buffer 524288`. M5 Pro:
@@ -676,12 +676,8 @@ the plan sox built, on DSD64 and DSD256 to 44.1 and 88.2 kHz:
 | Vulkan precise | 260–269 dB (double-single fallback) | 287–296 dB (`shaderFloat64`) |
 | Vulkan reference | Not available | Bit-exact |
 
-On a build whose samples are normalised, `reference` is exact: the captured
-pairs equal the exact rational sum in every bit, which is what the RTX 3080
-column reports. On a build that scales samples to `SOX_SAMPLE_MAX` the exact
-product no longer fits a pair, so the stage applies the factor on the device
-before collapsing, and the sample written is the correctly rounded one, checked
-frame by frame against the exact product.
+`reference` is exact: the captured pairs equal the exact rational sum in every
+bit, which is what the RTX 3080 column reports.
 
 `rate -v` on DSD64 is the one measured plan whose response is too wide for a
 double-double. It reads 630.1 dB.

@@ -333,7 +333,7 @@ int lsx_vulkan_submit_and_wait(
 uint32_t lsx_vulkan_resident_batch_depth(lsx_vulkan_context_t const *context);
 
 /* Set the batch depth for a chain and report it under -V3 together with the
- * chain's shape and the work ahead of it. The depth set is
+ * chain's shape and the work ahead of it. For now the depth set is
  * LSX_VULKAN_RESIDENT_BATCH_DEPTH whatever the inputs. Advisory: it tunes
  * how far the pipeline runs ahead, and changes no result. */
 int lsx_vulkan_configure_resident_batch_depth(

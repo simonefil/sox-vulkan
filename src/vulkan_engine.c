@@ -548,10 +548,11 @@ uint32_t lsx_vulkan_resident_batch_depth(lsx_vulkan_context_t const *context)
 }
 
 /* The depth is the same for every device and every chain shape; the duration
- * and work estimates are only reported. The report is what a calibration run
- * reads, so the work each configuration represents is on record beside its
- * timings. The device name is matched so that a measurement taken on the
- * reference machine is labelled as calibrated. */
+ * and work estimates are reported but do not yet feed back into the choice.
+ * The report is what a calibration run reads, so the work each configuration
+ * represents is on record beside its timings. The device name is matched so
+ * that a measurement taken on the reference machine is labelled as
+ * calibrated. */
 int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox_rate_t input_rate, sox_rate_t output_rate, uint32_t channels, uint64_t input_samples, lsx_vulkan_resident_topology_t topology)
 {
   double duration = input_rate > 0 && channels && input_samples && input_samples != SOX_UNKNOWN_LEN ? (double)(input_samples / channels) / input_rate : 0;

@@ -823,7 +823,13 @@ conversion macros.
 #define SOX_SAMPLE_LOCALS sox_sample_t sox_macro_temp_sample LSX_UNUSED; \
   double sox_macro_temp_double LSX_UNUSED
 
-/* The scale factor of a b-bit integer, as a double. The shift goes through
+/* SOX_SAMPLE_NEG has been removed.  It was the sign bit of the integer a
+ * sample used to be; flipping the sign bit of a double negates the sample, so
+ * keeping the macro would have compiled and been wrong.  The offset it stood
+ * for is in SOX_UNSIGNED_TO_SAMPLE and SOX_SAMPLE_TO_UNSIGNED.  Removing a
+ * public macro breaks the API; this migration is a major version bump.
+ *
+ * The scale factor of a b-bit integer, as a double. The shift goes through
  * 1ull so that it is well defined for every width from 1 to 32 whatever the
  * size of int.
  */

@@ -1215,9 +1215,10 @@ static lsx_sdm_vulkan_t *create_with_input_target(
     return NULL;
   }
   /*
-   * Keep one producer block plus a partial FSM block.  Non-final input is
-   * dispatched only in complete 256-sample blocks, so padding occurs only
-   * once, at the logical end of the stream.
+   * The producer's target, rounded up to whole 256-sample FSM blocks with at
+   * least 255 frames to spare.  A batch is dispatched only when full, so
+   * every batch but the last is whole blocks and padding occurs only once,
+   * at the logical end of the stream.
    */
   context->input_frames = (uint32_t)input_capacity;
   if (!context->input_frames)

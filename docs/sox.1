@@ -3065,7 +3065,8 @@ option,
 .B \-R
 and
 .B \-d
-are ignored with a warning, since the device runs the preset levels.
+given without a quality level are ignored with a warning, since the device
+runs the preset levels; given with one, they replace its rejection.
 .SP
 The following options tune the filter design at any quality level:
 .TS
@@ -3074,12 +3075,14 @@ lB lw52.
 \-f	T{
 .na
 Use the band-width as the pass-band edge as it is, without the adjustment
-that keeps the roll-off within 0\*d01\ dB
+that keeps the roll-off within 0\*d01\ dB; it has no effect at `quick',
+`low' and `medium', whose roll-off is fixed
 T}
 \-i\ \-1\-2	T{
 .na
 Coefficient interpolation for irrational ratios: \-1 automatic (default),
-0 none, 1 and 2 higher orders
+0 none, 1 and 2 higher orders; an irrational ratio always interpolates, so
+0 acts as 1 there
 T}
 \-c\ 100+	T{
 .na

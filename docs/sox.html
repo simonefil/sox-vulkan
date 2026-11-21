@@ -2728,20 +2728,23 @@ Unix csh:
     </table>
     <p class="Pp">N.B. Override options cannot be used with the `quick' or `low'
         quality algorithms. Under a <b>--vulkan-*</b> option, <b>-R</b> and
-        <b>-d</b> are ignored with a warning, since the device runs the preset
-        levels.</p>
+        <b>-d</b> given without a quality level are ignored with a warning,
+        since the device runs the preset levels; given with one, they replace
+        its rejection.</p>
     <p class="Pp">The following options tune the filter design at any quality
         level:</p>
     <table class="tbl">
       <tr>
         <td><b>-f</b></td>
         <td>Use the band-width as the pass-band edge as it is, without the
-          adjustment that keeps the roll-off within 0.01&#x00A0;dB</td>
+          adjustment that keeps the roll-off within 0.01&#x00A0;dB; it has no
+          effect at `quick', `low' and `medium', whose roll-off is fixed</td>
       </tr>
       <tr>
         <td><b>-i&#x00A0;-1-2</b></td>
         <td>Coefficient interpolation for irrational ratios: -1 automatic
-          (default), 0 none, 1 and 2 higher orders</td>
+          (default), 0 none, 1 and 2 higher orders; an irrational ratio always
+          interpolates, so 0 acts as 1 there</td>
       </tr>
       <tr>
         <td><b>-c&#x00A0;100+</b></td>

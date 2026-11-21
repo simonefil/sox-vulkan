@@ -943,9 +943,9 @@ static int initialize_precise_f64_kernels(
  *
  * The device route uploads a partition's coefficients into working, runs the
  * forward transform with the steady-state plan, and copies the spectrum into
- * its bank slot, so it must run after both exist.  It serves the plain FP32
- * and FP64 profiles and the reference profile, whose double-double transform
- * has no host equivalent. */
+ * its bank slot, so it must run after both exist.  It serves the fast
+ * profile and the reference profile, whose double-double transform has no
+ * host equivalent. */
 static int initialize_kernels(
     lsx_fir_vulkan_t *context,
     double const *const *coefficients,

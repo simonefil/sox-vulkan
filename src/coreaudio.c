@@ -198,6 +198,10 @@ static int setup(sox_format_t *ft, int is_input)
   ft->signal.rate = 44100;
   ft->encoding.bits_per_sample = 32;
 
+  /* TODO: only float at a fixed rate and in stereo has been tried.  Where the
+   * hardware can be set to the stream's rate and channel count, that should
+   * be preferred to resampling and mixing. */
+
   if (stream_desc.mChannelsPerFrame != ft->signal.channels)
   {
     lsx_debug("audio device did not accept %d channels. Use %d channels instead.", (int)ft->signal.channels,

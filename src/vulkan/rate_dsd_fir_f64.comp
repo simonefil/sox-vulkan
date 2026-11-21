@@ -36,7 +36,7 @@
  *                       bit zero the earliest frame.
  *   2 output_samples -- out: interleaved output frames.
  *
- * Push constants (the first 32 bytes of parameters_t): output_frames,
+ * Push constants (parameters_t, 32 bytes): output_frames,
  * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
  * valid_frames.  frame_offset is where output frame
  * zero's window starts within the uploaded words, so the host can retain a

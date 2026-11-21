@@ -49,13 +49,7 @@
  * but advances by decimation frames, so the remainder of that division lives
  * here and the stream's position stays exact to the frame. lead_frames and
  * valid_frames bound the frames the stream really has within that window; a
- * tap outside them reads a zero sample, not a bit.
- *
- * scale_high and scale_low carry the output's factor as a pair, one and
- * zero, since the stage's output is a normalised sample by construction (the
- * bits are +-1). The reference profile applies the pair before collapsing.
- * Only the reference shader declares the pair; the others cover the first 32
- * bytes. */
+ * tap outside them reads a zero sample, not a bit. */
 typedef struct {
   uint32_t output_frames;
   uint32_t decimation;
@@ -65,11 +59,9 @@ typedef struct {
   uint32_t frame_offset;
   uint32_t lead_frames;
   uint32_t valid_frames;
-  double scale_high;
-  double scale_low;
 } parameters_t;
 
-lsx_static_assert(sizeof(parameters_t) == 48, vulkan_rate_dsd_push_layout);
+lsx_static_assert(sizeof(parameters_t) == 32, vulkan_rate_dsd_push_layout);
 
 struct lsx_rate_dsd_vulkan {
   lsx_vulkan_context_t *vulkan;
@@ -398,9 +390,6 @@ lsx_rate_dsd_vulkan_t *lsx_rate_dsd_vulkan_create(
    * exact when the delay is not a multiple of thirty-two. */
   context->preload_words = preload_words;
   context->parameters.lead_frames = preload_words * RATE_DSD_FRAMES_PER_WORD;
-  /* The output's factor, one, as a pair with a zero low word. */
-  context->parameters.scale_high = 1.;
-  context->parameters.scale_low = 0.;
   context->parameters.frame_offset =
       preload_words * RATE_DSD_FRAMES_PER_WORD - preload_frames;
   if (create_buffers(context) != SOX_SUCCESS ||

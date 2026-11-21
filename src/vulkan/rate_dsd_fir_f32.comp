@@ -26,7 +26,7 @@
  *   1 packed         -- in: DSD words, channel major, 32 frames per word.
  *   2 output_samples -- out: interleaved output frames.
  *
- * Push constants (the first 32 bytes of parameters_t): output_frames,
+ * Push constants (parameters_t, 32 bytes): output_frames,
  * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
  * valid_frames.
  *

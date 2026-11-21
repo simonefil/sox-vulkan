@@ -22,10 +22,10 @@
  *
  * A resident producer's block size need not match what this stage consumes,
  * so blocks accumulate in a stream buffer until a whole one is there.  When
- * the input is already interleaved with unit strides and needs no
- * quantisation, append_resident_stream() in rate_vulkan.c does a plain buffer
- * copy instead and this shader never runs; it exists for the cases that need
- * gathering, rounding, or both.
+ * the input is already interleaved with unit strides, append_resident_stream()
+ * in rate_vulkan.c does a plain buffer copy instead and this shader never
+ * runs; it exists for inputs that need gathering by their strides.  Samples
+ * pass through unchanged.
  *
  * Bindings, in the order append_resident_stream() writes them:
  *   0 input_samples    -- in: the producer's buffer.  Bound whole, at offset
@@ -33,11 +33,8 @@
  *                         block's position arrives as input_base_element
  *                         instead, since a stream append may start anywhere.
  *   1 stream_samples   -- out: the stream buffer, interleaved.
- *   2 clipped_samples  -- in/out: one counter per slot of the descriptor
- *                         ring, incremented atomically when quantisation
- *                         has to clamp.
  *
- * Push constants (stream_append_parameters_t, 32 bytes):
+ * Push constants (stream_append_parameters_t, 24 bytes):
  *   input_base_element    element offset of the block within binding 0.
  *   output_first_frame    frame the block starts at in the stream, which is
  *                         the stream's occupancy before the append.
@@ -46,14 +43,10 @@
  *   input_channel_stride  elements between input channels.
  *   channels              channels, and the interleaved stream's frame
  *                         stride.
- *   quantize_sox_sample   round each sample to SoX's integer grid.
- *   clip_index            which counter in binding 2 this append owns: its
- *                         descriptor slot.
  *
  * Dispatch is two-dimensional: x covers frames rounded up to whole workgroups
  * of 128, y is one invocation per channel, hence both bounds tests.  Each
- * invocation writes one distinct stream element; the only shared state is the
- * clip counter, which is why that one write is atomic.
+ * invocation writes one distinct stream element.
  *
  * Plain FP64.
  */
@@ -71,10 +64,6 @@ layout(std430, binding = 1) writeonly buffer StreamSamples {
   double stream_samples[];
 };
 
-layout(std430, binding = 2) buffer ClipCounter {
-  uint clipped_samples[];
-};
-
 layout(push_constant) uniform Parameters {
   uint input_base_element;
   uint output_first_frame;
@@ -82,8 +71,6 @@ layout(push_constant) uniform Parameters {
   uint input_frame_stride;
   uint input_channel_stride;
   uint channels;
-  uint quantize_sox_sample;
-  uint clip_index;
 } parameters;
 
 void main()
@@ -95,15 +82,5 @@ void main()
 
   uint input_index = parameters.input_base_element + frame * parameters.input_frame_stride + channel * parameters.input_channel_stride;
   uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
-  double value = input_samples[input_index];
-  /* roundEven is SoX's rounding rule for the integer sample grid; the clamp
-   * saturates and the counter records each clamp, so the effect can report
-   * clipping exactly as the CPU path does. */
-  if (parameters.quantize_sox_sample != 0u) {
-    value = roundEven(value);
-    if (value < -2147483648.0 || value > 2147483647.0)
-      atomicAdd(clipped_samples[parameters.clip_index], 1u);
-    value = clamp(value, -2147483648.0, 2147483647.0);
-  }
-  stream_samples[output_index] = value;
+  stream_samples[output_index] = input_samples[input_index];
 }

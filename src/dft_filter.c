@@ -604,8 +604,7 @@ static int take_vulkan_resident_transform_output(
  * you can".  *active reports whether another block is ready without more
  * input.
  *
- * The clip count is read for completed work and again after a flush: the
- * device writes the counters only when its work runs. */
+ * Samples pass through unchanged, so no clips are charged to the input. */
 static int transform_vulkan_resident(
     sox_effect_t *effp,
     lsx_vulkan_resident_buffer_t const *input,
@@ -622,8 +621,7 @@ static int transform_vulkan_resident(
     return SOX_EOF;
   memset(output, 0, sizeof(*output));
   *input_consumed = sox_false;
-  *input_clips = lsx_rate_vulkan_resident_stream_clips(
-      p->vulkan_resident);
+  *input_clips = 0;
   *output_produced = sox_false;
   if (take_vulkan_resident_transform_output(effp, lsx_vulkan_resident_ready, output, output_produced) != SOX_SUCCESS)
     return SOX_EOF;
@@ -650,8 +648,6 @@ static int transform_vulkan_resident(
     p->vulkan_resident_pending = 0;
     if (lsx_rate_vulkan_flush_resident(p->vulkan_resident) != SOX_SUCCESS)
       return SOX_EOF;
-    *input_clips +=
-        lsx_rate_vulkan_resident_stream_clips_completed(p->vulkan_resident);
   }
   *active = lsx_rate_vulkan_resident_stream_ready(
       p->vulkan_resident);
@@ -717,8 +713,7 @@ static int consume_vulkan_resident(
   capacity = *osamp;
   *osamp = 0;
   *input_consumed = sox_false;
-  *input_clips = lsx_rate_vulkan_resident_stream_clips(
-      p->vulkan_resident);
+  *input_clips = 0;
   emitted = emit_vulkan_consumer_output(&p->vulkan_output_fifo, obuf, capacity);
   *osamp = emitted;
   for (attempt = 0; emitted < capacity && attempt < 2u; ++attempt) {
@@ -783,8 +778,7 @@ static int drain_transform_vulkan_resident(
   if (ensure_vulkan_resident(effp) != SOX_SUCCESS || !input_clips || !output || !output_produced || !done)
     return SOX_EOF;
   memset(output, 0, sizeof(*output));
-  *input_clips = lsx_rate_vulkan_resident_stream_clips(
-      p->vulkan_resident);
+  *input_clips = 0;
   *output_produced = sox_false;
   *done = sox_false;
   if (!lsx_rate_vulkan_resident_stream_ready(

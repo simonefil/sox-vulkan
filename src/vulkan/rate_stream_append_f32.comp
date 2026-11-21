@@ -28,19 +28,13 @@
  *   0 input_samples    -- in: the producer's buffer, bound whole; the block's
  *                         position arrives as input_base_element.
  *   1 stream_samples   -- out: the stream buffer, interleaved.
- *   2 clipped_samples  -- in/out: clip counters, one per descriptor slot,
- *                         written atomically.
  *
- * Push constants (stream_append_parameters_t, 32 bytes): input_base_element,
+ * Push constants (stream_append_parameters_t, 24 bytes): input_base_element,
  * output_first_frame, frames, input_frame_stride, input_channel_stride,
- * channels, quantize_sox_sample, clip_index.
+ * channels.
  *
  * Dispatch is two-dimensional, x over frames in workgroups of 128 and y one
  * invocation per channel, hence both bounds tests.
- *
- * FP32 cannot represent every value on SoX's 32-bit integer grid, so
- * quantisation here rounds within what the format holds; that is inherent to
- * the fast profile and the reason the other profiles keep a low word.
  */
 
 #version 450
@@ -55,10 +49,6 @@ layout(std430, binding = 1) writeonly buffer StreamSamples {
   float stream_samples[];
 };
 
-layout(std430, binding = 2) buffer ClipCounter {
-  uint clipped_samples[];
-};
-
 layout(push_constant) uniform Parameters {
   uint input_base_element;
   uint output_first_frame;
@@ -66,8 +56,6 @@ layout(push_constant) uniform Parameters {
   uint input_frame_stride;
   uint input_channel_stride;
   uint channels;
-  uint quantize_sox_sample;
-  uint clip_index;
 } parameters;
 
 void main()
@@ -82,12 +70,5 @@ void main()
       frame * parameters.input_frame_stride +
       channel * parameters.input_channel_stride;
   uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
-  float value = input_samples[input_index];
-  if (parameters.quantize_sox_sample != 0u) {
-    value = roundEven(value);
-    if (value < -2147483648.0 || value > 2147483647.0)
-      atomicAdd(clipped_samples[parameters.clip_index], 1u);
-    value = clamp(value, -2147483648.0, 2147483647.0);
-  }
-  stream_samples[output_index] = value;
+  stream_samples[output_index] = input_samples[input_index];
 }

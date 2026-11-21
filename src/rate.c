@@ -73,10 +73,6 @@ static sox_bool lsx_rate_effect_resident_transform_supported(sox_effect_t const 
 /* Whether the effect's stream has room for a resident block right now. */
 static sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp);
 
-/* Clips counted while quantizing input from another effect, for the chain
- * to add to its own total. Reading them clears the count. */
-static uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp);
-
 static lsx_vulkan_effect_endpoint_t const vulkan_resident_producer_endpoint = {
   flow_vulkan_resident_endpoint,
   drain_vulkan_resident_endpoint,
@@ -2703,16 +2699,6 @@ static sox_bool lsx_rate_effect_resident_input_ready(sox_effect_t const *effp)
               p->vulkan_stage_count - 1u].dft));
 }
 
-static uint64_t lsx_rate_effect_external_input_clips(sox_effect_t *effp)
-{
-  priv_t *p;
-
-  if (!lsx_rate_effect_resident_input_supported(effp))
-    return 0;
-  p = (priv_t *)effp->priv;
-  return lsx_rate_vulkan_resident_stream_clips(p->vulkan_stages[0].dft);
-}
-
 /* Move a resident-input plan forward by one step: take a block out of the
  * first stage's stream, run it through the intermediate stages, and hand it
  * to the last.
@@ -2829,7 +2815,7 @@ static int flow_vulkan_resident_input_mode(sox_effect_t *effp, lsx_vulkan_reside
         input->channels, (unsigned long)channels);
     return SOX_EINVAL;
   }
-  if (lsx_rate_vulkan_append_resident_stream_quantized(
+  if (lsx_rate_vulkan_append_resident_stream(
           p->vulkan_stages[0].dft, input) != SOX_SUCCESS) {
     lsx_fail(
         "resident Vulkan rate transform input append failed: "
@@ -3059,7 +3045,7 @@ static int transform_vulkan_resident_endpoint(sox_effect_t *effp, lsx_vulkan_res
 {
   int status = flow_vulkan_resident_input_mode(effp, input, sox_false, input_consumed, output, output_produced);
 
-  *input_clips = lsx_rate_effect_external_input_clips(effp);
+  *input_clips = 0;
   *active = lsx_rate_effect_resident_input_ready(effp);
   return status;
 }
@@ -3068,7 +3054,7 @@ static int drain_transform_vulkan_resident_endpoint(sox_effect_t *effp, uint64_t
 {
   int status = lsx_rate_effect_drain_resident(effp, output, output_produced, done);
 
-  *input_clips = lsx_rate_effect_external_input_clips(effp);
+  *input_clips = 0;
   return status;
 }
 

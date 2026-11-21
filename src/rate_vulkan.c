@@ -49,7 +49,7 @@
 #define RATE_SELECT_BINDINGS 2u
 #define RATE_SELECT_LOCAL_SIZE 128u
 #define RATE_PREPARE_BINDINGS 3u
-#define RATE_STREAM_APPEND_BINDINGS 3u
+#define RATE_STREAM_APPEND_BINDINGS 2u
 
 /* input_step is the decimation factor and first_input_frame the phase to
  * start from, which together carry the phase across block boundaries. */
@@ -82,11 +82,9 @@ typedef struct {
   uint32_t input_frame_stride;
   uint32_t input_channel_stride;
   uint32_t channels;
-  uint32_t quantize_sox_sample;
-  uint32_t clip_index;
 } stream_append_parameters_t;
 
-lsx_static_assert(sizeof(stream_append_parameters_t) == 32, vulkan_rate_stream_append_push_layout);
+lsx_static_assert(sizeof(stream_append_parameters_t) == 24, vulkan_rate_stream_append_push_layout);
 
 struct lsx_rate_vulkan {
   lsx_vulkan_context_t *vulkan;  /* Not owned. */
@@ -118,7 +116,6 @@ struct lsx_rate_vulkan {
   /* Resident stream resources.  Two buffers, so one can be filled while the
    * other is being consumed; resident_stream_index says which is current. */
   lsx_vulkan_buffer_t resident_stream[2];
-  lsx_vulkan_buffer_t stream_append_clips; /* Device-side clip counters. */
   VkCommandBuffer resident_stream_commands[LSX_VULKAN_RESIDENT_BATCH_DEPTH * 2u];
   VkDescriptorSetLayout stream_append_descriptor_layout;
   VkDescriptorPool stream_append_descriptor_pool;
@@ -136,12 +133,9 @@ struct lsx_rate_vulkan {
    * batch depth because those operations can alternate while earlier work is
    * still queued. */
   uint32_t resident_stream_command_index;
-  /* Advances only for shader appends: descriptor sets and clip-counter slots
-   * are paired, unlike command buffers used by copy-only stream operations. */
+  /* Advances only for shader appends, which are the only stream operations
+   * that use a descriptor set. */
   uint32_t resident_stream_descriptor_index;
-  /* Bit n means clip counter/descriptor bank n has GPU writes not yet folded
-   * into the host total.  A wait precedes reading and clearing these bits. */
-  uint32_t resident_stream_clip_pending_mask;
 
   double *stage_input;           /* Host-side interpolated block for the plain path. */
   double *output;                /* Host-side decimated result of _process. */
@@ -561,7 +555,6 @@ void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context)
     vkDestroyDescriptorPool(context->vulkan->device, context->stream_append_descriptor_pool, NULL);
   if (context->stream_append_descriptor_layout)
     vkDestroyDescriptorSetLayout(context->vulkan->device, context->stream_append_descriptor_layout, NULL);
-  lsx_vulkan_buffer_destroy(context->vulkan, &context->stream_append_clips);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[1]);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_stream[0]);
   if (context->resident_pipeline)
@@ -912,13 +905,11 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   return SOX_SUCCESS;
 }
 
-/* Build the resident stream: two buffers, the append pipeline and the clip
- * counters.  Created lazily, for a producer with a different block size.
+/* Build the resident stream: two buffers and the append pipeline.  Created
+ * lazily, for a producer with a different block size.
  *
  * The capacity is one block plus one call's worth of input, so an append is
- * always accepted whole even when the stream holds nearly a block.  The clip
- * counters are host-visible, one per block in flight, so a count can be read
- * without waiting for blocks that have not run. */
+ * always accepted whole even when the stream holds nearly a block. */
 static int create_resident_stream(lsx_rate_vulkan_t *context)
 {
   resident_kernel_blob_t const *kernel = &stream_append_kernels[resident_kernel(context)];
@@ -939,8 +930,6 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_stream[0], size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_stream[1], size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
-    return SOX_EOF;
-  if (lsx_vulkan_buffer_create(context->vulkan, &context->stream_append_clips, LSX_VULKAN_RESIDENT_BATCH_DEPTH * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   memset(bindings, 0, sizeof(bindings));
   for (index = 0; index < RATE_STREAM_APPEND_BINDINGS; ++index) {
@@ -980,21 +969,19 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
 }
 
 /* Append a resident block to the stream, either as a straight buffer copy or
- * through the append shader.
+ * through the append shader.  Samples pass through unchanged either way.
  *
- * The copy is used when there is no quantisation and the input is laid out
- * as the stream expects.  Otherwise the shader gathers by the input's
- * strides and, if asked, rounds each sample to SoX's integer grid and counts
- * clamps.  The input comes from another effect and is checked first. */
-static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, sox_bool quantize_sox_sample)
+ * The copy is used when the input is laid out as the stream expects.
+ * Otherwise the shader gathers by the input's strides into the interleaved
+ * stream.  The input comes from another effect and is checked first. */
+static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
 {
   VkCommandBuffer command;
   VkDescriptorSet descriptor_set;
   VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
   VkBufferMemoryBarrier source_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, 0, VK_ACCESS_TRANSFER_READ_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
   VkBufferMemoryBarrier stream_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
-  VkBufferMemoryBarrier clip_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
-  VkBufferMemoryBarrier barriers[3];
+  VkBufferMemoryBarrier barriers[2];
   VkDescriptorBufferInfo infos[RATE_STREAM_APPEND_BINDINGS];
   VkWriteDescriptorSet writes[RATE_STREAM_APPEND_BINDINGS];
   stream_append_parameters_t parameters;
@@ -1044,7 +1031,7 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   copy.srcOffset = input->offset;
   copy.dstOffset = (VkDeviceSize)context->resident_stream_occupancy * frame_size;
   copy.size = (VkDeviceSize)input->valid_elements * frame_size;
-  contiguous = !quantize_sox_sample && input->layout == lsx_vulkan_resident_layout_interleaved && input->frame_stride_elements == context->channels && input->channel_stride_elements == 1u;
+  contiguous = input->layout == lsx_vulkan_resident_layout_interleaved && input->frame_stride_elements == context->channels && input->channel_stride_elements == 1u;
   source_barrier.srcAccessMask = input->producer_access;
   source_barrier.buffer = input->buffer->buffer;
   source_barrier.offset = input->offset;
@@ -1057,8 +1044,8 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   lsx_vulkan_label_begin(context->vulkan, command, "Rate resident stream append");
   if (contiguous) {
     /* Fast path: the producer already has the stream's element type and
-     * interleaving, so a transfer preserves every bit and needs no descriptor
-     * or clip-counter slot. */
+     * interleaving, so a transfer preserves every bit and needs no
+     * descriptor. */
     vkCmdPipelineBarrier(command, input->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &source_barrier, 0, NULL);
     vkCmdCopyBuffer(command, input->buffer->buffer, context->resident_stream[context->resident_stream_index].buffer, 1, &copy);
   } else {
@@ -1072,9 +1059,6 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     infos[1].buffer = context->resident_stream[context->resident_stream_index].buffer;
     infos[1].offset = 0;
     infos[1].range = context->resident_stream[context->resident_stream_index].size;
-    infos[2].buffer = context->stream_append_clips.buffer;
-    infos[2].offset = 0;
-    infos[2].range = context->stream_append_clips.size;
     memset(writes, 0, sizeof(writes));
     for (index = 0; index < RATE_STREAM_APPEND_BINDINGS; ++index) {
       writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1092,21 +1076,9 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     parameters.input_frame_stride = (uint32_t)input->frame_stride_elements;
     parameters.input_channel_stride = (uint32_t)input->channel_stride_elements;
     parameters.channels = context->channels;
-    parameters.quantize_sox_sample = quantize_sox_sample ? 1u : 0u;
-    parameters.clip_index = context->resident_stream_descriptor_index;
     barriers[0] = source_barrier;
     barriers[1] = stream_barrier;
-    if (quantize_sox_sample) {
-      /* The counter shares the descriptor bank so it cannot be cleared again
-       * before the dispatch using this set has retired. */
-      vkCmdFillBuffer(command, context->stream_append_clips.buffer, (VkDeviceSize)parameters.clip_index * sizeof(uint32_t), sizeof(uint32_t), 0);
-      clip_barrier.buffer = context->stream_append_clips.buffer;
-      clip_barrier.offset = (VkDeviceSize)parameters.clip_index * sizeof(uint32_t);
-      clip_barrier.size = sizeof(uint32_t);
-      barriers[2] = clip_barrier;
-      context->resident_stream_clip_pending_mask |= 1u << context->resident_stream_descriptor_index;
-    }
-    vkCmdPipelineBarrier(command, input->producer_stage | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, quantize_sox_sample ? 3u : 2u, barriers, 0, NULL);
+    vkCmdPipelineBarrier(command, input->producer_stage | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 2u, barriers, 0, NULL);
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, context->stream_append_pipeline);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, context->stream_append_pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
     vkCmdPushConstants(command, context->stream_append_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(parameters), &parameters);
@@ -1140,12 +1112,7 @@ size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context)
 
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
 {
-  return append_resident_stream(context, input, sox_false);
-}
-
-int lsx_rate_vulkan_append_resident_stream_quantized(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
-{
-  return append_resident_stream(context, input, sox_true);
+  return append_resident_stream(context, input);
 }
 
 /* Consume one block from the stream: describe its head as a resident input,
@@ -1234,41 +1201,6 @@ int lsx_rate_vulkan_flush_resident(lsx_rate_vulkan_t *context)
 sox_bool lsx_rate_vulkan_resident_stream_ready(lsx_rate_vulkan_t const *context)
 {
   return context && context->resident_stream_occupancy >= context->input_frames ? sox_true : sox_false;
-}
-
-/* Sum and clear the clip counters of the blocks that have written one.  The
- * pending mask is what says which of the per-block slots hold a count this
- * time round, so a stale value from an earlier rotation is not added again. */
-static uint32_t take_resident_stream_clips(lsx_rate_vulkan_t *context)
-{
-  uint32_t *clips;
-  uint32_t total = 0;
-  uint32_t index;
-
-  if (!context || !context->stream_append_clips.mapped)
-    return 0;
-  clips = context->stream_append_clips.mapped;
-  for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
-    if (context->resident_stream_clip_pending_mask & (1u << index)) {
-      total += clips[index];
-      clips[index] = 0;
-    }
-  context->resident_stream_clip_pending_mask = 0;
-  return total;
-}
-
-/* Report clips only when nothing is still queued: the counters are written by
- * the device, so with work outstanding they do not yet hold the final values
- * and reading them would both undercount and clear what was never counted.
- * The caller collects the rest through the _completed form after a flush. */
-uint32_t lsx_rate_vulkan_resident_stream_clips(lsx_rate_vulkan_t *context)
-{
-  return context && !context->vulkan->pending_command_buffer_count ? take_resident_stream_clips(context) : 0;
-}
-
-uint32_t lsx_rate_vulkan_resident_stream_clips_completed(lsx_rate_vulkan_t *context)
-{
-  return take_resident_stream_clips(context);
 }
 
 uint32_t lsx_rate_vulkan_resident_batch_depth(lsx_rate_vulkan_t const *context)

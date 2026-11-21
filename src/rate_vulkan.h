@@ -106,13 +106,10 @@ int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *i
 /* Frames that may still be appended before the stream is full. */
 size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context);
 
-/* Append a resident buffer to the stream.  The caller must have checked there
- * is room; the input is read on the device, so it must remain valid until the
- * next submission.  The quantized form rounds each sample to SoX's integer
- * sample grid on the way in, for a producer whose output is nominally
- * integral and must match what the CPU path would have carried. */
+/* Append a resident buffer to the stream; its samples pass through unchanged.
+ * The caller must have checked there is room; the input is read on the
+ * device, so it must remain valid until the next submission. */
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input);
-int lsx_rate_vulkan_append_resident_stream_quantized(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input);
 
 /* Consume one block from the stream and publish the result.  *produced is
  * false, with success returned, when the stream does not yet hold a whole
@@ -129,13 +126,6 @@ sox_bool lsx_rate_vulkan_resident_stream_ready(lsx_rate_vulkan_t const *context)
 /* Zero-fill the rest of the current block at end of stream, so the tail is
  * flushed through the filter instead of being left in the buffer. */
 int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context);
-
-/* Clips counted by the quantizing append, which is where a value outside
- * SoX's sample range is clamped.  Counted on the device, so the first form
- * returns what has been read back so far and the second waits for the
- * outstanding blocks first. */
-uint32_t lsx_rate_vulkan_resident_stream_clips(lsx_rate_vulkan_t *context);
-uint32_t lsx_rate_vulkan_resident_stream_clips_completed(lsx_rate_vulkan_t *context);
 
 /* How many blocks this stage may have in flight, and the element format its
  * resident output carries; both are what a consumer needs to size itself. */

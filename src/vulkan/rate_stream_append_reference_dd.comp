@@ -18,25 +18,17 @@
 
 /* The reference profile's member of the stream-append family;
  * rate_stream_append_f64.comp carries the family's rationale.  Samples stay
- * double-double pairs through the gather unless quantisation is asked for.
- *
- * Quantisation collapses the pair.  The two words are added before rounding,
- * so the decision uses the pair's full precision; an integer sample is exact
- * in a double, so the low word becomes zero.  double_double.glsl is not
- * included because that sum is meant to round.
+ * double-double pairs through the gather, both words copied unchanged.
  *
  * Bindings, in the order append_resident_stream() in rate_vulkan.c writes
  * them:
  *   0 input_samples    -- in: the producer's buffer, bound whole; the block's
  *                         position arrives as input_base_element.
  *   1 stream_samples   -- out: the stream buffer, interleaved.
- *   2 clipped_samples  -- in/out: clip counters, one per descriptor slot,
- *                         written atomically.
  *
- * Push constants (stream_append_parameters_t, 32 bytes): input_base_element,
+ * Push constants (stream_append_parameters_t, 24 bytes): input_base_element,
  * output_first_frame, frames, input_frame_stride, input_channel_stride,
- * channels, quantize_sox_sample, clip_index.  The strides count dvec2
- * elements.
+ * channels.  The strides count dvec2 elements.
  *
  * Dispatch is two-dimensional, x over frames in workgroups of 128 and y one
  * invocation per channel, hence both bounds tests.
@@ -55,10 +47,6 @@ layout(std430, binding = 1) writeonly buffer StreamSamples {
   dvec2 values[];
 } stream_samples;
 
-layout(std430, binding = 2) buffer ClipCounter {
-  uint clipped_samples[];
-};
-
 layout(push_constant) uniform Parameters {
   uint input_base_element;
   uint output_first_frame;
@@ -66,8 +54,6 @@ layout(push_constant) uniform Parameters {
   uint input_frame_stride;
   uint input_channel_stride;
   uint channels;
-  uint quantize_sox_sample;
-  uint clip_index;
 } parameters;
 
 void main()
@@ -83,15 +69,6 @@ void main()
       frame * parameters.input_frame_stride +
       channel * parameters.input_channel_stride;
   const uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
-  dvec2 value = input_samples.values[input_index];
 
-  if (parameters.quantize_sox_sample != 0u) {
-    const double combined = value.x + value.y;
-    const double rounded = roundEven(combined);
-
-    if (rounded < -2147483648.0 || rounded > 2147483647.0)
-      atomicAdd(clipped_samples[parameters.clip_index], 1u);
-    value = dvec2(clamp(rounded, -2147483648.0, 2147483647.0), 0.0);
-  }
-  stream_samples.values[output_index] = value;
+  stream_samples.values[output_index] = input_samples.values[input_index];
 }

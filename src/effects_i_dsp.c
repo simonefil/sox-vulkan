@@ -1,7 +1,4 @@
-/* libSoX internal DSP functions.
- * All public functions & data are prefixed with lsx_ .
- *
- * Copyright (c) 2008,2012 robs@users.sourceforge.net
+/* Copyright (c) 2008,2012 robs@users.sourceforge.net
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -16,6 +13,10 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ */
+
+/* libSoX internal DSP functions.
+ * All public functions & data are prefixed with lsx_ .
  */
 
 #ifdef NDEBUG /* Enable assert always. */
@@ -613,44 +614,26 @@ void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, 
   }
 }
 
-/* The universal tap, and barely a seam at all any more.
+/* Moving samples between an effect's double buffers and the chain's.
  *
- * Two implementations used to stand here.  One rounded to int32 with lrint and
- * read the invalid-operation flag as a range check; the other went through the
- * conversion macro.  Both existed for one reason: to move samples between the
- * double an effect computes in and the integer the chain carried between
- * effects.  The chain no longer carries an integer, so what is left is a copy.
- *
- * lsx_normalize_samples was already the identity in one of the two variants and
- * is now the identity in both, and lsx_sample_values_are_normalized is
- * constant.  They stay as functions rather than disappearing into their callers
- * so that the arithmetic change and the source change can be told apart if
- * something downstream goes wrong; the callers that branch on the flag -- the
- * Vulkan rate paths and diagnostics -- collapse in their own step.
+ * sox_sample_t is a double in [-1, +1), the same value an effect computes
+ * in, so lsx_save_samples and lsx_load_samples are copies, and lsx_sample_values_are_normalized always returns sox_true.
+ * Its callers -- the Vulkan rate and SDM paths and diagnostics -- still
+ * branch on it.
  */
 
 void lsx_save_samples(sox_sample_t * const dest, double const * const src,
-    size_t const n, sox_uint64_t * const clips)
+    size_t const n)
 {
-  /* This is still the tap: it is where a chain hands a block of samples on, and
-   * a capture taken here describes what the next effect will see.  What it no
-   * longer is, is the last place the double exists -- the double is what the
-   * next effect gets. */
+  /* The universal tap: this is where an effect hands a block of samples on,
+   * so a capture taken here is exactly what the next effect sees. */
   if (lsx_diagnostics_on)
     lsx_diagnostics_capture_f64(src, n);
-  (void)clips;                  /* nothing here can clip any more */
   if (dest != src)
     memcpy(dest, src, n * sizeof(*dest));
 }
 
 void lsx_load_samples(double * const dest, sox_sample_t const * const src,
-    size_t const n)
-{
-  if (dest != src)
-    memcpy(dest, src, n * sizeof(*dest));
-}
-
-void lsx_normalize_samples(double * const dest, double const * const src,
     size_t const n)
 {
   if (dest != src)

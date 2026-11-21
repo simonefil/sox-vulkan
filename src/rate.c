@@ -2519,7 +2519,7 @@ static int flow_vulkan(sox_effect_t *effp, sox_sample_t const *ibuf, sox_sample_
   odone -= odone % channels;
   output = fifo_read(output_fifo, odone, NULL);
   if (odone) {
-    lsx_save_samples(obuf, output, odone, &effp->clips);
+    lsx_save_samples(obuf, output, odone);
     p->rate.samples_out += odone;
   }
   if (*isamp && odone < *osamp) {
@@ -3119,7 +3119,7 @@ static int flow_core(sox_effect_t * effp, const sox_sample_t * ibuf,
     return flow_vulkan(effp, ibuf, obuf, isamp, osamp);
 #endif
   sample_t const * s = rate_cpu_output(&p->rate, NULL, &odone);
-  lsx_save_samples(obuf, s, odone, &effp->clips);
+  lsx_save_samples(obuf, s, odone);
 
   if (*isamp && odone < *osamp) {
     size_t output_room = *osamp - odone;
@@ -3135,7 +3135,7 @@ static int flow_core(sox_effect_t * effp, const sox_sample_t * ibuf,
     {
       size_t more = *osamp - odone;
       s = rate_cpu_output(&p->rate, NULL, &more);
-      lsx_save_samples(obuf + odone, s, more, &effp->clips);
+      lsx_save_samples(obuf + odone, s, more);
       odone += more;
     }
   }

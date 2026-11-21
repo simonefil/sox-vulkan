@@ -1,6 +1,4 @@
-/* libSoX Library Public Interface
- *
- * Copyright 1999-2012 Chris Bagwell and SoX Contributors.
+/* Copyright 1999-2012 Chris Bagwell and SoX Contributors.
  *
  * This source code is freely redistributable and may be used for
  * any purpose. This copyright notice must be maintained.
@@ -9,6 +7,8 @@
  */
 
 /** @file
+libSoX Library Public Interface.
+
 Contains the interface exposed to clients of the libSoX library.
 Symbols starting with "sox_" or "SOX_" are part of the public interface for
 libSoX clients (applications that consume libSoX). Symbols starting with
@@ -450,24 +450,20 @@ typedef sox_uint32_t sox_uint24_t;
 Client API:
 Native SoX audio sample type (alias for double).
 
-A sample is a number in [-1, +1), not an integer count of quantisation steps.
-The asymmetry is the one every integer PCM format already has: -1 is a value a
-sample can take, +1 is not.
+A sample is a number in the half-open range [-1, +1). The asymmetry is the
+one every integer PCM format has: -1 is a value a sample can take, +1 is not.
 
-Effects have always computed in double and stored back into an integer between
-one and the next; the integer was never a precision anyone chose, it was the
-exchange format they had to squeeze through. Carrying the double all the way
-removes one rounding per link in the chain and makes 64-bit float input survive
-the pipeline instead of losing 22 bits of mantissa on the way in.
+Effects compute in double, and the chain carries that double from one effect
+to the next with no rounding in between; 64-bit float input keeps its full
+mantissa through the pipeline. 53 bits of mantissa represent every 32-bit
+integer exactly, so every integer PCM format round-trips bit for bit.
 
-Nothing is lost in the other direction: 53 bits of mantissa represent every
-32-bit integer exactly, so every integer PCM format still round-trips bit for
-bit.
-
-Values outside [-1, +1) are legal in transit. Clipping happens where a sample
-becomes a number in a file, in the writers, and nowhere else, so an effect
-that overshoots and a later one that pulls the level back down leave nothing
-behind.
+Values outside [-1, +1) are legal in transit. Clipping happens in the
+writers, where a sample becomes a number in a file, so an effect that
+overshoots and a later one that pulls the level back down leave nothing
+behind. The exceptions are effects that clip on purpose: the limiters of
+`vol' and `dcshift' (see SOX_SAMPLE_CLIP_COUNT) and `dither', which limits
+to its target precision.
 */
 typedef double sox_sample_t;
 
@@ -475,9 +471,8 @@ typedef double sox_sample_t;
 Client API:
 Packed DSD carried through the sample pipeline.
 
-DSD is one bit per sample, so a chain that moved one bit per sox_sample_t
-would spend 32 bits carrying one. Instead a modulator may hand whole groups
-of bits across in a single sample, and sox_signalinfo_t.packing says how many
+DSD is one bit per sample, so a modulator may hand whole groups of bits
+across in a single sox_sample_t, and sox_signalinfo_t.packing says how many
 bits each one holds: SOX_DSD_PACKING_BYTE for the byte form below, or
 SOX_DSD_PACKING_WORD for whole 32-bit words. Zero means ordinary PCM, which
 is what every effect that has not opted into packing assumes.
@@ -497,16 +492,14 @@ handler's ordinary reader.
 #define SOX_DSD_PACKING_BYTE 8
 #define SOX_DSD_PACKING_WORD 32
 
-/* A packed sample is bits, not a number, and it travels as the double that
- * holds those bits' unsigned value exactly. 53 bits of mantissa hold any
- * 32-bit word without rounding, so nothing is lost by the ride.
+/* A packed sample holds bits, and it travels as the double whose value is
+ * those bits read as an unsigned integer. 53 bits of mantissa hold any 32-bit
+ * word exactly.
  *
- * The value is always non-negative. That is not a convenience, it is what
- * makes the round trip defined: converting a negative double to an unsigned
- * integer is undefined behaviour in C, where converting a negative int32 to
- * uint32 was merely modular and happened to give back the bits. The word form
- * therefore stores 0x80000000 as +2147483648.0, never as -2147483648.0, and
- * every reader goes through sox_uint32_t.
+ * The value is always non-negative, which keeps the round trip defined:
+ * converting a negative double to an unsigned integer is undefined behaviour
+ * in C. The word form stores 0x80000000 as +2147483648.0, and every reader
+ * goes through sox_uint32_t.
  */
 #define SOX_DSD_PACKED_BYTE(data, valid_bits) \
   ((sox_sample_t)(double)((sox_uint32_t)(sox_uint8_t)(data) | \
@@ -773,9 +766,8 @@ Returns 0x7FFFFFFF.
 Client API:
 Bits of mantissa in a sox_sample_t = 53.
 
-53, not 64: a double has 64 bits but 11 of them are the exponent. What the
-pipeline resolves is the mantissa, and 53 bits of it is 21 more than the
-integer form carried.
+The significand precision of an IEEE 754 double: 52 stored bits plus the
+implicit leading bit.
 */
 #define SOX_SAMPLE_PRECISION 53
 
@@ -784,9 +776,7 @@ Client API:
 Upper limit of the sample range = +1.0, and unlike SOX_SAMPLE_MIN it is not
 itself a value a sample takes: the range is half open, [-1, +1).
 
-It is a limit, not a scale factor. Multiplying by it to reach "full scale" was
-the right thing to do when a sample was an integer and is now a no-op that only
-looks like arithmetic.
+It is a range limit; multiplying by it is a no-op.
 */
 #define SOX_SAMPLE_MAX ((sox_sample_t)1.0)
 
@@ -802,7 +792,7 @@ Lower limit of the sample range = -1.0, and a value a sample may take.
  *   I/O      Input    sox_sample_t Clips?    Input     sox_sample_t Clips?
  *  Format   Minimum     Minimum     I O     Maximum      Maximum     I O
  *  ------  ---------  ------------ -- --   ----------  ------------ -- --
- *  Float     -inf        -inf       n n       inf          inf       n y
+ *  Float     -inf        -inf       n n       inf          inf       n n
  *  Int8      -128         -1        n n       127       1 - 2^-7     n y
  *  Int16    -32768        -1        n n      32767      1 - 2^-15    n y
  *  Int24   -8388608       -1        n n     8388607     1 - 2^-23    n y
@@ -811,20 +801,18 @@ Lower limit of the sample range = -1.0, and a value a sample may take.
  * An integer of b bits becomes a sample by dividing by 2^(b-1), and that is
  * exact for every b up to 32: a double holds any 32-bit integer without
  * rounding, and dividing by a power of two only moves the exponent. Every
- * integer PCM format still round-trips bit for bit, which is the reason the
- * range is [-1, +1) and not something tidier.
+ * integer PCM format round-trips bit for bit, which is why the range is
+ * [-1, +1).
  *
  * Rounding on the way out: halves toward +inf, all others to nearest integer.
  *
- * Reading no longer clips. A float file may hold values past full scale, and
- * they now survive the pipeline; if the chain brings them back inside nothing
- * was lost, and if it does not the writer clips them once at the end rather
- * than the reader clipping them at the start. That is the invariant: clipping
- * happens where a sample becomes a number in a file, and nowhere else.
+ * Reading does not clip. A float file may hold values past full scale, and
+ * they pass through the pipeline; an integer writer clips whatever is still
+ * out of range at the end, and a float writer passes it through.
  *
- * Unsigned integers differ from signed ones by an offset of 2^(b-1) applied
- * before the division. The old spelling flipped the top bit, which was the
- * same operation expressed in a representation that no longer exists.
+ * Unsigned integers differ from signed ones by an offset of 2^(b-1):
+ * SOX_UNSIGNED_TO_SAMPLE flips the top bit of the shifted 32-bit word, which
+ * subtracts it, and SOX_SAMPLE_TO_UNSIGNED adds it after rounding.
  */
 
 /**
@@ -835,20 +823,9 @@ conversion macros.
 #define SOX_SAMPLE_LOCALS sox_sample_t sox_macro_temp_sample LSX_UNUSED; \
   double sox_macro_temp_double LSX_UNUSED
 
-/* SOX_SAMPLE_NEG is gone.
- *
- * It was the sign bit of the integer a sample used to be, and it existed so
- * that signed and unsigned integers could be turned into one another by
- * flipping it. A double has a sign bit too, but flipping that one negates the
- * sample instead of shifting its range by half, so the macro would not have
- * been merely useless, it would have been wrong in a way that still compiles.
- * The offset it stood for now appears as an offset, in SOX_UNSIGNED_TO_SAMPLE
- * and SOX_SAMPLE_TO_UNSIGNED.
- *
- * Removing a public macro is a break, and this migration is a major bump.
- *
- * The scale factor of a b-bit integer, as a double. 1u << 31 is
- * implementation-defined territory in C, so it goes through 1ull.
+/* The scale factor of a b-bit integer, as a double. The shift goes through
+ * 1ull so that it is well defined for every width from 1 to 32 whatever the
+ * size of int.
  */
 #define SOX_SAMPLE_SCALE(bits) ((double)(1ull << ((bits) - 1)))
 
@@ -857,7 +834,7 @@ Client API:
 Converts sox_sample_t to an unsigned integer of width (bits).
 @param bits  Width of resulting sample (1 through 32).
 @param d     Input sample to be converted.
-@param clips Variable that is incremented if the result is too big.
+@param clips Variable that is incremented if the result is out of range.
 @returns Unsigned integer of width (bits).
 */
 #define SOX_SAMPLE_TO_UNSIGNED(bits,d,clips) \
@@ -869,19 +846,17 @@ Client API:
 Converts sox_sample_t to a signed integer of width (bits).
 @param bits  Width of resulting sample (1 through 32).
 @param d     Input sample to be converted.
-@param clips Variable that is incremented if the result is too big.
+@param clips Variable that is incremented if the result is out of range.
 @returns Signed integer of width (bits).
 */
 /* Scale, round halves toward +inf, clip at both ends.
  *
- * This is where clipping lives now, together with the writers that call it: a
- * sample is allowed past full scale everywhere upstream, and pays for it only
- * here, once. Both ends are checked, the integer form could not overflow
- * downward because -1 was exactly representable, and a double can be anywhere.
+ * This is where the integer writers clip: a sample may sit past full scale
+ * anywhere upstream and is limited here, once. Both ends are checked, since
+ * a double can hold any value.
  *
- * floor(x + 0.5) rather than a cast, because a cast truncates toward zero and
- * would round -0.5 to 0 while rounding +0.5 to 0 as well, quietly bending the
- * transfer curve around the origin.
+ * floor(x + 0.5) rounds halves toward +inf on both sides of zero, so the
+ * transfer curve has the same step at the origin as everywhere else.
  */
 #define SOX_SAMPLE_TO_SIGNED(bits,d,clips)                              \
   (sox_int##bits##_t)(                                                  \
@@ -903,18 +878,16 @@ Converts signed integer of width (bits) to sox_sample_t.
 /* Sign-extend, then divide.
  *
  * The value arrives as the low `bits` bits of a wider word, with nothing
- * useful above them, a 24-bit sample of -1 arrives as 0xFFFFFF, not as -1.
- * The old spelling shifted it left by 32-bits, which put its sign bit exactly
- * where int32's sign bit is and made the extension a side effect of the shift.
- * That step is still needed and still the cheapest way to say it; only the
- * division at the end is new.
+ * useful above them: a 24-bit sample of -1 arrives as 0xFFFFFF. Shifting it
+ * left by 32 - bits puts its sign bit where int32's sign bit is, so the cast
+ * to sox_int32_t sign-extends it.
  *
  * Casting a uint32 whose top bit is set to sox_int32_t is implementation-
  * defined before C23, and every compiler SoX builds on defines it the one way
- * two's complement allows. The old macro relied on the same thing.
+ * two's complement allows.
  *
- * Exact: the low 32-bits bits are zeros, so dividing by 2^31 only moves the
- * exponent. */
+ * Exact: the low 32 - bits bits are zeros, and dividing by 2^31 only moves
+ * the exponent. */
 #define SOX_SIGNED_TO_SAMPLE(bits,d) \
   ((sox_sample_t)((double)(sox_int32_t)((sox_uint32_t)(d) << (32 - (bits))) / \
                   2147483648.))
@@ -1005,8 +978,9 @@ Converts signed 32-bit integer to sox_sample_t.
 /**
 Client API:
 Converts 32-bit float to sox_sample_t.
-@param d     Input sample to be converted, range [-1, 1).
-@param clips Variable to increment if the input sample is too large or too small.
+@param d     Input sample to be converted, nominally in [-1, 1); values
+             outside pass through unclipped.
+@param clips The parameter is not used.
 @returns SoX native sample value.
 */
 #define SOX_FLOAT_32BIT_TO_SAMPLE(d,clips) SOX_FLOAT_64BIT_TO_SAMPLE(d, clips)
@@ -1014,21 +988,14 @@ Converts 32-bit float to sox_sample_t.
 /**
 Client API:
 Converts 64-bit float to sox_sample_t.
-@param d     Input sample to be converted, range [-1, 1).
-@param clips Variable to increment if the input sample is too large or too small.
+@param d     Input sample to be converted, nominally in [-1, 1); values
+             outside pass through unclipped.
+@param clips The parameter is not used.
 @returns SoX native sample value.
 */
-/* The identity.
- *
- * Fourteen lines of scaling, rounding and clipping used to stand here, and all
- * of it was the cost of squeezing a double through a 32-bit integer: the
- * mantissa lost 22 bits on the way in, and a value past full scale was clipped
- * before any effect had a chance to bring it back. A sample is a double in
- * [-1, +1) and a 64-bit float file holds a double in [-1, +1). There is
- * nothing to convert.
- *
- * Values outside the range pass through unclipped, by design; the writer at the
- * end of the chain is where they meet a limit.
+/* The identity: a sample and a 64-bit float file both hold a double in
+ * [-1, +1). Values outside the range pass through unclipped; the writer at
+ * the end of the chain is where they meet a limit.
  */
 #define SOX_FLOAT_64BIT_TO_SAMPLE(d, clips) ((sox_sample_t)(d))
 
@@ -1036,7 +1003,7 @@ Converts 64-bit float to sox_sample_t.
 Client API:
 Converts SoX native sample to an unsigned 8-bit integer.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_UNSIGNED_8BIT(d,clips) SOX_SAMPLE_TO_UNSIGNED(8,d,clips)
 
@@ -1044,7 +1011,7 @@ Converts SoX native sample to an unsigned 8-bit integer.
 Client API:
 Converts SoX native sample to an signed 8-bit integer.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_SIGNED_8BIT(d,clips) SOX_SAMPLE_TO_SIGNED(8,d,clips)
 
@@ -1052,7 +1019,7 @@ Converts SoX native sample to an signed 8-bit integer.
 Client API:
 Converts SoX native sample to an unsigned 16-bit integer.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_UNSIGNED_16BIT(d,clips) SOX_SAMPLE_TO_UNSIGNED(16,d,clips)
 
@@ -1060,7 +1027,7 @@ Converts SoX native sample to an unsigned 16-bit integer.
 Client API:
 Converts SoX native sample to a signed 16-bit integer.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_SIGNED_16BIT(d,clips) SOX_SAMPLE_TO_SIGNED(16,d,clips)
 
@@ -1068,7 +1035,7 @@ Converts SoX native sample to a signed 16-bit integer.
 Client API:
 Converts SoX native sample to an unsigned 24-bit integer.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_UNSIGNED_24BIT(d,clips) SOX_SAMPLE_TO_UNSIGNED(24,d,clips)
 
@@ -1076,7 +1043,7 @@ Converts SoX native sample to an unsigned 24-bit integer.
 Client API:
 Converts SoX native sample to a signed 24-bit integer.
 @param d Input sample to be converted.
-@param clips Variable to increment if input sample is too large.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_SIGNED_24BIT(d,clips) SOX_SAMPLE_TO_SIGNED(24,d,clips)
 
@@ -1084,7 +1051,7 @@ Converts SoX native sample to a signed 24-bit integer.
 Client API:
 Converts SoX native sample to an unsigned 32-bit integer.
 @param d Input sample to be converted.
-@param clips The parameter is not used.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_UNSIGNED_32BIT(d,clips) SOX_SAMPLE_TO_UNSIGNED(32,d,clips)
 
@@ -1092,7 +1059,7 @@ Converts SoX native sample to an unsigned 32-bit integer.
 Client API:
 Converts SoX native sample to a signed 32-bit integer.
 @param d Input sample to be converted.
-@param clips The parameter is not used.
+@param clips Variable to increment if input sample is out of range.
 */
 #define SOX_SAMPLE_TO_SIGNED_32BIT(d,clips) SOX_SAMPLE_TO_SIGNED(32,d,clips)
 
@@ -1116,10 +1083,10 @@ Converts SoX native sample to a 64-bit float.
 Client API:
 Clamps a sample into [-1, +1) and increments a counter if it had to.
 
-Under the new invariant an effect that clips is an effect that destroys headroom
-a later one might have given back, so this belongs to the writers. The two
-exceptions are the limiter branches of `vol' and `dcshift', where clipping is
-what the user asked for with `-l' rather than a side effect of the arithmetic.
+An effect that clips destroys headroom a later one might have given back, so
+clipping belongs to the writers. The exceptions are the limiter branches of
+`vol' and `dcshift', taken when the user gives a limiter gain argument, where
+clipping is what was asked for.
 
 The upper limit is exclusive, so a sample at or above +1 is pulled to the
 largest value below it rather than to +1 itself, which is not a sample.

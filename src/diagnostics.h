@@ -1,6 +1,4 @@
-/* Machine-readable diagnostics for one run of SoX.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -18,26 +16,26 @@
  */
 
 /*
+ * Machine-readable diagnostics for one run of SoX.
+ *
  * --diagnostics DIR turns this on.  It writes DIR/run.txt, one key=value per
  * line with the hierarchy spelled out by dots, plus whatever sample captures
- * the run could take.  It is a second point of emission for numbers the run
- * already computes, not a second measurement of them.
+ * the run could take.  It emits numbers the run already computes; it takes
+ * no measurements of its own.
  *
- * The contract with whatever reads the files has no version field, and will
- * not grow one: keys never change meaning and never disappear, only new ones
- * appear.  A reader therefore takes an absent key as "not measured" -- never
- * as an error and never as zero -- so an old binary produces fewer keys
- * instead of breaking a new reader, and a new binary produces keys an old
- * reader ignores.
+ * The files carry no version field.  Keys keep their meaning and are never
+ * removed; new ones are only added.  A reader takes an absent key as "not
+ * measured", neither an error nor zero, so an old binary produces fewer keys
+ * a new reader can handle, and a new binary produces keys an old reader
+ * ignores.
  *
- * Invariants the rest of the tree has to preserve, because they are what make
- * the mode worth having:
+ * Invariants the rest of the tree has to preserve:
  *
  *   Neutrality.  The audio is byte-identical with the flag and without it.
  *                Nothing here may feed back into a sample.
- *   Zero cost when off.  Every entry point begins by testing
- *                lsx_diagnostics_on, which is the only thing a run without
- *                the flag pays.  No file is opened and nothing is allocated.
+ *   Zero cost when off.  The taps and setters test lsx_diagnostics_on
+ *                first, and that test is all a run without the flag pays.
+ *                No file is opened and nothing is allocated.
  *   Explicit failure.  A metric that was asked for and cannot be produced
  *                stops the run with a message.  A key is never left empty to
  *                stand in for one.
@@ -62,8 +60,8 @@ extern int lsx_diagnostics_on;
 
 /* Create DIR if needed and begin collecting.  Only the files this run writes
  * are replaced -- run.txt and the captures -- so a mistyped path costs those
- * names and not the contents of a directory.  Anything that stops the mode
- * from working is fatal: there is no degraded diagnostics run. */
+ * names and leaves the rest of the directory intact.  Anything that stops the
+ * mode from working is fatal: a diagnostics run is complete or it stops. */
 void lsx_diagnostics_open(char const *dir);
 
 /* Record a key.  A key set twice keeps its original position and takes the
@@ -76,8 +74,8 @@ int lsx_diagnostics_have(char const *key);
 
 /* The same, under effect.N. for the effect's position in the chain.  Effects
  * use it to publish what only they know: taps, stages, strategy, latency.
- * Silently does nothing if the effect is not in the chain being diagnosed,
- * which is what happens for an effect run outside sox_flow_effects(). */
+ * A key from an effect that is not yet in the chain being diagnosed is held
+ * as pending; see below. */
 void lsx_diagnostics_effect_setf(sox_effect_t const *effp, char const *leaf,
     char const *fmt, ...) LSX_DIAG_PRINTF34;
 
@@ -103,12 +101,12 @@ void lsx_diagnostics_chain_done(void);
 void lsx_diagnostics_effect_frames(size_t n, size_t in, size_t out);
 
 /* Arm the sample taps around one effect's flow or drain, and disarm after.
- * Only the last effect before the chain's sink is armed: it is the one whose
- * samples are the chain's output, and taking every effect's would interleave
- * several signals into one file.  flows is what the effect will run, and has
- * to be known before any of them start, since each writes its own part file
- * and the parts must exist before threads reach them. */
-void lsx_diagnostics_tap_begin(sox_effect_t const *effp, size_t flows);
+ * Only the last effect before the chain's sink is armed: its samples are the
+ * chain's output, so each capture file holds one signal.  The effect's flow
+ * count has to be known before any flow starts, since each writes its own
+ * part file and the slots for the parts must exist before threads reach
+ * them. */
+void lsx_diagnostics_tap_begin(sox_effect_t const *effp);
 void lsx_diagnostics_tap_flow(size_t flow);
 void lsx_diagnostics_tap_end(void);
 
@@ -116,14 +114,14 @@ void lsx_diagnostics_tap_end(void);
  * tests it before paying for a capture call. */
 int lsx_diagnostics_tap_armed(void);
 
-/* The universal tap: n doubles as the effect holds them, before
- * lsx_save_samples() rounds them to sox_sample_t.  Covers every backend and
- * profile, and measures at the file's floor of about -186 dB. */
+/* The universal tap: n doubles as an effect hands them to lsx_save_samples(),
+ * which copies them into the chain's sox_sample_t buffer.  Covers every
+ * backend and profile, and measures at the file's floor of about -186 dB. */
 void lsx_diagnostics_capture_f64(double const *samples, size_t n);
 
 /* The precision tap: one double-double, high then low, taken where both
- * halves still exist.  This is what makes the reference profile measurable
- * from a single run instead of two. */
+ * halves still exist, in lsx_vulkan_collapse_pair().  It makes the reference
+ * profile measurable from a single run. */
 void lsx_diagnostics_capture_dd(double high, double low);
 /* The fused DSD stage's output, as pairs, interleaved by channel. */
 void lsx_diagnostics_capture_dsd_dd(double const *pairs, size_t samples);

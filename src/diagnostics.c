@@ -1,6 +1,4 @@
-/* Machine-readable diagnostics for one run of SoX.  See the header.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Machine-readable diagnostics for one run of SoX.  See the header. */
 
 #include "sox_i.h"
 #include "diagnostics.h"
@@ -44,10 +44,9 @@
  * valid result.  The metadata tables are scheduler-owned; only capture file
  * writes occur on effect-flow threads. */
 
-/* Each flow of a tapped effect writes its own part file and the parts are
- * interleaved when the run ends.  The alternative -- one file written by
- * whichever flow is running -- would interleave the channels in thread
- * arrival order, which is not an order at all. */
+/* Each flow of a tapped effect writes its own part file, selected by the
+ * thread-local tap_flow, and the parts are interleaved when the run ends, so
+ * the channel order in a capture does not depend on thread scheduling. */
 #if defined _MSC_VER
 #define DIAGNOSTICS_THREAD_LOCAL __declspec(thread)
 #elif defined __GNUC__
@@ -184,7 +183,8 @@ int lsx_diagnostics_have(char const *key)
 }
 
 /* The chain position of the effect, or the chain length if it is not in the
- * chain.  effp may be any of an effect's flows, which are one array. */
+ * chain; 0 when no chain is set or effp is NULL.  effp may be any of an
+ * effect's flows, which are one array. */
 static size_t effect_index(sox_effect_t const *effp)
 {
   size_t index;
@@ -214,8 +214,9 @@ void lsx_diagnostics_effect_setf(sox_effect_t const *effp, char const *leaf,
   va_start(args, fmt);
   value = format_string(fmt, args);
   va_end(args);
-  /* Before the effect is in the chain it has no number yet, so the key waits
-   * for one instead of being written under a guess. */
+  /* Before the effect is in the chain it has no number yet, so the key is
+   * held in pending until lsx_diagnostics_effect_pending_flush() gives it
+   * one. */
   if (!diagnostics_chain || index >= diagnostics_chain->length) {
     if (pending_count == pending_size) {
       pending_size = pending_size ? pending_size * 2 : 16;
@@ -316,9 +317,8 @@ void lsx_diagnostics_open(char const *dir)
   lsx_diagnostics_on = 1;
 }
 
-/* Both taps have the same shape, so they share one emitter: the difference
- * between them is how many doubles a sample is and where the call comes
- * from. */
+/* The three double taps share one emitter: they differ only in how many
+ * doubles a sample is and where the call comes from. */
 static void capture_write(capture_t *capture, double const *values, size_t samples)
 {
   slot_t *slot;
@@ -385,8 +385,8 @@ static uint8_t reverse_byte(uint8_t value)
  * check.  The word form arrives channel-major with 32 valid samples per word;
  * the Vulkan modulator already packs its earliest sample in bit zero, so each
  * word is split low byte first and transposed to byte-major channel order.
- * dsd_frames counts frames per channel, not bytes and not interleaved sample
- * slots, which is why it advances once per group rather than per channel. */
+ * dsd_frames counts DSD frames per channel, so it advances once per group:
+ * by the group's valid-bit count for bytes, by 32 for words. */
 void lsx_diagnostics_capture_dsd(sox_sample_t const *samples, size_t n,
     unsigned channels, unsigned packing)
 {
@@ -473,12 +473,14 @@ static void slots_reserve(capture_t *capture, size_t flows)
   capture->slot_count = flows;
 }
 
-void lsx_diagnostics_tap_begin(sox_effect_t const *effp, size_t flows)
+void lsx_diagnostics_tap_begin(sox_effect_t const *effp)
 {
-  if (!lsx_diagnostics_on || !effp || !flows)
+  size_t flows = effp ? effp->flows : 0;
+
+  if (!lsx_diagnostics_on || !flows)
     return;
-  /* One effect is tapped for the whole run, so a second one with a different
-   * flow count would mean two signals in one file. */
+  /* One effect is tapped for the whole run: a second effect with a different
+   * name, or a change of channel count, would put two signals in one file. */
   if (tap_effect && strcmp(tap_effect, effp->handler.name))
     lsx_diagnostics_fail("two effects claimed the sample tap: %s and %s",
         tap_effect, effp->handler.name);
@@ -614,11 +616,11 @@ static void write_captures(void)
     lsx_diagnostics_setf(key, "%u", tap_channels);
     snprintf(key, sizeof(key), "capture.%u.interleave", index);
     lsx_diagnostics_setf(key, "1");
-    /* Nothing is normalised or scaled on the way into a capture, so the
-     * reader has to be told which of SoX's two sample domains the build uses.
-     * The two differ by exactly 2^31, a power of two: dividing by 2^31 - 1 to
-     * reach a normalised oracle would put a rounding floor back inside the
-     * measurement. */
+    /* Nothing is scaled on the way into a capture, so the reader is told the
+     * sample domain and its full scale.  lsx_sample_values_are_normalized()
+     * is always true, so these keys are always "normalized" and "1"; the
+     * other arm names the scaled domain, whose full scale 2^31 is a power of
+     * two and so converts exactly. */
     snprintf(key, sizeof(key), "capture.%u.domain", index);
     lsx_diagnostics_setf(key, "%s",
         lsx_sample_values_are_normalized() ? "normalized" : "sox-sample");

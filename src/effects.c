@@ -1,4 +1,4 @@
-/* SoX Effects chain     (c) 2007 robs@users.sourceforge.net
+/* (c) 2007 robs@users.sourceforge.net
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -14,6 +14,8 @@
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
+/* SoX Effects chain */
 
 #define LSX_EFF_ALIAS
 #include "sox_i.h"
@@ -34,9 +36,8 @@
 #define DEBUG_EFFECTS_CHAIN 0
 
 /* Which effect the sample taps listen to: the last one before the chain's
- * sink.  Its output is the chain's output, and inside it the samples are
- * still doubles, which they never are again.  Tapping every effect instead
- * would write several different signals into one file. */
+ * sink, whose output is the chain's output.  One tapped effect keeps one
+ * signal per capture file. */
 static sox_bool effect_is_tapped(sox_effects_chain_t const * chain, size_t n)
 {
   return lsx_diagnostics_on && chain->length >= 2 && n + 2 == chain->length ?
@@ -390,9 +391,9 @@ typedef struct {
   sox_bool enabled;
   sox_bool consumer_final_received;
 
-  /* Telemetry for -V3.  The point of the last is that it stays zero: a
-   * segment that round-tripped through the host would not be doing what it
-   * exists to do. */
+  /* Telemetry printed at -V3 by report_vulkan_resident_segment(), which also
+   * prints intermediate-host-roundtrips=0: inside a segment the blocks stay
+   * on the device, so there is no counter for it. */
   uint64_t boundary_input_slices;
   uint64_t transform_calls;
   uint64_t transform_output_slices;
@@ -414,12 +415,10 @@ static void vulkan_resident_segment_state_init(vulkan_resident_segment_state_t *
   state->first = state->last = SOX_SIZE_MAX;
 }
 
-static int vulkan_resident_segment_state_begin(
-    sox_effects_chain_t *chain,
+static void vulkan_resident_segment_state_begin(
     vulkan_resident_segment_state_t *state,
     size_t first, size_t last)
 {
-  (void)chain;
   memset(state->outputs, 0, state->length * sizeof(*state->outputs));
   memset(state->pending, 0, state->length * sizeof(*state->pending));
   memset(state->active, 0, state->length * sizeof(*state->active));
@@ -436,7 +435,6 @@ static int vulkan_resident_segment_state_begin(
   state->maximum_pending_edges = 0;
   state->input_format_reported = sox_false;
   state->output_format_reported = sox_false;
-  return SOX_SUCCESS;
 }
 
 static void vulkan_resident_segment_state_destroy(vulkan_resident_segment_state_t *state)
@@ -559,7 +557,7 @@ static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, l
    * than through flow_effect, so the tap has to be armed here as well or the
    * one path the reference profile actually takes would capture nothing. */
   if (tapped) {
-    lsx_diagnostics_tap_begin(effp, effp->flows);
+    lsx_diagnostics_tap_begin(effp);
     lsx_diagnostics_tap_flow(0);
   }
   status = endpoint->consume(effp, resident, input_consumed, &input_clips, effp->obuf + effp->oend, &produced, active);
@@ -586,13 +584,12 @@ static int flow_vulkan_resident_consumer(sox_effects_chain_t *chain, size_t n, l
  * otherwise the ordinary transform runs, with a NULL input meaning "produce
  * what you can from what you already hold".
  *
- * The checks around the output are what keep the segment's state machine
- * honest, and each catches a distinct way for an endpoint to be wrong: a
- * final block before the drain began, a block marked final while the drain
- * says it is not finished, a drain that claims to be finished without a final
- * block, and a drain that finishes without producing anything.  All are
- * reported rather than tolerated: a segment whose end-of-stream markers are
- * wrong truncates or hangs, and neither is diagnosable further downstream.
+ * The checks around the output keep the segment's end-of-stream markers
+ * consistent.  A transform that consumes a missing input, a final block
+ * before the drain began, a drain that finishes with a non-final block, and
+ * a drain that finishes without producing anything all fail the run, since
+ * wrong markers truncate or hang the segment.  A block marked final while the
+ * drain is not finished is downgraded to draining.
  *
  * *progress says whether anything at all happened, which is how the caller
  * tells a segment that is working from one that is stuck. */
@@ -677,7 +674,7 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
 #endif
 
   if (tapped)
-    lsx_diagnostics_tap_begin(effp, effp->flows);
+    lsx_diagnostics_tap_begin(effp);
   if (effp->flows == 1) {     /* Run effect on all channels at once */
     idone -= idone % effp->in_signal.channels;
     if (tapped)
@@ -723,9 +720,8 @@ static int flow_effect(sox_effects_chain_t * chain, size_t n)
       int eff_status_c;
 
       /* Each flow writes its own part of the capture, and the parts are
-       * interleaved when the run ends: a single file written by whichever
-       * flow got there first would be in thread arrival order, which is no
-       * order at all. */
+       * interleaved when the run ends, so the order does not depend on
+       * thread scheduling. */
       if (tapped)
         lsx_diagnostics_tap_flow((size_t)f);
       eff_status_c = effp->handler.flow(&chain->effects[n][f],
@@ -800,7 +796,7 @@ static int drain_effect(sox_effects_chain_t * chain, size_t n)
 #endif
 
   if (tapped)
-    lsx_diagnostics_tap_begin(effp, effp->flows);
+    lsx_diagnostics_tap_begin(effp);
   if (effp->flows == 1) { /* Run effect on all channels at once */
     if (tapped)
       lsx_diagnostics_tap_flow(0);
@@ -907,9 +903,8 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
 
   if (lsx_diagnostics_on) {
     lsx_diagnostics_chain(chain);
-    /* What the effects will actually run with, not what the machine offers:
-     * a report that says eight threads where one ran is worse than no report
-     * at all. */
+    /* The thread count the effects run with: the largest flow count in the
+     * chain, capped at omp_get_max_threads(), or 1 when threading is off. */
 #if defined HAVE_OPENMP
     lsx_diagnostics_setf("openmp.threads", "%d",
         sox_globals.use_threads ? (int)min(max_flows, (size_t)omp_get_max_threads()) : 1);
@@ -963,13 +958,8 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
 
       if (segment_end > e + 1u &&
           segment_end != SOX_SIZE_MAX &&
-          (can_flow || can_drain) &&
-          vulkan_resident_segment_state_begin(
-              chain, &resident_segment,
-              e, segment_end) != SOX_SUCCESS) {
-        flow_status = SOX_EOF;
-        break;
-      }
+          (can_flow || can_drain))
+        vulkan_resident_segment_state_begin(&resident_segment, e, segment_end);
     }
 
     if (resident_segment.enabled && e == resident_segment.last) {
@@ -1183,21 +1173,19 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         effp->obeg = effp->oend = 0;
 
       /* A source with no room left would be asked for zero samples, and a
-       * read of zero is also how it reports the end of its input: the two
-       * are the same answer, and reading this one as the end retires the
-       * source with the file half read.  So leave it alone and go on to the
-       * rest of the chain, which is what empties that buffer.  Only the
-       * count below tells this apart from a chain that has stopped moving
-       * altogether, where there is nothing to wait for. */
+       * read of zero is also how it reports the end of its input, which
+       * would retire the source with the file half read.  So it is held and
+       * the scheduler moves on to the rest of the chain, which empties that
+       * buffer.  The count below tells this apart from a chain that has
+       * stopped moving altogether. */
       if (e + 1 < chain->length &&
           sox_globals.bufsiz - effp->oend < wide &&
           effp->oend > effp->obeg) {
         source_held = sox_true;
         if (effp->obeg == source_held_obeg && effp->oend == source_held_oend) {
           if (++source_held_turns > 64 + 16 * chain->length) {
-            /* Not SOX_EOF: that reads as a stream that ended, which is the
-             * very mistake this guard exists to prevent, and it would leave
-             * the exit status saying the run went well. */
+            /* SOX_EINVAL: SOX_EOF would read as a stream that ended and
+             * leave the exit status reporting success. */
             lsx_fail("effects chain stalled: `%s' has a full buffer that "
                 "`%s' is not taking", effp->handler.name,
                 chain->effects[e + 1]->handler.name);

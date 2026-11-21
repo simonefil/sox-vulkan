@@ -1,9 +1,4 @@
-/* SoX - The Swiss Army Knife of Audio Manipulation.
- *
- * This is the main function for the SoX command line programs:
- *   sox, play, rec, soxi.
- *
- * Copyright 1998-2009 Chris Bagwell and SoX contributors
+/* Copyright 1998-2009 Chris Bagwell and SoX contributors
  * Copyright 1991 Lance Norskog And Sundry Contributors
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -19,6 +14,12 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* SoX - The Swiss Army Knife of Audio Manipulation.
+ *
+ * This is the main function for the SoX command line programs:
+ *   sox, play, rec, soxi.
  */
 
 #include "soxconfig.h"
@@ -230,8 +231,8 @@ static sox_bool original_termios_saved = sox_false;
 static sox_bool stdin_is_a_tty, is_player, is_guarded, do_guarded_norm, no_dither, reported_sox_opts;
 
 struct timeval load_timeofday;
-/* The command as it was given, for --diagnostics: a report that cannot be
- * traced back to an invocation is not reproducible. */
+/* The command as it was given, recorded by --diagnostics as sox.command so
+ * that a report can be traced back to its invocation. */
 static char * invocation;
 
 static void write_output_diagnostics(void)
@@ -647,8 +648,8 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
           continue;
         }
       }
-      /* Packed words are bits, not amplitudes: there is nothing to balance,
-       * and the packed path is only offered where the balance is unity. */
+      /* Packed words carry bits with no amplitude to balance, and the packed
+       * path is only offered where the balance is unity. */
       if (!combiner_signal.packing)
         balance_input(obuf, olen, files[current_input]);
       break;
@@ -1169,17 +1170,16 @@ static void create_user_effects(void)
   }
 }
 
-/* In a chain that converts DSD to PCM, the conversion comes first.
+/* In a chain that converts a single DSD input to PCM, the conversion (`rate')
+ * comes first.
  *
- * Everything else -- vol, gain, trim, all of it -- applies to the PCM, after.
- * An effect in front of the conversion would have to work on single bits,
- * which is not a thing any of them do, so this is an error rather than a
- * fallback: the command line is not one that can be made to mean anything.
- * The rule does not depend on the Vulkan flag, because a rule that did would
- * make the same command line work with it and fail without.
+ * Every other effect -- vol, gain, trim and the rest -- works on PCM and goes
+ * after it; one in front of the conversion would have to work on single bits,
+ * so the run stops with an error.  The rule is the same with and without
+ * Vulkan, so a command line means the same thing either way.
  *
- * DSD to DSD is untouched: there is no conversion in it to come first, and
- * cutting an album into tracks goes on working exactly as before. */
+ * DSD to DSD chains are not checked: there is no conversion in them, and
+ * cutting an album into tracks works as with any other format. */
 static void validate_dsd_effects_chain(void)
 {
   size_t effects = nuser_effects[current_eff_chain];
@@ -1194,14 +1194,14 @@ static void validate_dsd_effects_chain(void)
   exit(1);
 }
 
-/* Whether the input can be read as packed words rather than expanded a bit at
- * a time.  It is a question about this run, not about the format: the words
- * have no consumer unless the conversion runs on the device, and the reader
- * would only be handing an effect something it cannot use.
+/* Whether the input is read as packed words instead of expanded a bit at a
+ * time.  This depends on the run as well as the format: the words have a
+ * consumer only when a Vulkan profile is set and the rate changes, so the
+ * conversion runs on the device.
  *
- * One input file, because words from several would have to be mixed, and mixing
- * bits is not mixing; and unit balance, because a packed word carries no
- * amplitude to scale. */
+ * One input file, because words from several would have to be mixed, and
+ * mixing bits is meaningless; and unit balance with no replay gain, because a
+ * packed word carries no amplitude to scale. */
 static sox_bool packed_dsd_input_wanted(void)
 {
   return sox_globals.vulkan_profile != sox_vulkan_profile_none &&
@@ -2509,8 +2509,8 @@ static void start_diagnostics(char const *dir)
 #ifdef SOX_GIT_COMMIT
   lsx_diagnostics_setf("sox.commit", "%s", SOX_GIT_COMMIT);
 #endif
-  /* Not whether the binary is static: the suite reads that off the file
-   * itself, where it is a fact rather than a claim. */
+  /* Whether this build has thread support.  Static linking is read off the
+   * binary itself by the suite. */
   lsx_diagnostics_setf("sox.threads_available", "%d",
       sox_version_info()->flags & sox_version_have_threads ? 1 : 0);
   lsx_diagnostics_setf("sox.command", "%s", invocation ? invocation : "unknown");

@@ -658,13 +658,13 @@ static int transform_vulkan_resident(
   return SOX_SUCCESS;
 }
 
-static size_t emit_vulkan_consumer_output(fifo_t *fifo, sox_sample_t *output, size_t capacity, uint64_t *clips)
+static size_t emit_vulkan_consumer_output(fifo_t *fifo, sox_sample_t *output, size_t capacity)
 {
   size_t count = min(capacity, (size_t)fifo_occupancy(fifo));
   double const *samples = fifo_read(fifo, count, NULL);
 
   if (count)
-    lsx_save_samples(output, samples, count, clips);
+    lsx_save_samples(output, samples, count);
   return count;
 }
 
@@ -719,7 +719,7 @@ static int consume_vulkan_resident(
   *input_consumed = sox_false;
   *input_clips = lsx_rate_vulkan_resident_stream_clips(
       p->vulkan_resident);
-  emitted = emit_vulkan_consumer_output(&p->vulkan_output_fifo, obuf, capacity, input_clips);
+  emitted = emit_vulkan_consumer_output(&p->vulkan_output_fifo, obuf, capacity);
   *osamp = emitted;
   for (attempt = 0; emitted < capacity && attempt < 2u; ++attempt) {
     lsx_vulkan_resident_buffer_t resident;
@@ -750,7 +750,7 @@ static int consume_vulkan_resident(
 
       if (queue_vulkan_consumer_output(effp, &resident) != SOX_SUCCESS)
         return SOX_EOF;
-      count = emit_vulkan_consumer_output(&p->vulkan_output_fifo, obuf + emitted, capacity - emitted, input_clips);
+      count = emit_vulkan_consumer_output(&p->vulkan_output_fifo, obuf + emitted, capacity - emitted);
       emitted += count;
       *osamp = emitted;
     }
@@ -826,7 +826,7 @@ static int flow_vulkan(sox_effect_t *effp, sox_sample_t const *ibuf, sox_sample_
   odone -= odone % channels;
   output = fifo_read(&p->vulkan_output_fifo, odone, NULL);
   if (odone) {
-    lsx_save_samples(obuf, output, odone, &effp->clips);
+    lsx_save_samples(obuf, output, odone);
     p->samples_out += odone;
   }
   if (*isamp && odone < *osamp) {
@@ -894,7 +894,7 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
 #endif
   odone = min(*osamp, (size_t)fifo_occupancy(&p->output_fifo));
   s = fifo_read(&p->output_fifo, odone, NULL);
-  lsx_save_samples(obuf, s, odone, &effp->clips);
+  lsx_save_samples(obuf, s, odone);
   p->samples_out += odone;
 
   if (*isamp && odone < *osamp) {

@@ -1,13 +1,14 @@
-/* libSoX Internal header
- *
- *   This file is meant for libSoX internal use only
- *
- * Copyright 2001-2012 Chris Bagwell and SoX Contributors
+/* Copyright 2001-2012 Chris Bagwell and SoX Contributors
  *
  * This source code is freely redistributable and may be used for
  * any purpose.  This copyright notice must be maintained.
  * Chris Bagwell And SoX Contributors are not responsible for
  * the consequences of using this software.
+ */
+
+/* libSoX Internal header
+ *
+ *   This file is meant for libSoX internal use only
  */
 
 #ifndef SOX_I_H
@@ -126,16 +127,12 @@ void lsx_fir_to_phase(double * * h, int * len,
     int * post_len, double phase0);
 void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, char const * title, double y1, double y2);
 void lsx_save_samples(sox_sample_t * const dest, double const * const src,
-    size_t const n, sox_uint64_t * const clips);
+    size_t const n);
 void lsx_load_samples(double * const dest, sox_sample_t const * const src,
     size_t const n);
-/* Scale samples from libSoX's internal range into +/-1, for a consumer that
- * wants normalized values.  dest and src may be the same buffer. */
-void lsx_normalize_samples(double * const dest, double const * const src, size_t const n);
-
-/* Whether the internal representation is already normalized.  A build
- * question rather than a run-time one, so callers ask it to decide whether
- * a scaling step is needed at all rather than applying one unconditionally. */
+/* Whether the internal representation is already normalized: always sox_true,
+ * since sox_sample_t is a double in [-1, +1).  Callers ask it to decide
+ * whether a scaling step is needed. */
 sox_bool lsx_sample_values_are_normalized(void);
 
 #ifdef HAVE_BYTESWAP_H

@@ -522,6 +522,15 @@ static void consume_effect_input(sox_effect_t *input, sox_effect_t const *effect
   }
 }
 
+/* A resident step never ends the stream through its status: the end travels
+ * in done, active and the buffer state.  SOX_EOF from a resident step is a
+ * failure, reported as SOX_EINVAL so that the caller of sox_flow_effects()
+ * does not take it for the end of the input. */
+static int vulkan_resident_status(int status)
+{
+  return status == SOX_EOF ? SOX_EINVAL : status;
+}
+
 static int flow_vulkan_resident_producer(sox_effects_chain_t *chain, size_t n, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *progress)
 {
   sox_effect_t *input = chain->effects[n - 1u];
@@ -973,7 +982,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         int status = flow_vulkan_resident_consumer(chain, e, input, &input_consumed, &resident_segment.active[e], &resident_progress);
 
         if (status != SOX_SUCCESS) {
-          flow_status = status;
+          flow_status = vulkan_resident_status(status);
           break;
         }
         if (input_consumed) {
@@ -1018,7 +1027,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         int status = flow_vulkan_resident_transform(chain, e, &resident_segment, &resident_progress);
 
         if (status != SOX_SUCCESS) {
-          flow_status = status;
+          flow_status = vulkan_resident_status(status);
           break;
         }
         ++resident_segment.transform_calls;
@@ -1046,7 +1055,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         int status = flow_vulkan_resident_producer(chain, e, &resident_segment.outputs[e], &resident_segment.pending[e], &resident_progress);
 
         if (status != SOX_SUCCESS) {
-          flow_status = status;
+          flow_status = vulkan_resident_status(status);
           break;
         }
         if (resident_segment.pending[e]) {
@@ -1066,7 +1075,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         int status = drain_vulkan_resident_producer(chain, e, &resident_segment.outputs[e], &resident_segment.pending[e], &done, &resident_progress);
 
         if (status != SOX_SUCCESS) {
-          flow_status = status;
+          flow_status = vulkan_resident_status(status);
           break;
         }
         if (resident_segment.pending[e]) {
@@ -1114,7 +1123,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         resident_producer = SOX_SIZE_MAX;
       }
       if (status != SOX_SUCCESS) {
-        flow_status = status;
+        flow_status = vulkan_resident_status(status);
         break;
       }
     }
@@ -1125,7 +1134,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       if (resident_pending)
         resident_producer = e;
       if (status != SOX_SUCCESS) {
-        flow_status = status;
+        flow_status = vulkan_resident_status(status);
         break;
       }
     }
@@ -1137,7 +1146,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       if (resident_pending)
         resident_producer = e;
       if (status != SOX_SUCCESS) {
-        flow_status = status;
+        flow_status = vulkan_resident_status(status);
         break;
       }
       if (done) {

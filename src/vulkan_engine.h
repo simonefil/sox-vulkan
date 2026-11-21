@@ -62,14 +62,10 @@ typedef enum {
   lsx_vulkan_resident_format_dsd_u32
 } lsx_vulkan_resident_format_t;
 
-/* What the stored numbers mean. sox_sample is the chain's own samples, which
- * is what most of the pipeline passes around; normalized is output a producer
- * wrote for a consumer that asked for normalized samples; dsd holds one-bit
- * values. Both PCM domains are on the +/-1 scale, and a consumer checks the
- * tag to know which of a producer's outputs it was handed. */
+/* What the stored numbers mean. sox_sample is the chain's own samples, on
+ * the +/-1 scale; dsd holds one-bit values. */
 typedef enum {
   lsx_vulkan_resident_domain_sox_sample,
-  lsx_vulkan_resident_domain_normalized,
   lsx_vulkan_resident_domain_dsd
 } lsx_vulkan_resident_domain_t;
 

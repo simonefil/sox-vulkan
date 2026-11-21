@@ -1865,6 +1865,7 @@ static int describe_resident_output(lsx_fir_vulkan_t *context, sox_rate_t rate, 
   resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
   resident->capacity_elements = FIR_BLOCK_FRAMES;
   resident->valid_elements = FIR_BLOCK_FRAMES;
+  resident->block_elements = FIR_BLOCK_FRAMES;
   resident->frame_stride_elements = 1u;
   resident->channel_stride_elements = FIR_FFT_SIZE + 2u;
   if (context->precise_fp32)

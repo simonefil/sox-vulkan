@@ -92,9 +92,8 @@ size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context);
 int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, double const **output, size_t *output_frames);
 
 /* Process one block of host samples and publish the result as a resident
- * buffer.  normalize marks the output for a consumer that asks for
- * normalized samples; the resident domain field records it. */
-int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident);
+ * buffer. */
+int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident);
 
 /*
  * The resident stream.  A producer whose block size does not match this
@@ -111,10 +110,17 @@ size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context);
  * device, so it must remain valid until the next submission. */
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input);
 
+/* Take another effect's block, as much as the stream has room for.
+ * *taken_frames is what this call appended; *input_consumed is true once the
+ * last part is in, and until then the caller presents the same block again.
+ * holds_part is true while a block is only partly taken. */
+int lsx_rate_vulkan_take_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, size_t *taken_frames, sox_bool *input_consumed);
+sox_bool lsx_rate_vulkan_resident_stream_holds_part(lsx_rate_vulkan_t const *context);
+
 /* Consume one block from the stream and publish the result.  *produced is
  * false, with success returned, when the stream does not yet hold a whole
  * block: that is the normal way to be told to append more. */
-int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced);
+int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced);
 
 /* Submit everything queued and wait; the stage's end-of-stream barrier. */
 int lsx_rate_vulkan_flush_resident(lsx_rate_vulkan_t *context);

@@ -221,8 +221,6 @@ if(HAVE_VULKAN)
     set(RATE_VULKAN_POLYPHASE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_f32.comp")
     set(RATE_VULKAN_POLYPHASE_PRECISE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_precise_f32.comp")
     set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_reference_dd.comp")
-    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_reference_dd_normalized_f32.comp")
     set(RATE_VULKAN_DSD_FIR_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_dsd_fir_f64.comp")
     set(RATE_VULKAN_DSD_FIR_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_dsd_fir_f32.comp")
     set(RATE_VULKAN_DSD_FIR_PRECISE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_dsd_fir_precise_f32.comp")
@@ -231,7 +229,6 @@ if(HAVE_VULKAN)
     set(RATE_VULKAN_CUBIC_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_f32.comp")
     set(RATE_VULKAN_CUBIC_PRECISE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_precise_f32.comp")
     set(RATE_VULKAN_CUBIC_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_cubic_reference_dd.comp")
-    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_polyphase_normalized_f32.comp")
     set(RATE_VULKAN_SELECT_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f64.comp")
     set(RATE_VULKAN_SELECT_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_f32.comp")
     set(RATE_VULKAN_SELECT_PRECISE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/rate_select_precise_f32.comp")
@@ -261,8 +258,6 @@ if(HAVE_VULKAN)
     set(RATE_VULKAN_POLYPHASE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32.comp.spv")
     set(RATE_VULKAN_POLYPHASE_PRECISE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_precise_f32.comp.spv")
     set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SPV
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_normalized_f32.comp.spv")
     set(RATE_VULKAN_DSD_FIR_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_dsd_fir_f64.comp.spv")
     set(RATE_VULKAN_DSD_FIR_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_dsd_fir_f32.comp.spv")
     set(RATE_VULKAN_DSD_FIR_PRECISE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_dsd_fir_precise_f32.comp.spv")
@@ -271,7 +266,6 @@ if(HAVE_VULKAN)
     set(RATE_VULKAN_CUBIC_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32.comp.spv")
     set(RATE_VULKAN_CUBIC_PRECISE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_precise_f32.comp.spv")
     set(RATE_VULKAN_CUBIC_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_reference_dd.comp.spv")
-    set(RATE_VULKAN_POLYPHASE_NORMALIZED_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32.comp.spv")
     set(RATE_VULKAN_SELECT_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64.comp.spv")
     set(RATE_VULKAN_SELECT_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32.comp.spv")
     set(RATE_VULKAN_SELECT_PRECISE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/rate_select_precise_f32.comp.spv")
@@ -300,8 +294,6 @@ if(HAVE_VULKAN)
     set(RATE_VULKAN_POLYPHASE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_f32_spv.inc")
     set(RATE_VULKAN_POLYPHASE_PRECISE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_precise_f32_spv.inc")
     set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_INC
-        "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_reference_dd_normalized_f32_spv.inc")
     set(RATE_VULKAN_DSD_FIR_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_dsd_fir_f64_spv.inc")
     set(RATE_VULKAN_DSD_FIR_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_dsd_fir_f32_spv.inc")
     set(RATE_VULKAN_DSD_FIR_PRECISE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_dsd_fir_precise_f32_spv.inc")
@@ -310,7 +302,6 @@ if(HAVE_VULKAN)
     set(RATE_VULKAN_CUBIC_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_f32_spv.inc")
     set(RATE_VULKAN_CUBIC_PRECISE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_precise_f32_spv.inc")
     set(RATE_VULKAN_CUBIC_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_cubic_reference_dd_spv.inc")
-    set(RATE_VULKAN_POLYPHASE_NORMALIZED_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_polyphase_normalized_f32_spv.inc")
     set(RATE_VULKAN_SELECT_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f64_spv.inc")
     set(RATE_VULKAN_SELECT_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_f32_spv.inc")
     set(RATE_VULKAN_SELECT_PRECISE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/rate_select_precise_f32_spv.inc")
@@ -432,15 +423,6 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
-        OUTPUT "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SPV}"
-                "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SOURCE}"
-        DEPENDS "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SOURCE}"
-                "${VULKAN_DOUBLE_DOUBLE_HEADER}"
-        VERBATIM
-    )
-    add_custom_command(
         OUTPUT "${RATE_VULKAN_DSD_FIR_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_DSD_FIR_SPV}" "${RATE_VULKAN_DSD_FIR_SOURCE}"
         DEPENDS "${RATE_VULKAN_DSD_FIR_SOURCE}"
@@ -494,12 +476,6 @@ if(HAVE_VULKAN)
                 "${RATE_VULKAN_CUBIC_REFERENCE_DD_SOURCE}"
         DEPENDS "${RATE_VULKAN_CUBIC_REFERENCE_DD_SOURCE}"
                 "${VULKAN_DOUBLE_DOUBLE_HEADER}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}" "${RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE}"
-        DEPENDS "${RATE_VULKAN_POLYPHASE_NORMALIZED_SOURCE}"
         VERBATIM
     )
     add_custom_command(
@@ -702,16 +678,6 @@ if(HAVE_VULKAN)
         VERBATIM
     )
     add_custom_command(
-        OUTPUT "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SPV}"
-                "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_INC}"
-                rate_polyphase_reference_dd_normalized_f32_spv
-        DEPENDS sox_embed_binary
-                "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
         OUTPUT "${RATE_VULKAN_DSD_FIR_INC}"
         COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_DSD_FIR_SPV}" "${RATE_VULKAN_DSD_FIR_INC}" rate_dsd_fir_f64_spv
         DEPENDS sox_embed_binary "${RATE_VULKAN_DSD_FIR_SPV}"
@@ -771,12 +737,6 @@ if(HAVE_VULKAN)
                 rate_cubic_reference_dd_spv
         DEPENDS sox_embed_binary
                 "${RATE_VULKAN_CUBIC_REFERENCE_DD_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${RATE_VULKAN_POLYPHASE_NORMALIZED_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary> "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}" "${RATE_VULKAN_POLYPHASE_NORMALIZED_INC}" rate_polyphase_normalized_f32_spv
-        DEPENDS sox_embed_binary "${RATE_VULKAN_POLYPHASE_NORMALIZED_SPV}"
         VERBATIM
     )
     add_custom_command(
@@ -900,8 +860,6 @@ if(HAVE_VULKAN)
             "${RATE_VULKAN_POLYPHASE_F32_INC}"
             "${RATE_VULKAN_POLYPHASE_PRECISE_F32_INC}"
             "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_INC}"
-            "${RATE_VULKAN_POLYPHASE_REFERENCE_DD_NORMALIZED_F32_INC}"
-            "${RATE_VULKAN_POLYPHASE_NORMALIZED_INC}"
             "${RATE_VULKAN_SELECT_INC}"
             "${RATE_VULKAN_SELECT_F32_INC}"
             "${RATE_VULKAN_SELECT_PRECISE_F32_INC}"

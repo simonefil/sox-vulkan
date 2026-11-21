@@ -72,11 +72,8 @@ uint32_t lsx_rate_polyphase_vulkan_taps(lsx_rate_polyphase_vulkan_t const *conte
  * remain for the next call. */
 int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, double const **output, size_t *output_frames, size_t *consumed_frames);
 
-/* Resample host samples and publish the result as a resident buffer.  The
- * normalized form additionally takes whether to publish the normalized
- * output, FP32 for a consumer that asks for it; the plain form never does. */
+/* Resample host samples and publish the result as a resident buffer. */
 int lsx_rate_polyphase_vulkan_process_resident(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident);
-int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident);
 
 /* Resample a resident input and publish a resident result, so a stage between
  * two Vulkan effects touches host memory at neither end.  The stage keeps its
@@ -84,6 +81,5 @@ int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vul
  * margin from the previous call as well; *output is filled only when the
  * caller also wants the frames on the host. */
 int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident);
-int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident);
 
 #endif

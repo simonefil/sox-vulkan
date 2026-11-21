@@ -28,8 +28,6 @@
 #include "rate_polyphase_f32_spv.inc"
 #include "rate_polyphase_precise_f32_spv.inc"
 #include "rate_polyphase_reference_dd_spv.inc"
-#include "rate_polyphase_reference_dd_normalized_f32_spv.inc"
-#include "rate_polyphase_normalized_f32_spv.inc"
 
 /* Frames of input per dispatch. One block per submit, each waited on, so this
  * sets how often the host and the device synchronise; measured, the submit
@@ -80,7 +78,6 @@ struct lsx_rate_polyphase_vulkan {
    * moves each across, so the shader never reaches over the bus. */
   lsx_vulkan_buffer_t input_staging;
   lsx_vulkan_buffer_t output_staging;
-  lsx_vulkan_buffer_t normalized_output;
   lsx_vulkan_buffer_t resident_upload[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   lsx_vulkan_buffer_t resident_input[2];
   double *host_output;
@@ -89,7 +86,6 @@ struct lsx_rate_polyphase_vulkan {
   VkDescriptorSet descriptor_sets[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkPipelineLayout pipeline_layout;
   VkPipeline pipeline;
-  VkPipeline normalized_pipeline;
   VkCommandBuffer command_buffers[LSX_VULKAN_RESIDENT_BATCH_DEPTH];
   VkFence fence;
   parameters_t parameters;
@@ -215,11 +211,6 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context)
   VkDeviceSize coefficient_size = (VkDeviceSize)context->parameters.phase_count * context->parameters.taps * sample_bytes;
   VkDeviceSize input_size = (VkDeviceSize)(RATE_POLYPHASE_BLOCK_FRAMES + context->parameters.taps - 1u) * context->parameters.channels * sample_bytes;
   VkDeviceSize output_size = (VkDeviceSize)context->max_output_frames * context->parameters.channels * sample_bytes;
-  VkDeviceSize normalized_output_size =
-      (VkDeviceSize)context->max_output_frames *
-      context->parameters.channels *
-      (context->precise_fp32 ?
-       2u * sizeof(float) : sizeof(float));
   VkDeviceSize resident_input_size = input_size;
   uint32_t index;
 
@@ -235,8 +226,6 @@ static int create_buffers(lsx_rate_polyphase_vulkan_t *context)
   if (lsx_vulkan_buffer_create(context->vulkan, &context->output, output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_buffer_create(context->vulkan, &context->output_staging, output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory) != SOX_SUCCESS)
-    return SOX_EOF;
-  if (lsx_vulkan_buffer_create(context->vulkan, &context->normalized_output, normalized_output_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
   if (lsx_vulkan_buffer_create(context->vulkan, &context->resident_input[0], resident_input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != SOX_SUCCESS)
     return SOX_EOF;
@@ -334,8 +323,8 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
   VkDescriptorBufferInfo buffer_info[RATE_POLYPHASE_BINDINGS];
   VkWriteDescriptorSet writes[RATE_POLYPHASE_BINDINGS];
   lsx_vulkan_buffer_t *buffers[RATE_POLYPHASE_BINDINGS] = {&context->coefficients, &context->input, &context->output};
-  uint32_t const *kernel_spirv, *normalized_spirv;
-  size_t kernel_size, normalized_size;
+  uint32_t const *kernel_spirv;
+  size_t kernel_size;
   uint32_t index;
 
   memset(bindings, 0, sizeof(bindings));
@@ -360,32 +349,21 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
    * never disagree. Only the first test is order-sensitive: reference_dd is
    * set as double_precision && profile == reference, so it has to come before
    * the plain FP64 family; precise_fp32 is set only when double precision is
-   * unavailable.
-   *
-   * The normalized kernel writes normalized FP32 samples, so above FP32 it
-   * has its own shader (reference_dd_normalized_f32 for the reference
-   * profile, normalized_f32 for plain FP64); the two FP32 profiles reuse
-   * their resident kernel. */
+   * unavailable. */
   if (context->reference_dd) {
     kernel_spirv = rate_polyphase_reference_dd_spv;
     kernel_size = sizeof(rate_polyphase_reference_dd_spv);
-    normalized_spirv = rate_polyphase_reference_dd_normalized_f32_spv;
-    normalized_size = sizeof(rate_polyphase_reference_dd_normalized_f32_spv);
   } else if (context->double_precision) {
     kernel_spirv = rate_polyphase_f64_spv;
     kernel_size = sizeof(rate_polyphase_f64_spv);
-    normalized_spirv = rate_polyphase_normalized_f32_spv;
-    normalized_size = sizeof(rate_polyphase_normalized_f32_spv);
   } else if (context->precise_fp32) {
-    kernel_spirv = normalized_spirv = rate_polyphase_precise_f32_spv;
-    kernel_size = normalized_size = sizeof(rate_polyphase_precise_f32_spv);
+    kernel_spirv = rate_polyphase_precise_f32_spv;
+    kernel_size = sizeof(rate_polyphase_precise_f32_spv);
   } else {
-    kernel_spirv = normalized_spirv = rate_polyphase_f32_spv;
-    kernel_size = normalized_size = sizeof(rate_polyphase_f32_spv);
+    kernel_spirv = rate_polyphase_f32_spv;
+    kernel_size = sizeof(rate_polyphase_f32_spv);
   }
   if (lsx_vulkan_create_compute_pipeline(context->vulkan, kernel_spirv, kernel_size, context->pipeline_layout, &context->pipeline) != SOX_SUCCESS)
-    return SOX_EOF;
-  if (lsx_vulkan_create_compute_pipeline(context->vulkan, normalized_spirv, normalized_size, context->pipeline_layout, &context->normalized_pipeline) != SOX_SUCCESS)
     return SOX_EOF;
   pool_size.descriptorCount *= LSX_VULKAN_RESIDENT_BATCH_DEPTH;
   pool_info.maxSets = LSX_VULKAN_RESIDENT_BATCH_DEPTH;
@@ -506,8 +484,6 @@ void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context)
     vkFreeCommandBuffers(context->vulkan->device, context->vulkan->command_pool, LSX_VULKAN_RESIDENT_BATCH_DEPTH, context->command_buffers);
   if (context->pipeline)
     vkDestroyPipeline(context->vulkan->device, context->pipeline, NULL);
-  if (context->normalized_pipeline)
-    vkDestroyPipeline(context->vulkan->device, context->normalized_pipeline, NULL);
   if (context->pipeline_layout)
     vkDestroyPipelineLayout(context->vulkan->device, context->pipeline_layout, NULL);
   if (context->descriptor_pool)
@@ -522,7 +498,6 @@ void lsx_rate_polyphase_vulkan_destroy(lsx_rate_polyphase_vulkan_t *context)
     for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
       lsx_vulkan_buffer_destroy(context->vulkan, &context->resident_upload[index]);
   }
-  lsx_vulkan_buffer_destroy(context->vulkan, &context->normalized_output);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->output_staging);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->output);
   lsx_vulkan_buffer_destroy(context->vulkan, &context->input_staging);
@@ -603,7 +578,7 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
   return SOX_SUCCESS;
 }
 
-int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
+int lsx_rate_polyphase_vulkan_process_resident(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   lsx_vulkan_resident_buffer_t upload;
   uint64_t limit;
@@ -652,17 +627,12 @@ int lsx_rate_polyphase_vulkan_process_resident_normalized(lsx_rate_polyphase_vul
   upload.domain = lsx_vulkan_resident_domain_sox_sample;
   upload.layout = lsx_vulkan_resident_layout_interleaved;
   upload.state = state;
-  if (lsx_rate_polyphase_vulkan_process_resident_input_normalized(context, &upload, NULL, output_frames, rate, state, normalize, resident) != SOX_SUCCESS)
+  if (lsx_rate_polyphase_vulkan_process_resident_input(context, &upload, NULL, output_frames, rate, state, resident) != SOX_SUCCESS)
     return SOX_EOF;
   /* The counter's quotient by phase_count is the input frames used up; its
    * remainder, stored below, is where the next call starts. */
   *consumed_frames = (size_t)(end_position / context->parameters.phase_count);
   return SOX_SUCCESS;
-}
-
-int lsx_rate_polyphase_vulkan_process_resident(lsx_rate_polyphase_vulkan_t *context, double const *input, size_t processable_frames, size_t *output_frames, size_t *consumed_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
-{
-  return lsx_rate_polyphase_vulkan_process_resident_normalized(context, input, processable_frames, output_frames, consumed_frames, rate, state, sox_false, resident);
 }
 
 /* Append one producer slice to the device-side window and run every output
@@ -673,7 +643,7 @@ int lsx_rate_polyphase_vulkan_process_resident(lsx_rate_polyphase_vulkan_t *cont
  * alternate input buffer, and either publishes the output resident or waits
  * and exposes it to the host. One ordered submission lets the input buffers
  * alternate without host copies. */
-int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
+int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   VkCommandBuffer command_buffer;
   VkDescriptorSet descriptor_set;
@@ -683,7 +653,6 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   VkBufferMemoryBarrier source_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, 0, VK_ACCESS_TRANSFER_READ_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
   VkDescriptorBufferInfo buffer_info[RATE_POLYPHASE_BINDINGS];
   VkWriteDescriptorSet writes[RATE_POLYPHASE_BINDINGS];
-  lsx_vulkan_buffer_t *output_buffer;
   lsx_vulkan_buffer_t *current;
   lsx_vulkan_buffer_t *next;
   VkDeviceSize frame_size;
@@ -750,19 +719,18 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   source_barrier.size = append.size;
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_start = context->phase_start;
-  output_buffer = normalize ? &context->normalized_output : &context->output;
 
-  /* Phase 3: bind coefficients, the completed input window and the selected
-   * output representation to this in-flight bank. */
+  /* Phase 3: bind coefficients, the completed input window and the output
+   * to this in-flight bank. */
   buffer_info[0].buffer = context->coefficients.buffer;
   buffer_info[0].offset = 0;
   buffer_info[0].range = context->coefficients.size;
   buffer_info[1].buffer = current->buffer;
   buffer_info[1].offset = 0;
   buffer_info[1].range = current->size;
-  buffer_info[2].buffer = output_buffer->buffer;
+  buffer_info[2].buffer = context->output.buffer;
   buffer_info[2].offset = 0;
-  buffer_info[2].range = output_buffer->size;
+  buffer_info[2].range = context->output.size;
   memset(writes, 0, sizeof(writes));
   for (index = 0; index < RATE_POLYPHASE_BINDINGS; ++index) {
     writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -788,9 +756,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   vkCmdPipelineBarrier(command_buffer, input->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &source_barrier, 0, NULL);
   vkCmdCopyBuffer(command_buffer, input->buffer->buffer, current->buffer, 1, &append);
   vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &input_barrier, 0, NULL, 0, NULL);
-  vkCmdBindPipeline(
-      command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-      normalize ? context->normalized_pipeline : context->pipeline);
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
   vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);
   vkCmdDispatch(command_buffer, (dispatch_items(context, (uint32_t)count) + RATE_POLYPHASE_LOCAL_SIZE - 1u) / RATE_POLYPHASE_LOCAL_SIZE, context->parameters.channels, 1);
@@ -808,7 +774,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
 
     output_copy.srcOffset = output_copy.dstOffset = 0;
     output_copy.size = (VkDeviceSize)count * context->parameters.channels * sample_size(context);
-    vkCmdCopyBuffer(command_buffer, output_buffer->buffer, context->output_staging.buffer, 1, &output_copy);
+    vkCmdCopyBuffer(command_buffer, context->output.buffer, context->output_staging.buffer, 1, &output_copy);
     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host_barrier, 0, NULL, 0, NULL);
   }
   lsx_vulkan_label_end(context->vulkan, command_buffer);
@@ -825,7 +791,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
    * waits on the same command and converts the mapped output to doubles. */
   if (resident) {
     memset(resident, 0, sizeof(*resident));
-    resident->buffer = output_buffer;
+    resident->buffer = &context->output;
     resident->owner = context;
     resident->producer_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     resident->producer_access = VK_ACCESS_SHADER_WRITE_BIT;
@@ -837,14 +803,14 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
     resident->rate = rate;
     resident->channels = context->parameters.channels;
     resident->frames_per_element = 1u;
-    resident->format = context->reference_dd && !normalize ?
+    resident->format = context->reference_dd ?
         lsx_vulkan_resident_format_f64x2 :
         context->precise_fp32 ?
         lsx_vulkan_resident_format_f32x2 :
-        normalize || !context->double_precision ?
+        !context->double_precision ?
         lsx_vulkan_resident_format_f32 :
         lsx_vulkan_resident_format_f64;
-    resident->domain = normalize ? lsx_vulkan_resident_domain_normalized : lsx_vulkan_resident_domain_sox_sample;
+    resident->domain = lsx_vulkan_resident_domain_sox_sample;
     resident->layout = lsx_vulkan_resident_layout_interleaved;
     resident->state = state;
     if (lsx_vulkan_resident_buffer_validate(resident) != SOX_SUCCESS || lsx_vulkan_enqueue(context->vulkan, command_buffer) != SOX_SUCCESS)
@@ -858,9 +824,4 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
         context, (size_t)count * context->parameters.channels);
   }
   return SOX_SUCCESS;
-}
-
-int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, double const **output, size_t *output_frames, sox_rate_t rate, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
-{
-  return lsx_rate_polyphase_vulkan_process_resident_input_normalized(context, input, output, output_frames, rate, state, sox_false, resident);
 }

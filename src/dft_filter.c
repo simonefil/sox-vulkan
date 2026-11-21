@@ -588,7 +588,7 @@ static int take_vulkan_resident_transform_output(
 
   if (lsx_rate_vulkan_process_resident_stream(
       p->vulkan_resident, effp->out_signal.rate,
-      p->samples_out / channels, state, sox_false,
+      p->samples_out / channels, state,
       output, output_produced) != SOX_SUCCESS)
     return SOX_EOF;
   if (*output_produced)
@@ -602,7 +602,8 @@ static int take_vulkan_resident_transform_output(
  * Output is tried first, since the stream may hold a block from an earlier
  * call and the caller takes one at a time.  A NULL input means "produce what
  * you can".  *active reports whether another block is ready without more
- * input.
+ * input.  An input larger than the stream has room for is taken in parts,
+ * and *input_consumed comes with the last.
  *
  * Samples pass through unchanged, so no clips are charged to the input. */
 static int transform_vulkan_resident(
@@ -614,6 +615,7 @@ static int transform_vulkan_resident(
 {
   priv_t *p = (priv_t *)effp->priv;
   size_t channels = effp->in_signal.channels;
+  size_t taken_frames;
 
   if (ensure_vulkan_resident(effp) != SOX_SUCCESS ||
       !input_consumed || !input_clips ||
@@ -636,11 +638,11 @@ static int transform_vulkan_resident(
   }
   if (input->rate != effp->in_signal.rate ||
       input->channels != channels ||
-      lsx_rate_vulkan_append_resident_stream(
-          p->vulkan_resident, input) != SOX_SUCCESS)
+      lsx_rate_vulkan_take_resident_stream(
+          p->vulkan_resident, input, &taken_frames,
+          input_consumed) != SOX_SUCCESS)
     return SOX_EOF;
-  p->samples_in += input->valid_elements * channels;
-  *input_consumed = sox_true;
+  p->samples_in += taken_frames * channels;
   ++p->vulkan_resident_pending;
   if (take_vulkan_resident_transform_output(effp, lsx_vulkan_resident_ready, output, output_produced) != SOX_SUCCESS)
     return SOX_EOF;
@@ -756,7 +758,9 @@ static int consume_vulkan_resident(
       break;
   }
   *active = fifo_occupancy(&p->vulkan_output_fifo) ||
-      p->vulkan_consumer_transform_active || (p->vulkan_consumer_final_received && !p->vulkan_consumer_done);
+      p->vulkan_consumer_transform_active ||
+      lsx_rate_vulkan_resident_stream_holds_part(p->vulkan_resident) ||
+      (p->vulkan_consumer_final_received && !p->vulkan_consumer_done);
   return SOX_SUCCESS;
 }
 

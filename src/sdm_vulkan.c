@@ -871,16 +871,15 @@ static void record_mash(lsx_sdm_vulkan_t *context)
 /* Make sure the ingest pipeline matches the producer's format and domain.
  *
  * The format decides the shader, so it is latched on the first slice and a
- * later change is refused.  Both PCM domains carry samples normalized to
- * +/-1, which is what the modulator takes, so the ingest passes them as they
- * are; any other domain is refused. */
+ * later change is refused.  The PCM domain carries samples on the +/-1
+ * scale, which is what the modulator takes, so the ingest passes them as
+ * they are; any other domain is refused. */
 static int ensure_resident_pipeline(
     lsx_sdm_vulkan_t *context,
     lsx_vulkan_resident_format_t format,
     lsx_vulkan_resident_domain_t domain)
 {
   switch (domain) {
-    case lsx_vulkan_resident_domain_normalized:
     case lsx_vulkan_resident_domain_sox_sample: break;
     default: lsx_fail("unsupported resident Vulkan SDM input domain");
       return SOX_EOF;
@@ -1372,11 +1371,11 @@ int lsx_sdm_vulkan_process(
   }
   started = monotonic_seconds();
   /*
-   * The host stream is already at the DSD rate and normalized, so it takes
-   * the same ingest as a resident producer: no filter, only the interleaved
-   * to planar conversion the modulator reads.
+   * The host stream is already at the DSD rate and on the +/-1 scale, so it
+   * takes the same ingest as a resident producer: no filter, only the
+   * interleaved to planar conversion the modulator reads.
    */
-  if (ensure_resident_pipeline(context, lsx_vulkan_resident_format_f32, lsx_vulkan_resident_domain_normalized) != SOX_SUCCESS)
+  if (ensure_resident_pipeline(context, lsx_vulkan_resident_format_f32, lsx_vulkan_resident_domain_sox_sample) != SOX_SUCCESS)
     return SOX_EOF;
   if (upload_resident_input(context, input, (VkDeviceSize)frames * context->channels * sizeof(float)) != SOX_SUCCESS)
     return SOX_EOF;

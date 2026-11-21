@@ -21,8 +21,7 @@
  * samples and the accumulator are all double-double pairs and every step goes
  * through double_double.glsl, which states the rules that keep the compiler
  * from folding the low words away.  Nothing here rounds until the caller
- * decides to narrow, and the plain-FP32 narrowing variant is a separate
- * shader, rate_polyphase_reference_dd_normalized_f32.comp.
+ * decides to narrow.
  *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:
  *   0 coefficients    -- in: the response, tap major, phase minor, pairs.

@@ -37,12 +37,19 @@ typedef struct {
    * host samples.  *osamp is capacity on entry and samples written on return.
    * *input_consumed releases the producer's storage, *input_clips transfers
    * clipping charged to it, and *active requests calls with input == NULL
-   * while buffered output or internal work remains. */
+   * while buffered output or internal work remains.  An input larger than
+   * the consumer can hold is taken in parts over several calls, as a classic
+   * flow takes what fits of its input: *input_consumed comes with the last
+   * part, the scheduler presents the same input until then, and *active
+   * stays true meanwhile. */
   int (*consume)(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool *input_consumed, uint64_t *input_clips, sox_sample_t *obuf, size_t *osamp, sox_bool *active);
   /*
    * A transform consumes at most one resident input slice and can produce at
    * most one resident output slice per call.  The input remains owned by its
-   * producer until input_consumed becomes true.  When active remains true,
+   * producer until input_consumed becomes true; an input larger than the
+   * transform can hold is taken in parts over several calls, the same input
+   * being presented until the last, and only that part carries the input's
+   * state.  When active remains true,
    * the scheduler calls the transform again with input == NULL after the
    * current output has moved downstream.  *input_clips transfers clipping
    * charged to the upstream slice.  After consuming a final input, the

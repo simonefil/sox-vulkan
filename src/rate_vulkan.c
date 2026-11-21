@@ -125,6 +125,14 @@ struct lsx_rate_vulkan {
   size_t resident_stream_capacity;
   size_t resident_stream_occupancy; /* Frames appended but not yet consumed. */
   uint32_t resident_stream_index;
+  /* An input taken in parts: how many of its frames are already in the
+   * stream, and which input it is, so a different one cannot be mistaken
+   * for its remainder.  The count is zero between inputs. */
+  size_t resident_stream_input_taken;
+  lsx_vulkan_buffer_t const *resident_stream_input_buffer;
+  VkDeviceSize resident_stream_input_offset;
+  uint64_t resident_stream_input_frame_offset;
+  size_t resident_stream_input_frames;
   /* Independent rotations over the per-block resources.  They advance at
    * different times -- an append is not a block -- so each has its own. */
   uint32_t resident_select_bank_index;
@@ -738,7 +746,7 @@ static int run_resident_selection(
  *
  * The FIR's output is planar; the selection shader publishes it
  * interleaved, the layout the eventual consumer or download wants. */
-static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *filtered, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, sox_bool allow_empty, lsx_vulkan_resident_buffer_t *resident)
+static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *filtered, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool allow_empty, lsx_vulkan_resident_buffer_t *resident)
 {
   size_t block_frames = lsx_fir_vulkan_block_frames_for(context->vulkan);
   select_parameters_t parameters;
@@ -802,7 +810,7 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   resident->channels = context->channels;
   resident->frames_per_element = 1u;
   resident->format = resident_format(context);
-  resident->domain = normalize ? lsx_vulkan_resident_domain_normalized : lsx_vulkan_resident_domain_sox_sample;
+  resident->domain = lsx_vulkan_resident_domain_sox_sample;
   resident->layout = lsx_vulkan_resident_layout_interleaved;
   resident->state = state;
   if (lsx_vulkan_resident_buffer_validate(resident) != SOX_SUCCESS) {
@@ -908,8 +916,10 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
 /* Build the resident stream: two buffers and the append pipeline.  Created
  * lazily, for a producer with a different block size.
  *
- * The capacity is one block plus one call's worth of input, so an append is
- * always accepted whole even when the stream holds nearly a block. */
+ * The capacity is one block plus one call's worth of input.  An earlier
+ * stage of this effect sizes its blocks by the room left and appends them
+ * whole; another effect's block can be larger, and
+ * lsx_rate_vulkan_take_resident_stream() takes it in parts. */
 static int create_resident_stream(lsx_rate_vulkan_t *context)
 {
   resident_kernel_blob_t const *kernel = &stream_append_kernels[resident_kernel(context)];
@@ -968,13 +978,14 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
   return vk_result(vkAllocateCommandBuffers(context->vulkan->device, &allocation, context->resident_stream_commands), "vkAllocateCommandBuffers rate stream");
 }
 
-/* Append a resident block to the stream, either as a straight buffer copy or
- * through the append shader.  Samples pass through unchanged either way.
+/* Append frames [first, first + frames) of a resident block to the stream,
+ * either as a straight buffer copy or through the append shader.  Samples
+ * pass through unchanged either way.
  *
  * The copy is used when the input is laid out as the stream expects.
  * Otherwise the shader gathers by the input's strides into the interleaved
  * stream.  The input comes from another effect and is checked first. */
-static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
+static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, size_t first, size_t frames)
 {
   VkCommandBuffer command;
   VkDescriptorSet descriptor_set;
@@ -999,11 +1010,13 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
       input->channels != context->channels ||
       input->state == lsx_vulkan_resident_empty ||
       !input->valid_elements ||
+      !frames || first + frames > input->valid_elements ||
       input->offset % resident_sample_size(context)) {
     lsx_fail(
         "invalid resident Vulkan rate stream append: "
-        "frames=%lu format=%d/%d domain=%d channels=%u/%u state=%d "
+        "frames=%lu+%lu/%lu format=%d/%d domain=%d channels=%u/%u state=%d "
         "offset=%llu",
+        (unsigned long)first, (unsigned long)frames,
         (unsigned long)input->valid_elements,
         (int)input->format, (int)resident_format(context),
         (int)input->domain, input->channels, context->channels,
@@ -1012,12 +1025,12 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   }
   if (!context->resident_stream[0].buffer && create_resident_stream(context) != SOX_SUCCESS)
     return SOX_EOF;
-  if (context->resident_stream_occupancy + input->valid_elements > context->resident_stream_capacity) {
+  if (context->resident_stream_occupancy + frames > context->resident_stream_capacity) {
     lsx_fail(
         "resident Vulkan rate stream is full: "
         "%lu occupied + %lu input > %lu capacity frames",
         (unsigned long)context->resident_stream_occupancy,
-        (unsigned long)input->valid_elements,
+        (unsigned long)frames,
         (unsigned long)context->resident_stream_capacity);
     return SOX_EOF;
   }
@@ -1028,9 +1041,9 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
   command = context->resident_stream_commands[context->resident_stream_command_index];
   descriptor_set = context->stream_append_descriptor_sets[context->resident_stream_descriptor_index];
   frame_size = (VkDeviceSize)context->channels * resident_sample_size(context);
-  copy.srcOffset = input->offset;
+  copy.srcOffset = input->offset + (VkDeviceSize)first * frame_size;
   copy.dstOffset = (VkDeviceSize)context->resident_stream_occupancy * frame_size;
-  copy.size = (VkDeviceSize)input->valid_elements * frame_size;
+  copy.size = (VkDeviceSize)frames * frame_size;
   contiguous = input->layout == lsx_vulkan_resident_layout_interleaved && input->frame_stride_elements == context->channels && input->channel_stride_elements == 1u;
   source_barrier.srcAccessMask = input->producer_access;
   source_barrier.buffer = input->buffer->buffer;
@@ -1070,9 +1083,9 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     }
     vkUpdateDescriptorSets(context->vulkan->device, RATE_STREAM_APPEND_BINDINGS, writes, 0, NULL);
     memset(&parameters, 0, sizeof(parameters));
-    parameters.input_base_element = (uint32_t)(input->offset / resident_sample_size(context));
+    parameters.input_base_element = (uint32_t)(input->offset / resident_sample_size(context) + first * input->frame_stride_elements);
     parameters.output_first_frame = (uint32_t)context->resident_stream_occupancy;
-    parameters.frames = (uint32_t)input->valid_elements;
+    parameters.frames = (uint32_t)frames;
     parameters.input_frame_stride = (uint32_t)input->frame_stride_elements;
     parameters.input_channel_stride = (uint32_t)input->channel_stride_elements;
     parameters.channels = context->channels;
@@ -1091,7 +1104,7 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
    * frames visible to the later consume command before it reads the stream. */
   context->resident_stream_command_index = (context->resident_stream_command_index + 1u) % (lsx_vulkan_resident_batch_depth(context->vulkan) * 2u);
   context->resident_stream_descriptor_index = (context->resident_stream_descriptor_index + 1u) % lsx_vulkan_resident_batch_depth(context->vulkan);
-  context->resident_stream_occupancy += input->valid_elements;
+  context->resident_stream_occupancy += frames;
   return SOX_SUCCESS;
 }
 
@@ -1112,7 +1125,52 @@ size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context)
 
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
 {
-  return append_resident_stream(context, input);
+  return input ? append_resident_stream(context, input, 0, input->valid_elements) : SOX_EOF;
+}
+
+/* Take as much of another effect's block as the stream has room for.
+ *
+ * The producer's block can be larger than the stream, so it is taken in
+ * parts, as a classic flow takes what fits of its input: each call appends
+ * the next part, and *input_consumed turns true with the last.  Until then
+ * the caller presents the same block again, which is checked. */
+int lsx_rate_vulkan_take_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, size_t *taken_frames, sox_bool *input_consumed)
+{
+  size_t frames;
+
+  if (!context || !input || !taken_frames || !input_consumed)
+    return SOX_EOF;
+  *taken_frames = 0;
+  *input_consumed = sox_false;
+  if (context->resident_stream_input_taken &&
+      (input->buffer != context->resident_stream_input_buffer ||
+       input->offset != context->resident_stream_input_offset ||
+       input->frame_offset != context->resident_stream_input_frame_offset ||
+       input->valid_elements != context->resident_stream_input_frames)) {
+    lsx_fail("resident Vulkan rate stream was handed a new block before the last was taken");
+    return SOX_EOF;
+  }
+  frames = min(input->valid_elements - context->resident_stream_input_taken, lsx_rate_vulkan_resident_stream_room(context));
+  if (!frames)
+    return SOX_SUCCESS;
+  if (append_resident_stream(context, input, context->resident_stream_input_taken, frames) != SOX_SUCCESS)
+    return SOX_EOF;
+  *taken_frames = frames;
+  context->resident_stream_input_taken += frames;
+  context->resident_stream_input_buffer = input->buffer;
+  context->resident_stream_input_offset = input->offset;
+  context->resident_stream_input_frame_offset = input->frame_offset;
+  context->resident_stream_input_frames = input->valid_elements;
+  if (context->resident_stream_input_taken == input->valid_elements) {
+    context->resident_stream_input_taken = 0;
+    *input_consumed = sox_true;
+  }
+  return SOX_SUCCESS;
+}
+
+sox_bool lsx_rate_vulkan_resident_stream_holds_part(lsx_rate_vulkan_t const *context)
+{
+  return context && context->resident_stream_input_taken ? sox_true : sox_false;
 }
 
 /* Consume one block from the stream: describe its head as a resident input,
@@ -1124,7 +1182,7 @@ int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulka
  * The leftover is copied to the other buffer and the two are swapped, since
  * queued work is still reading the consumed block.  A stream that empties
  * exactly needs no copy and does not swap. */
-int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
+int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   lsx_vulkan_resident_buffer_t input;
   VkCommandBuffer command;
@@ -1167,7 +1225,7 @@ int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate
 
     if (finish_resident_process(
         context, &filtered, rate, frame_offset, state,
-        normalize, sox_true, resident) != SOX_SUCCESS)
+        sox_true, resident) != SOX_SUCCESS)
       return SOX_EOF;
   }
   remaining = context->resident_stream_occupancy - context->input_frames;
@@ -1241,7 +1299,7 @@ int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context)
   return SOX_SUCCESS;
 }
 
-int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident)
+int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, lsx_vulkan_resident_buffer_t *resident)
 {
   lsx_vulkan_resident_buffer_t filtered;
 
@@ -1255,5 +1313,5 @@ int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *i
   /* An empty block is valid here too: when the filter's latency exceeds a
    * block (past about 32k taps at the default block size), the first calls
    * only prime the filter. */
-  return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, sox_true, resident);
+  return finish_resident_process(context, &filtered, rate, frame_offset, state, sox_true, resident);
 }

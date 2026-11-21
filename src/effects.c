@@ -464,10 +464,10 @@ static void report_vulkan_resident_format(
 {
   sox_effect_t const *effp = effect;
   static char const *formats[] = {
-    "f32", "f32x2", "f64", "dsd_u32"
+    "f32", "f32x2", "f64", "f64x2", "dsd_u32"
   };
   static char const *domains[] = {
-    "sox_sample", "normalized", "dsd"
+    "sox_sample", "dsd"
   };
   static char const *layouts[] = {"interleaved", "planar"};
 

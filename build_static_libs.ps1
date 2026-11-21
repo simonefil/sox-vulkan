@@ -197,10 +197,8 @@ function Download-File($url, $output) {
     }
 }
 
-# bsdtar su Windows e' compilato senza liblzma, quindi per i .tar.xz delega a
-# un eseguibile xz esterno e ci parla via pipe. Quella pipe va in stallo: tar
-# scrive l'intero archivio senza drenare l'output di xz, e xz smette di leggere
-# appena la sua pipe di uscita si riempie. Serve quindi xz come programma a se'.
+# Windows bsdtar lacks liblzma and pipes .tar.xz through an external xz, and
+# that pipe deadlocks; xz is therefore run on its own.
 function Find-Xz {
     $onPath = Get-Command xz.exe -ErrorAction SilentlyContinue
     if ($onPath) {
@@ -223,13 +221,9 @@ function Find-Xz {
     return $null
 }
 
-# Il bsdtar incluso in Windows legge i nomi delle voci nella codepage ANSI:
-# quelli UTF-8 non rappresentabili li salta con "empty or unreadable filename"
-# e poi esce con codice 1, anche quando tutto il resto e' stato estratto. Il
-# tarball di FLAC contiene tre file di test con nomi ebraici, norvegesi ed
-# emoji, e basta quello a far fallire il build. GNU tar non ha il problema, e
-# MSYS2 c'e' gia' per forza: da li' viene xz. Ordine invertito rispetto a
-# Find-Xz, perche' su PATH tar.exe e' proprio quello di Windows.
+# Windows bsdtar reads entry names in the ANSI code page and exits with 1 on
+# the UTF-8 names in the FLAC tarball, so GNU tar from MSYS2 comes first; the
+# tar.exe on PATH is the Windows one.
 function Find-Tar {
     $candidates = @(
         "C:\msys64\usr\bin\tar.exe",
@@ -295,9 +289,8 @@ function Extract-Archive($archive, $dest) {
 
         Push-Location $destWin
         try {
-            # Due passaggi, mai -xJf: la redirezione su file evita la pipe che
-            # blocca tar e xz a vicenda. Start-Process, non l'operatore >, che
-            # in PowerShell passa dal testo e corromperebbe il .tar.
+            # Two steps, through a file: Start-Process redirects bytes, where
+            # PowerShell's > operator would re-encode the .tar as text.
             $tarPath = Join-Path $destWin ([System.IO.Path]::GetFileNameWithoutExtension($archiveWin))
             $proc = Start-Process -FilePath $xz -ArgumentList "-d", "-c", "`"$archiveWin`"" `
                 -RedirectStandardOutput $tarPath -NoNewWindow -Wait -PassThru
@@ -305,9 +298,7 @@ function Extract-Archive($archive, $dest) {
                 throw "xz failed to decompress $archiveWin"
             }
 
-            # Il nome nudo, non $tarPath: GNU tar legge i due punti di "C:\" come
-            # separatore di un host remoto, e la directory corrente e' gia'
-            # quella giusta.
+            # The bare name: GNU tar reads the colon in "C:\" as a remote host.
             & "$(Find-Tar)" -xf ([System.IO.Path]::GetFileName($tarPath))
             if ($LASTEXITCODE -ne 0) {
                 throw "tar failed to extract $tarPath"

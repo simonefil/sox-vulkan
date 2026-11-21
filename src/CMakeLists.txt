@@ -212,7 +212,6 @@ if(HAVE_VULKAN)
     set(SDM_VULKAN_RESIDENT_PRECISE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_precise_f32.comp")
     set(SDM_VULKAN_RESIDENT_REFERENCE_DD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_reference_dd.comp")
     set(SDM_VULKAN_RESIDENT_F64_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/sdm_resident_f64.comp")
-    set(FIR_VULKAN_PARTITION_F64_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f64.comp")
     set(FIR_VULKAN_PARTITION_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_f32.comp")
     set(FIR_VULKAN_PARTITION_PRECISE_F32_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_precise_f32.comp")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/fir_partition_precise_f64.comp")
@@ -254,7 +253,6 @@ if(HAVE_VULKAN)
     set(SDM_VULKAN_RESIDENT_PRECISE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_precise_f32.comp.spv")
     set(SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_reference_dd.comp.spv")
     set(SDM_VULKAN_RESIDENT_F64_SPV "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f64.comp.spv")
-    set(FIR_VULKAN_PARTITION_F64_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64.comp.spv")
     set(FIR_VULKAN_PARTITION_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32.comp.spv")
     set(FIR_VULKAN_PARTITION_PRECISE_F32_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f32.comp.spv")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_SPV "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64.comp.spv")
@@ -294,7 +292,6 @@ if(HAVE_VULKAN)
     set(SDM_VULKAN_RESIDENT_PRECISE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_precise_f32_spv.inc")
     set(SDM_VULKAN_RESIDENT_REFERENCE_DD_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_reference_dd_spv.inc")
     set(SDM_VULKAN_RESIDENT_F64_INC "${CMAKE_CURRENT_BINARY_DIR}/sdm_resident_f64_spv.inc")
-    set(FIR_VULKAN_PARTITION_F64_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f64_spv.inc")
     set(FIR_VULKAN_PARTITION_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_f32_spv.inc")
     set(FIR_VULKAN_PARTITION_PRECISE_F32_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f32_spv.inc")
     set(FIR_VULKAN_PARTITION_PRECISE_F64_INC "${CMAKE_CURRENT_BINARY_DIR}/fir_partition_precise_f64_spv.inc")
@@ -363,14 +360,6 @@ if(HAVE_VULKAN)
         OUTPUT "${SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV}"
         COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1 -o "${SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV}" "${SDM_VULKAN_RESIDENT_REFERENCE_DD_SOURCE}"
         DEPENDS "${SDM_VULKAN_RESIDENT_REFERENCE_DD_SOURCE}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_PARTITION_F64_SPV}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.1
-                -o "${FIR_VULKAN_PARTITION_F64_SPV}"
-                "${FIR_VULKAN_PARTITION_F64_SOURCE}"
-        DEPENDS "${FIR_VULKAN_PARTITION_F64_SOURCE}"
         VERBATIM
     )
     add_custom_command(
@@ -631,15 +620,6 @@ if(HAVE_VULKAN)
         OUTPUT "${SDM_VULKAN_RESIDENT_REFERENCE_DD_INC}"
         COMMAND $<TARGET_FILE:sox_embed_binary> "${SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV}" "${SDM_VULKAN_RESIDENT_REFERENCE_DD_INC}" sdm_vulkan_resident_reference_dd_spv
         DEPENDS sox_embed_binary "${SDM_VULKAN_RESIDENT_REFERENCE_DD_SPV}"
-        VERBATIM
-    )
-    add_custom_command(
-        OUTPUT "${FIR_VULKAN_PARTITION_F64_INC}"
-        COMMAND $<TARGET_FILE:sox_embed_binary>
-                "${FIR_VULKAN_PARTITION_F64_SPV}"
-                "${FIR_VULKAN_PARTITION_F64_INC}"
-                fir_partition_f64_spv
-        DEPENDS sox_embed_binary "${FIR_VULKAN_PARTITION_F64_SPV}"
         VERBATIM
     )
     add_custom_command(
@@ -905,7 +885,6 @@ if(HAVE_VULKAN)
             "${SDM_VULKAN_RESIDENT_PRECISE_F32_INC}"
             "${SDM_VULKAN_RESIDENT_F64_INC}"
             "${SDM_VULKAN_RESIDENT_REFERENCE_DD_INC}"
-            "${FIR_VULKAN_PARTITION_F64_INC}"
             "${FIR_VULKAN_PARTITION_F32_INC}"
             "${FIR_VULKAN_PARTITION_PRECISE_F32_INC}"
             "${FIR_VULKAN_PARTITION_PRECISE_F64_INC}"

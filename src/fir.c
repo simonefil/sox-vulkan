@@ -32,8 +32,9 @@ typedef struct {
 } channel_range_t;
 
 /* One "channels=file" argument: the channels it applies to and the response
- * read from the file.  pre_peak is where the response's peak sits, which is
- * what the file may state and what fixes the entry's own latency. */
+ * read from the file.  pre_peak is where the response's peak is taken to sit,
+ * its centre tap (tap_count - 1 - tap_count / 2), and fixes the entry's own
+ * latency. */
 typedef struct {
   char               * filename;
   channel_range_t    * ranges;
@@ -45,12 +46,10 @@ typedef struct {
 
 /* The per-channel responses, assembled from the arguments.
  *
- * taps holds one response per channel, each already the convolution of every
- * entry naming that channel: an argument list may map several files onto one
- * channel, and applying them as a cascade would round between them, so they
- * are combined into one response instead.  The originals are kept because
- * the responses must all end up the same length and aligned on the same
- * peak, which can only be arranged once every channel has been assembled.
+ * taps holds one response per channel: the convolution of every entry naming
+ * that channel, since applying them as a cascade would round between them.
+ * The originals are kept because all responses must end up the same length
+ * and aligned on the same peak, which needs every channel assembled first.
  */
 typedef struct {
   channel_map_entry_t * entries;
@@ -76,11 +75,11 @@ typedef struct {
  * returning a newly allocated array of first_count + second_count - 1 taps
  * that the caller owns, or NULL if the lengths overflow.
  *
- * Done through the transform rather than directly: the responses here run to
- * hundreds of thousands of taps, where a direct convolution is quadratic.
- * The transform is padded to a power of two at least as long as the result,
- * which is what keeps the circular convolution free of wrap-around, and the
- * scale on the way out is this transform's inverse normalisation.
+ * Done through the transform: the responses here run to hundreds of
+ * thousands of taps, where a direct convolution is quadratic.  The transform
+ * is padded to a power of two at least as long as the result, which is what
+ * keeps the circular convolution free of wrap-around, and the scale on the
+ * way out is this transform's inverse normalisation.
  *
  * The single-tap case is special-cased because the transform has no length
  * shorter than one to pad to. */
@@ -145,9 +144,9 @@ static double *convolve_fir(
 
 #if HAVE_VULKAN
 /* Fusion combines responses, so a long cascade produces a very long one.  The
- * fast profile refuses past this point: its transform is already the larger
- * of the two, and beyond a few million taps the kernel and history banks
- * outgrow what a device will allocate. */
+ * fast and precise profiles, which fuse on the host, refuse past this point:
+ * beyond a few million taps the kernel and history banks outgrow what a
+ * device will allocate. */
 #define FIR_FAST_FUSION_MAX_TAPS 4194304u
 
 /* One channel's response, whichever of the two forms is in use. */
@@ -157,16 +156,11 @@ static double const *vulkan_channel_source(dft_filter_priv_t const *base, uint32
 }
 
 /* Turn a single shared response into per-channel copies, so that a fusion
- * which differs by channel can proceed.
+ * where one side is shared and the other per channel has one form to handle.
+ * The copies include the pending fusion sources, not yet combined.
  *
- * Two effects can only be fused when their responses can be combined per
- * channel, and one of them may have a shared response while the other does
- * not; rather than special-case that, the shared side is expanded first and
- * the fusion then has one form to deal with.  The copies include the pending
- * fusion sources, which have not been combined yet.
- *
- * Already being per channel is success if the counts agree and failure if
- * they do not, since two different channel counts cannot be fused at all. */
+ * Already per channel is success if the counts agree and failure otherwise,
+ * since different channel counts cannot be fused. */
 static int promote_vulkan_channels(dft_filter_priv_t *base, uint32_t channels)
 {
   dft_filter_vulkan_channel_t *channel_filters;
@@ -233,17 +227,13 @@ int lsx_fir_vulkan_try_fuse(sox_effect_t *first, sox_effect_t const *second)
   first_base = &first_private->base;
   second_base = &second_private->base;
   channels = (uint32_t)first->in_signal.channels;
-  /* Fusion is not an optimisation that trades accuracy for speed: applying
-   * the convolved filter once is the exact result, while chaining N stages
-   * discards each stage's warm-up before the next one can use it and
-   * truncates each stage's tail independently.  Measured against the fused
-   * filter applied as a single fir in FP64: the fused route matches to the
-   * 32-bit quantisation floor everywhere, the chained route deviates by
-   * -113 dBFS over the first 1000 samples and -45 dBFS over the last 300.
-   * It used to be enabled only for reference, and for fast on devices
-   * without shaderFloat64 -- which is why the same --vulkan-fast command
-   * behaved differently on an RTX 3080 and on an M5 Pro: the two were not
-   * running the same computation. */
+  /* Applying the convolved filter once gives the cascade's exact result,
+   * while chaining stages discards each stage's warm-up before the next one
+   * can use it and truncates each stage's tail independently.  Measured
+   * against the fused filter applied as a single fir in FP64: the fused route
+   * matches to the 32-bit quantisation floor everywhere, the chained route
+   * deviates by -113 dBFS over the first 1000 samples and -45 dBFS over the
+   * last 300. */
   if ((!first_base->vulkan_source_taps &&
        !first_base->vulkan_channels) ||
       (!second_base->vulkan_source_taps &&
@@ -404,10 +394,9 @@ static int parse_channel_number(char const **text, char const *end, unsigned *va
   return SOX_SUCCESS;
 }
 
-/* Parse the channel part of an argument: a comma-separated list of numbers
- * and first-last ranges, one-based.  A reversed range is accepted and
- * normalised rather than refused, "4-2" plainly meaning channels 2 to 4.
- * An empty list is an error, an entry mapping no channel being pointless. */
+/* Parse the channel part of an argument: a comma-separated list of one-based
+ * numbers and first-last ranges.  A reversed range such as "4-2" means
+ * channels 2 to 4.  An empty list is an error. */
 static int parse_channel_selector(channel_map_entry_t *entry, char const *selector, size_t length)
 {
   char const *text = selector;
@@ -492,8 +481,8 @@ static int parse_channel_map(sox_effect_t *effp, int argc, char **argv, channel_
 
 /* Read whitespace-separated coefficients from a file, appending to *taps,
  * which the caller owns and must free.  Lines beginning with # are comments.
- * A file with no numbers at all is an error, since a response of no taps
- * would silence the channel rather than pass it. */
+ * A file with no numbers is an error: an empty response would silence the
+ * channel. */
 static int read_coefficients(sox_effect_t *effp, char const *filename, double **taps, int *tap_count)
 {
   FILE *file = lsx_open_input_file(effp, filename, sox_true);
@@ -539,15 +528,11 @@ static int read_coefficients(sox_effect_t *effp, char const *filename, double **
 /* Turn the parsed arguments into one response per channel, all of the same
  * length and all with their peaks aligned.
  *
- * Three things have to be reconciled.  Several entries may name one channel,
- * and their cascade is convolved into a single response rather than applied
- * in sequence, which would round between the stages.  Different channels may
- * then end up with responses of different lengths and different peak
- * positions, but the backend convolves them all against one block with one
- * latency -- so each is padded on both sides to a common length, placing
- * every peak at the same offset.  Padding rather than resampling or
- * truncating means no response is altered: the extra taps are zeros, which
- * contribute nothing.
+ * Several entries naming one channel are convolved into a single response,
+ * since a cascade would round between the stages.  The backend convolves all
+ * channels against one block with one latency, so each response is
+ * zero-padded on both sides to a common length with every peak at the same
+ * offset; no response is altered.
  *
  * A channel no entry names gets a single unit tap, which passes it through
  * unchanged and keeps its latency in step with the rest. */
@@ -736,10 +721,9 @@ static int start(sox_effect_t * effp)
     channel_filter_bank_t *bank = p->channel_bank;
     double *flow_taps;
 
-    /* The CPU path runs one flow per channel and they all share this bank,
-     * so only flow 0 builds it; the others find it ready.  A later flow
-     * arriving before it is built cannot happen -- the flows start in order
-     * -- and is treated as a failure rather than rebuilding it. */
+    /* The CPU path runs one flow per channel, all sharing this bank; flow 0
+     * builds it.  The flows start in order, so any other flow finding it
+     * unbuilt is a failure. */
     if (!bank->ready && (effp->flow || prepare_channel_bank(effp, bank) != SOX_SUCCESS))
       return SOX_EOF;
     if (effp->global_info->plot != sox_plot_off) {

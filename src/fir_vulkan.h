@@ -64,11 +64,9 @@ lsx_fir_vulkan_t *lsx_fir_vulkan_create_channels(
     double const *const *coefficients,
     size_t taps, uint32_t channels);
 
-/* The reference-profile forms, whose coefficients arrive as unevaluated sums
- * of two doubles.  A response computed in double-double must be handed over
- * as one, or its extra precision is lost before the transform ever sees it --
- * which is exactly what the profile exists to avoid.  Both arrays hold taps
- * values and are copied. */
+/* The reference-profile forms: coefficients arrive as unevaluated sums of
+ * two doubles, keeping a double-double design's precision up to the
+ * transform.  Both arrays hold taps values and are copied. */
 lsx_fir_vulkan_t *lsx_fir_vulkan_create_reference_dd(
     lsx_vulkan_context_t *vulkan,
     double const *coefficient_highs,
@@ -115,11 +113,10 @@ size_t lsx_fir_vulkan_block_frames_for(lsx_vulkan_context_t const *context);
  * prepared input buffer, for a producer writing into it directly. */
 size_t lsx_fir_vulkan_prepared_stride(lsx_fir_vulkan_t const *context);
 
-/* The buffer an upstream Vulkan effect may write its block into, so that a
- * block produced on the device is not copied back to the host merely to be
- * uploaded again.  Owned by the context; the caller writes the next block and
- * then calls lsx_fir_vulkan_process_prepared_resident rather than one of the
- * forms that take host samples. */
+/* The buffer an upstream Vulkan effect may write its block into, keeping a
+ * device-produced block on the device.  Owned by the context; the caller
+ * writes the next block, then calls
+ * lsx_fir_vulkan_process_prepared_resident. */
 lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *context);
 
 /* Process one block and wait for it.  input is one block of interleaved
@@ -129,16 +126,17 @@ lsx_vulkan_buffer_t *lsx_fir_vulkan_prepared_input_buffer(lsx_fir_vulkan_t *cont
  * cannot take a resident buffer. */
 int lsx_fir_vulkan_process(lsx_fir_vulkan_t *context, double const *input, double const **output);
 
-/* Process one block and publish the result as a resident buffer instead of
- * downloading it.  Nothing is submitted: the work is queued for the next
- * submission, so the host does not wait here and the consumer must respect
- * the barrier the resident description declares.  state marks where the block
- * falls in the stream, and frame_offset its position.
+/* Process one block and publish the result as a resident buffer.  The work
+ * is queued for the next submission, so the host does not wait and the
+ * consumer must respect the barrier the resident description declares.
+ * state marks where the block falls in the stream, frame_offset its
+ * position.
  *
- * The resident description is valid until this context produces the next
- * block; the buffer behind it is reused on a rotation of
- * LSX_VULKAN_RESIDENT_BATCH_DEPTH blocks, which is what bounds how far the
- * consumer may lag. */
+ * The description is valid until this context processes the next block,
+ * which overwrites the same output buffer.  The staging buffers, and the
+ * command buffers recorded for them, rotate over the configured batch depth
+ * (at most LSX_VULKAN_RESIDENT_BATCH_DEPTH), so the caller must flush before
+ * queueing more blocks than that. */
 int lsx_fir_vulkan_process_resident(
     lsx_fir_vulkan_t *context, double const *input,
     sox_rate_t rate, uint64_t frame_offset,

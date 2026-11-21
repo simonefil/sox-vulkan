@@ -39,9 +39,8 @@ static int transform_vulkan_resident(sox_effect_t *effp, lsx_vulkan_resident_buf
 static int drain_transform_vulkan_resident(sox_effect_t *effp, uint64_t *input_clips, lsx_vulkan_resident_buffer_t *output, sox_bool *output_produced, sox_bool *done);
 
 /* Rebuild the Vulkan backend around a new response, taking ownership of the
- * arrays passed in.  Called when the effect's response changes after start --
- * which is what fusion does -- and each form matches one of the four ways a
- * response can be given: shared or per channel, plain or double-double. */
+ * arrays passed in.  Used when fusion changes the response after start; the
+ * four forms are shared or per channel, plain or double-double. */
 static int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak);
 static int lsx_dft_filter_restart_vulkan_reference_dd(sox_effect_t *effp, double *tap_highs, double *tap_lows, int num_taps, int post_peak);
 static int lsx_dft_filter_restart_vulkan_channels(sox_effect_t *effp, double **taps, uint32_t channels, int num_taps, int post_peak);
@@ -63,20 +62,18 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_producer_endpoint = {
   NULL
 };
 
-/* Build the fused response, if one is owed, and rebuild the backend around
- * it.  Called at the top of every entry point, and does nothing once the
- * fusion has been performed.
+/* Build the pending fused response and rebuild the backend around it.
+ * Called at the top of flow_vulkan and of the resident producer's flow and
+ * drain; a no-op once fusion is done.
  *
- * It is deferred to here rather than done when each response is offered
- * because neighbours may go on offering: fusing eagerly would rebuild the
- * whole backend once per offer, and only the last of those rebuilds would
- * survive.  By the time the first block arrives no further offers can come,
- * the chain having started.
+ * The rebuild waits for the first block because neighbours may keep offering
+ * responses until the chain has started; rebuilding on each offer would
+ * redo the whole backend every time, and only the last rebuild would survive.
  *
- * The four cases below are the product of two independent choices: whether
- * the response is per channel, and whether any sources were offered at all --
- * with none, the configured response is simply copied and reinstated, which
- * is what a restart needs. */
+ * The four cases combine per-channel or shared response with whether the
+ * reference profile queued sources; with none, the current response (already
+ * fused on the host by the other profiles) is copied and reinstated, as a
+ * restart needs. */
 static int ensure_vulkan_fusion(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -213,12 +210,10 @@ int lsx_set_dft_filter_vulkan_channels(
 /* Transform the response into the coefficient spectrum the CPU path
  * convolves against, and release the time-domain taps.
  *
- * Two things happen while the taps are copied in.  They are scaled by 2 over
- * the transform length, which is the normalisation this real transform needs
- * on its inverse and which is applied here so the per-block path does not
- * have to.  And they are placed with a rotation, wrapping modulo the
- * transform length: the response is centred so that a circular convolution
- * agrees with a linear one over the part of each block that is kept. */
+ * The taps are scaled by 2 / transform length, the inverse real transform's
+ * normalisation, so the per-block path skips it.  They are placed rotated
+ * modulo the transform length so the circular convolution matches a linear
+ * one over the kept part of each block. */
 static void prepare_cpu_filter(filter_t *f)
 {
   int i;
@@ -235,22 +230,18 @@ static void prepare_cpu_filter(filter_t *f)
 /* Set up either the Vulkan path or the CPU one; the two share nothing beyond
  * the response they start from.
  *
- * The Vulkan path forces a single flow, because the backend keeps its own
- * per-channel state and running the effect once per channel would give each
- * flow a separate device context.  The CPU path instead primes its input FIFO
- * with post_peak zeros, which is how its latency is accounted for -- the
- * Vulkan path does the same thing at the other end, by discarding output. */
+ * The Vulkan path forces a single flow: the backend keeps per-channel state
+ * in one device context.  For latency, the CPU path primes its input FIFO
+ * with post_peak zeros and the Vulkan path discards output. */
 static int start(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *) effp->priv;
   filter_t * f = p->filter_ptr;
 
   if (lsx_diagnostics_on) {
-    /* The response's shape and the latency that follows from it.  Both paths
-     * account for the same pre_peak -- the CPU one by priming its input FIFO,
-     * the Vulkan one by discarding that many output samples -- so a profile
-     * that moves the impulse by a sample is visible here even when the SNR
-     * says nothing. */
+    /* The response's shape and latency.  Both paths compensate the same
+     * pre_peak, so a profile that shifts the impulse by a sample shows here
+     * even when the SNR does not. */
     lsx_diagnostics_effect_setf(effp, "taps", "%d", f->num_taps);
     lsx_diagnostics_effect_setf(effp, "post_peak", "%d", f->post_peak);
     lsx_diagnostics_effect_setf(effp, "pre_peak", "%d", f->num_taps - 1 - f->post_peak);
@@ -277,14 +268,13 @@ static int start(sox_effect_t * effp)
       p->vulkan_source_num_taps = f->num_taps;
       p->vulkan_source_post_peak = f->post_peak;
     }
-    /* Neither FIR context is created here.  An effect registers both the
-     * producer and the transform callbacks, because which of the two it will
-     * play is not settled until the whole chain has started and the resident
-     * segment is laid out -- the first Vulkan effect feeds the segment, the
-     * rest transform inside it.  Creating both up front therefore built two
-     * contexts per effect and used one, sixteen for eight chained effects.
-     * Each is now built on its first call, from the coefficients that
-     * vulkan_source_taps already keeps for the fusion path. */
+    /* The FIR contexts are built lazily.  An effect registers both producer
+     * and transform callbacks, and its role is known only once the resident
+     * segment is laid out: the first Vulkan effect feeds the segment, the
+     * rest transform inside it.  Building both up front would cost two
+     * contexts per effect for one used, sixteen for eight chained effects.
+     * Each is built on its first call from the coefficients kept for the
+     * fusion path. */
     p->vulkan_context = vulkan;
     p->vulkan_resident_enabled = enable_resident;
     free(f->taps);
@@ -317,15 +307,12 @@ static int start(sox_effect_t * effp)
 /* The CPU convolution: overlap-save over whatever whole transforms the input
  * FIFO holds.
  *
- * Each pass reads a full transform's worth but consumes only the part beyond
- * the overlap, so the next pass sees the last num_taps - 1 samples again --
- * that overlap is what makes the circular convolution equal a linear one.
- * The output FIFO is correspondingly trimmed, discarding the leading overlap
- * of each result, which is where the wrap-around lands.
+ * Each pass reads a full transform but consumes only the part beyond the
+ * overlap, so the next pass sees the last num_taps - 1 samples again.  The
+ * leading overlap of each result, where the wrap-around lands, is dropped.
  *
- * The spectrum multiply is written out rather than looped over complex pairs
- * because the transform packs the two real-valued end bins into slots 0 and
- * 1, which are therefore multiplied directly rather than as a complex pair. */
+ * The transform packs the two real end bins into slots 0 and 1, which are
+ * multiplied as reals before the complex pairs. */
 static void filter(priv_t * p)
 {
   int i, num_in = max(0, fifo_occupancy(&p->input_fifo));
@@ -356,8 +343,8 @@ static void filter(priv_t * p)
 
 #if HAVE_VULKAN
 /* Built on first use; see the note in start().  Both read the coefficients
- * from vulkan_source_taps, which outlives f->taps for exactly this reason,
- * and both are idempotent. */
+ * from vulkan_source_taps or vulkan_channels, which outlive f->taps for
+ * exactly this reason, and both are idempotent. */
 static int ensure_vulkan_producer(sox_effect_t *effp)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -430,10 +417,9 @@ static int ensure_vulkan_resident(sox_effect_t *effp)
   return p->vulkan_resident ? SOX_SUCCESS : SOX_EOF;
 }
 
-/* Queue a finished block for the host, dropping whatever of it is still the
- * filter's start-up latency.  Counting the skip down here rather than
- * priming the input, as the CPU path does, keeps the backend's blocks whole:
- * it insists on exactly one block per call. */
+/* Queue a finished block for the host, dropping what is still the filter's
+ * start-up latency.  Skipping on output keeps the input in whole blocks, as
+ * the backend takes exactly one block per call. */
 static void append_vulkan_output(sox_effect_t *effp, double const *output)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -468,11 +454,10 @@ static int process_vulkan_input(sox_effect_t *effp)
   return SOX_SUCCESS;
 }
 
-/* Drop the start-up latency from a resident block by moving its description
- * forward, rather than by copying anything: the samples stay where they are
- * on the device and the consumer is simply pointed past them.  The offset
- * moves by whole frames, the layout being planar with a frame stride of one
- * element, so this cannot straddle a channel boundary. */
+/* Drop the start-up latency from a resident block by advancing its
+ * description; the samples stay on the device.  The layout is planar with a
+ * frame stride of one element, so the offset moves by whole frames and never
+ * straddles a channel boundary. */
 static void trim_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -489,17 +474,10 @@ static void trim_vulkan_resident_output(sox_effect_t *effp, lsx_vulkan_resident_
 /* Act as the head of a resident chain: take host samples, and publish one
  * resident block per call when a whole block has accumulated.
  *
- * At most one block is published per call even if the FIFO holds several,
- * because the consumer takes one at a time; the loop only continues when a
- * block produced nothing, which happens while the start-up latency is still
- * being discarded.
- *
- * A partial sample frame is never taken, so the input FIFO always holds whole
- * frames and the channel interleave cannot drift.
- *
- * The flush every batch-depth blocks is what bounds how far the device runs
- * behind: past that depth the staging buffers would be reused under work that
- * has not yet executed. */
+ * The consumer takes one block at a time; the loop continues only while a
+ * block yields nothing, during the start-up latency.  Only whole frames are
+ * taken, so the channel interleave cannot drift.  Flushing every batch-depth
+ * blocks keeps staging buffers from being reused under unexecuted work. */
 static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const *ibuf, size_t *isamp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -521,9 +499,8 @@ static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const 
   while ((size_t)fifo_occupancy(&p->vulkan_input_fifo) >= block_samples) {
     double const *input = fifo_read(&p->vulkan_input_fifo, block_samples, NULL);
 
-    /* Here, not at the top: the scheduler calls this on every effect in the
-     * segment, and only the one that actually reaches a full block is the
-     * producer.  Deciding earlier would build a context for all of them. */
+    /* The scheduler calls this on every effect in the segment; only the one
+     * reaching a full block is the producer and builds a context. */
     if (ensure_vulkan_producer(effp) != SOX_SUCCESS)
       return SOX_EOF;
     if (lsx_fir_vulkan_process_resident(p->vulkan, input, effp->out_signal.rate, p->samples_out / channels, lsx_vulkan_resident_ready, resident) != SOX_SUCCESS)
@@ -548,12 +525,10 @@ static int flow_vulkan_resident_producer(sox_effect_t *effp, sox_sample_t const 
 
 /* Flush the tail once the input has ended.
  *
- * The filter still owes samples_in - samples_out samples, held inside its own
- * latency, so blocks of zeros are pushed through until they have all come
- * out.  The final block is truncated to exactly what is owed -- the backend
- * always returns a whole block, and the extra frames are the response
- * continuing past the end of the signal -- and marked final, which is what
- * tells the consumer to begin its own drain. */
+ * The filter still owes samples_in - samples_out samples, so zero blocks are
+ * pushed through until they come out.  The last block is truncated to what
+ * is owed (the backend returns whole blocks) and marked final, which starts
+ * the consumer's drain. */
 static int drain_vulkan_resident_producer(sox_effect_t *effp, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced, sox_bool *done)
 {
   priv_t *p = (priv_t *)effp->priv;
@@ -624,16 +599,13 @@ static int take_vulkan_resident_transform_output(
 /* Act as a middle link of a resident chain: take a resident block and publish
  * one, without either end touching host memory.
  *
- * Output is attempted before the input is looked at, because the stream may
- * already hold a whole block from an earlier call and the caller can only be
- * handed one block at a time.  A NULL input means "produce what you can", so
- * the same function serves both a call with new data and a call that is only
- * draining the stream.  *active reports whether another block is available
- * without more input, which is how the caller knows to come back.
+ * Output is tried first, since the stream may hold a block from an earlier
+ * call and the caller takes one at a time.  A NULL input means "produce what
+ * you can".  *active reports whether another block is ready without more
+ * input.
  *
- * The clip count is read twice on purpose: once for what has already
- * completed, and again after a flush, since the counters are written by the
- * device and only mean anything once its work has run. */
+ * The clip count is read for completed work and again after a flush: the
+ * device writes the counters only when its work runs. */
 static int transform_vulkan_resident(
     sox_effect_t *effp,
     lsx_vulkan_resident_buffer_t const *input,
@@ -725,16 +697,10 @@ static int queue_vulkan_consumer_output(sox_effect_t *effp, lsx_vulkan_resident_
 /* Act as the tail of a resident chain: take resident blocks and emit ordinary
  * host samples.
  *
- * The three sources of a block are tried in a fixed order -- what the stream
- * already holds, then new input, then the drain once the producer's final
- * block has been seen -- so that nothing is left behind when the stream ends.
- * The loop is bounded rather than run to exhaustion because the caller's
- * output buffer is finite and whatever does not fit stays in the FIFO for the
- * next call; two attempts is enough to fill any buffer this effect is given,
- * a block being larger than one call's capacity.
- *
- * *active tells the caller whether anything is still pending here, which is
- * what keeps it calling after its own input has ended. */
+ * Blocks come from the stream's backlog, then new input, then the drain after
+ * the producer's final block, so nothing is left behind.  Two attempts fill
+ * any output buffer, a block being larger than one call's capacity; the rest
+ * stays in the FIFO.  *active tells the caller something is still pending. */
 static int consume_vulkan_resident(
     sox_effect_t *effp,
     lsx_vulkan_resident_buffer_t const *input,
@@ -921,8 +887,8 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
   double const * s;
 
 #if HAVE_VULKAN
-  /* The context, not the FIR: the FIR is built lazily and is still null
-   * before the first block reaches it. */
+  /* Test the context: the FIR is built lazily and is null before the first
+   * block. */
   if (p->vulkan_context)
     return flow_vulkan(effp, ibuf, obuf, isamp, osamp);
 #endif
@@ -1015,14 +981,15 @@ static int stop(sox_effect_t * effp)
   return SOX_SUCCESS;
 }
 
-/* Rebuild the backend around a new response, by stopping and starting the
- * effect: everything downstream of the response -- the FIR context, the
- * FIFOs, the latency counter -- depends on it, so reinstating it wholesale is
- * both simpler and safer than patching each piece.
+/* Rebuild the backend around a new response by stopping and starting the
+ * effect, since the FIR context, the FIFOs and the latency counter all
+ * depend on it.
  *
  * The taps are taken over on every path, the failing ones included, since the
- * caller has already handed them across.  Only valid before any samples have
- * flowed; the state a restart discards includes the filter's history. */
+ * caller has already handed them across; the one exception is
+ * lsx_dft_filter_restart_vulkan rejecting its arguments, which leaves them to
+ * the caller.  Only valid before any samples have flowed; the state a restart
+ * discards includes the filter's history. */
 #if HAVE_VULKAN
 static int lsx_dft_filter_restart_vulkan(sox_effect_t *effp, double *taps, int num_taps, int post_peak)
 {

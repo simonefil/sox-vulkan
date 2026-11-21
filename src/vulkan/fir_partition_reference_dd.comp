@@ -1,23 +1,5 @@
 /* Partitioned overlap-save convolution, reference profile: double-double.
  *
- * Every value is a DoubleDoubleComplex, four doubles, so this bank is twice
- * the footprint of the FP64 one and each product costs a dozen error-free
- * transformations.  It exists to be the numerical reference the other
- * profiles are measured against, not to be fast.  The device must report
- * shaderFloat64; double_double.glsl states the rules that keep the compiler
- * from folding the compensation terms away.
- *
- * Bindings, in the order create_partition_pipeline() writes them:
- *   0 working  -- out: this block's accumulated spectrum.
- *   1 history  -- in: ring of the last `partitions` input spectra per channel.
- *   2 kernels  -- in: the transformed response, partition-major.
- *
- * Push constants (partition_parameters_t, 16 bytes): spectrum_bins,
- * partitions, channels, current_slot.
- *
- * Dispatch covers channels * spectrum_bins invocations rounded up to whole
- * workgroups of 256, hence the bounds test.
- *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -33,6 +15,25 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* Every value is a DoubleDoubleComplex, four doubles, so this bank is twice
+ * the footprint of the FP64 one and each product costs a dozen error-free
+ * transformations.  It is the numerical reference the other profiles are
+ * measured against.  The device must report shaderFloat64;
+ * double_double.glsl states the rules that keep the compiler from folding the
+ * compensation terms away.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them:
+ *   0 working  -- out: this block's accumulated spectrum.
+ *   1 history  -- in: ring of the last `partitions` input spectra per channel.
+ *   2 kernels  -- in: the transformed response, partition-major.
+ *
+ * Push constants (partition_parameters_t, 16 bytes): spectrum_bins,
+ * partitions, channels, current_slot.
+ *
+ * Dispatch covers channels * spectrum_bins invocations rounded up to whole
+ * workgroups of 256, hence the bounds test.
  */
 
 #version 450

@@ -13,18 +13,18 @@ typedef struct {
   double     * coefs, * taps;
 #if HAVE_VULKAN
   /* The low halves of taps, when the response was designed in double-double.
-   * NULL whenever it was not: the fp64 design is the same filter, so a NULL
-   * here means "no extra precision to carry", never "no response". */
+   * NULL when it was not, meaning only that there is no extra precision to
+   * carry: taps is the same filter either way. */
   double     * low_taps;
 #endif
 } dft_filter_t;
 
 #if HAVE_VULKAN
 /* Per-channel coefficients, for effects whose response differs by channel.
- * source_taps is what was configured, kept apart from the response actually
- * in use because a later effect may fuse into it and the original is then
- * still needed.  The fusion arrays hold the responses of the effects being
- * cascaded, in order; eight is the deepest cascade fusion accepts.
+ * source_taps is the channel's response the backend is built from: as
+ * configured, or as combined by host-side fusion.  The fusion arrays hold the
+ * responses the reference profile combines on the device, in cascade order;
+ * eight is the deepest cascade fusion accepts.
  */
 typedef struct {
   double     * source_taps;
@@ -34,10 +34,9 @@ typedef struct {
 } dft_filter_vulkan_channel_t;
 #endif
 
-/* State shared by every effect built on this filter: fir, the biquad-derived
- * effects that use a DFT response, and anything else that convolves.  The
- * effect's own private struct begins with one of these, so the code here can
- * be reached from any of them.
+/* State shared by every effect built on this filter: fir, firfit, sinc,
+ * hilbert and loudness.  The effect's own private struct begins with one of
+ * these, so the code here can be reached from any of them.
  */
 typedef struct {
   uint64_t   samples_in, samples_out;
@@ -46,9 +45,9 @@ typedef struct {
    * used, which for a shared response points elsewhere. */
   dft_filter_t   filter, * filter_ptr;
 #if HAVE_VULKAN
-  /* The response as configured, kept so that a restart -- after a fusion, or
-   * when the channel count is finally known -- can rebuild from the original
-   * rather than from whatever the last rebuild produced. */
+  /* The response the backend is built from, kept because f->taps is
+   * released at start: the lazy FIR contexts and the restart after a fusion
+   * read it.  Host-side fusion replaces it with the combined response. */
   double     * vulkan_source_taps;
   int        vulkan_source_num_taps;
   int        vulkan_source_post_peak;
@@ -94,8 +93,8 @@ typedef struct {
 #endif
 } dft_filter_priv_t;
 
-/* Prepare a response for use: takes ownership of h, chooses the transform
- * length and precomputes the coefficient spectrum. */
+/* Record a response for use, taking ownership of h.  The CPU path chooses
+ * the transform length and precomputes the coefficient spectrum at start. */
 void lsx_set_dft_filter(dft_filter_t * f, double * h, int n, int post_peak);
 
 #if HAVE_VULKAN
@@ -109,9 +108,10 @@ int lsx_set_dft_filter_vulkan_channels(
 void lsx_clear_dft_filter_vulkan_channels(dft_filter_priv_t *p);
 
 /* Offer second's response to first for fusion, so that a cascade of filters
- * becomes one convolution instead of several.  Returns SOX_SUCCESS if first
- * accepted it, in which case second must not also apply it.  Only the
- * response is taken; nothing is computed here, the combining being deferred
- * until the first block. */
+ * becomes one convolution instead of several.  Returns 1 if first accepted
+ * it, in which case second must not also apply it, 0 if it declined and -1
+ * on failure.  The reference profile only queues the response, combining on
+ * the device at the first block; the other profiles convolve it on the host
+ * here.  Either way the backend is rebuilt at the first block. */
 int lsx_fir_vulkan_try_fuse(sox_effect_t *first, sox_effect_t const *second);
 #endif

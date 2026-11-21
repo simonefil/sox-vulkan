@@ -1,54 +1,5 @@
 /* Partitioned overlap-save convolution, precise FP32: the whole block.
  *
- * This is the one profile that does not call VkFFT.  Precise asks for more
- * than FP32 while running on devices that report no shaderFloat64 -- Apple
- * Silicon through Metal, above all -- and VkFFT's precision ladder has no
- * FP32-pair mode, so the transform is implemented here on double-single
- * arithmetic: every value is a vec4 holding a complex pair as (real_high,
- * real_low, imaginary_high, imaginary_low).
- *
- * One pipeline serves three jobs, selected by parameters.operation, because
- * they share the same bindings and a single pipeline keeps the recorded
- * command bank to one bind:
- *
- *   0  butterfly()             one Cooley-Tukey stage, forward or inverse.
- *   1  accumulate_partitions() the spectrum multiply and partition sum.
- *   2  pack_output()           the overlap-save tail, narrowed to vec2.
- *
- * Bindings, in the order create_partition_pipeline() writes them; precise
- * binds six where the other profiles bind three or four:
- *   0 working_a       -- in/out: ping-pong half A, and where the uploaded
- *                        block lands.
- *   1 working_b       -- in/out: ping-pong half B; holds the inverse
- *                        transform's result, which pack_output reads.
- *   2 history         -- in: ring of the last `partitions` spectra per
- *                        channel, filed by the host between the forward
- *                        transform and the accumulate.
- *   3 kernels         -- in: the transformed response, partition-major.
- *   4 twiddles        -- in: fft_size double-single roots of unity, indexed
- *                        by the forward convention; butterfly() conjugates
- *                        for the forward direction.
- *   5 output_samples  -- out: block_frames per channel, high words only.
- *
- * Push constants (precise_fp32_parameters_t, 28 bytes):
- *   operation     which of the three jobs above.
- *   stage         butterfly only: 0..14, the span doubling per stage.
- *   partitions    blocks the response was split into.
- *   channels      channels in the bank.
- *   current_slot  ring position of the newest input block.
- *   inverse       butterfly only: direction, and whether to halve.
- *   source_is_a   butterfly only: which half is the source this stage.
- *
- * The sizes are compile-time constants rather than push constants: precise
- * uses only FIR_DEFAULT_FFT_SIZE, and fft_bits is its log2, which the bit
- * reversal below depends on.
- *
- * Dispatch differs per operation, always rounded up to whole workgroups of
- * 256, hence each job's own bounds test: channels * fft_size / 2 butterflies
- * per stage, channels * fft_size bins for the accumulate, channels *
- * block_frames frames for the output pass.  The host separates every
- * dispatch with a barrier, so nothing here synchronises internally.
- *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -64,6 +15,56 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* This is the one profile that does not call VkFFT.  Precise asks for more
+ * than FP32 while running on devices that report no shaderFloat64 -- Apple
+ * Silicon through Metal, above all -- and VkFFT's precision ladder has no
+ * FP32-pair mode, so the transform is implemented here on double-single
+ * arithmetic: every value is a vec4 holding a complex pair as (real_high,
+ * real_low, imaginary_high, imaginary_low).
+ *
+ * One pipeline serves three jobs, selected by parameters.operation, since
+ * they share the same bindings, layout and descriptor set:
+ *
+ *   0  butterfly()             one Cooley-Tukey stage, forward or inverse.
+ *   1  accumulate_partitions() the spectrum multiply and partition sum.
+ *   2  pack_output()           the overlap-save tail, narrowed to vec2.
+ *
+ * Bindings, in the order create_partition_pipeline() writes them; precise
+ * binds six where the other partition kernels bind three:
+ *   0 working_a       -- in/out: ping-pong half A, and where the uploaded
+ *                        block lands.
+ *   1 working_b       -- in/out: ping-pong half B; holds the inverse
+ *                        transform's result, which pack_output reads.
+ *   2 history         -- in: ring of the last `partitions` spectra per
+ *                        channel, filed by a buffer copy between the forward
+ *                        transform and the accumulate.
+ *   3 kernels         -- in: the transformed response, partition-major.
+ *   4 twiddles        -- in: fft_size/2 double-single roots of unity
+ *                        e^(+2*pi*i*k/N), the inverse convention;
+ *                        butterfly() conjugates them for the forward pass.
+ *   5 output_samples  -- out: block_frames per channel, each the real
+ *                        part's double-single pair.
+ *
+ * Push constants (precise_fp32_parameters_t, 28 bytes):
+ *   operation     which of the three jobs above.
+ *   stage         butterfly only: 0..14, the span doubling per stage.
+ *   partitions    blocks the response was split into.
+ *   channels      channels in the bank.
+ *   current_slot  ring position of the newest input block.
+ *   inverse       butterfly only: direction, and whether to halve.
+ *   source_is_a   butterfly only: which half is the source this stage.
+ *
+ * The sizes are compile-time constants: precise uses only
+ * FIR_DEFAULT_FFT_SIZE, and the bit reversal below depends on fft_bits, its
+ * log2.
+ *
+ * Dispatch differs per operation, always rounded up to whole workgroups of
+ * 256, hence each job's own bounds test: channels * fft_size / 2 butterflies
+ * per stage, channels * fft_size bins for the accumulate, channels *
+ * block_frames frames for the output pass.  The host separates every
+ * dispatch with a barrier, so nothing here synchronises internally.
  */
 
 #version 450
@@ -170,10 +171,8 @@ vec4 complex_subtract(vec4 left, vec4 right)
   return vec4(ds_subtract(left.xy, right.xy), ds_subtract(left.zw, right.zw));
 }
 
-/* The textbook four-product form rather than the three-product Karatsuba
- * variant: the latter trades a multiply for extra additions, and every
- * addition here is a compensated sequence costing more than the multiply it
- * saves. */
+/* The four-product form: Karatsuba saves a multiply but adds additions, each
+ * a compensated sequence costing more than the multiply it saves. */
 vec4 complex_multiply(vec4 left, vec4 right)
 {
   precise vec2 ac = ds_multiply(left.xy, right.xy);
@@ -235,7 +234,7 @@ void butterfly()
     vec4 twiddle = twiddles.values[twiddle_index];
 
     /* The table holds the inverse convention, so the forward direction takes
-     * the conjugate.  One table serves both, which is the point. */
+     * the conjugate; one table serves both. */
     if (parameters.inverse == 0u)
       twiddle.zw = -twiddle.zw;
     precise vec4 even = load_working(first);
@@ -288,12 +287,10 @@ void accumulate_partitions()
 /* The overlap-save tail: the second half of each channel's inverse transform
  * is the aliasing-free part, so the first block_frames are discarded.
  *
- * The vec4 narrows to the .xy half, which is the real part's double-single
- * pair: the imaginary half is rounding noise, as it is in any real
- * convolution, while both words of the real part are kept.  That is why this
- * profile's resident format is f32x2 and not f32 -- consumers downstream are
- * still working in double-single, and resident_format() in fir_vulkan.c
- * reports it as such. */
+ * The vec4 narrows to .xy, the real part's double-single pair; the imaginary
+ * half is rounding noise, as in any real convolution.  Hence this profile's
+ * resident format is f32x2: downstream consumers still work in double-single,
+ * and resident_format() in fir_vulkan.c reports it so. */
 void pack_output()
 {
   const uint index = gl_GlobalInvocationID.x;

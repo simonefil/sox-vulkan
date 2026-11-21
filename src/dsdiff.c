@@ -318,8 +318,7 @@ static int dff_writeheader(sox_format_t *ft)
 		12 + dff->data_size;
 
 	if (lsx_writedw(ft, ID('F', 'R', 'M', '8')) ||
-	    lsx_writeqw(ft, dff->data_size ?
-			frm8_size + dff->data_size : SOX_UNKNOWN_LEN) ||
+	    lsx_writeqw(ft, dff->data_size ? frm8_size : SOX_UNKNOWN_LEN) ||
             lsx_writedw(ft, ID('D', 'S', 'D', ' ')))
 		return SOX_EOF;
 

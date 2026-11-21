@@ -83,8 +83,11 @@ static int sox_echo_getopts(sox_effect_t * effp, int argc, char **argv)
         sscanf(argv[i++], "%lf", &echo->out_gain);
         while (i < argc) {
                 if ( echo->num_delays >= MAX_ECHOS )
-                        lsx_fail("echo: to many delays, use less than %i delays",
+                {
+                        lsx_fail("echo: too many delays, use at most %i delays",
                                 MAX_ECHOS);
+                        return (SOX_EOF);
+                }
                 /* Linux bug and it's cleaner. */
                 sscanf(argv[i++], "%lf", &echo->delay[echo->num_delays]);
                 sscanf(argv[i++], "%lf", &echo->decay[echo->num_delays]);

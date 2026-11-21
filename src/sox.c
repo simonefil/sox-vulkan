@@ -748,7 +748,7 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
         (effp->in_signal.packing != SOX_DSD_PACKING_BYTE &&
          effp->in_signal.packing != SOX_DSD_PACKING_WORD)) {
       lsx_fail("packed DSD output requires a DSF or DSDIFF writer");
-      return SOX_EOF;
+      return SOX_EINVAL;
     }
 
     if (effp->in_signal.packing == SOX_DSD_PACKING_WORD) {
@@ -771,6 +771,11 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
       }
     }
     output_eof = len != *isamp ? sox_true : sox_false;
+    if (len != *isamp && ofile->ft->sox_errno) {
+      lsx_fail("`%s' %s: %s", ofile->ft->filename,
+          ofile->ft->sox_errstr, sox_strerror(ofile->ft->sox_errno));
+      return SOX_EINVAL;
+    }
     return len == *isamp ? SOX_SUCCESS : SOX_EOF;
   }
 
@@ -790,10 +795,14 @@ static int output_flow(sox_effect_t *effp, sox_sample_t const * ibuf,
   len = *isamp? sox_write(ofile->ft, ibuf, *isamp) : 0;
   output_samples += len / ofile->ft->signal.channels;
   output_eof = (len != *isamp) ? sox_true: sox_false;
+  /* A write error is a failure, reported as SOX_EINVAL so that the output is
+   * removed; a short write without an error ends the output. */
   if (len != *isamp) {
-    if (ofile->ft->sox_errno)
+    if (ofile->ft->sox_errno) {
       lsx_fail("`%s' %s: %s", ofile->ft->filename,
           ofile->ft->sox_errstr, sox_strerror(ofile->ft->sox_errno));
+      return SOX_EINVAL;
+    }
     return SOX_EOF;
   }
   return SOX_SUCCESS;

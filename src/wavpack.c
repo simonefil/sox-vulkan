@@ -1,4 +1,4 @@
-/* libSoX file format: WavPack   (c) 2008 robs@users.sourceforge.net
+/* (c) 2008 robs@users.sourceforge.net
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -14,6 +14,8 @@
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
+/* libSoX file format: WavPack */
 
 #include "sox_i.h"
 #include <string.h>
@@ -86,9 +88,8 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf, size_t len)
 {
   priv_t * p = (priv_t *)ft->priv;
   /* WavPack always unpacks into int32_t, whatever the encoding -- for float
-   * files it puts the float's bit pattern there.  It used to unpack straight
-   * into `buf` and convert in place, which worked only while a sample was an
-   * int32 itself; `buf` is now an array of doubles and cannot be lent out. */
+   * files it puts the float's bit pattern there.  `buf` holds doubles, so the
+   * samples are unpacked into a buffer of their own and converted from it. */
   int32_t * ibuf = lsx_malloc(len * sizeof(*ibuf));
   size_t i, actual = WavpackUnpackSamples(p->codec, ibuf, (uint32_t) len / ft->signal.channels) * ft->signal.channels;
   for (i = 0; i < actual; ++i) switch (ft->encoding.bits_per_sample) {
@@ -154,13 +155,11 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t * buf, size_t 
     SOX_SAMPLE_LOCALS;
     case  8: obuf[i] = SOX_SAMPLE_TO_SIGNED_8BIT(buf[i], ft->clips); break;
     case 16: obuf[i] = SOX_SAMPLE_TO_SIGNED_16BIT(buf[i], ft->clips); break;
-    /* SOX_SAMPLE_TO_SIGNED_24BIT already clamps to [-2^23, 2^23), so the
-     * shift pair that used to sign-extend it is now provably a no-op. */
+    /* SOX_SAMPLE_TO_SIGNED_24BIT clamps to [-2^23, 2^23), so the value needs
+     * no sign extension. */
     case 24: obuf[i] = SOX_SAMPLE_TO_SIGNED_24BIT(buf[i], ft->clips); break;
     case 32: if (ft->encoding.encoding == SOX_ENCODING_WAVPACKF) {
-               /* Float files carry the float's bit pattern in the int32 slot;
-                * the old spelling read one out of the sample's own storage,
-                * which was an int32 holding no float at all. */
+               /* Float files carry the float's bit pattern in the int32 slot. */
                float f = SOX_SAMPLE_TO_FLOAT_32BIT(buf[i], ft->clips);
                memcpy(&obuf[i], &f, sizeof(f));
              } else obuf[i] = SOX_SAMPLE_TO_SIGNED_32BIT(buf[i], ft->clips);

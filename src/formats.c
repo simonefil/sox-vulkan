@@ -1,7 +1,4 @@
-/* Implements the public API for using libSoX file formats.
- * All public functions & data are prefixed with sox_ .
- *
- * (c) 2005-8 Chris Bagwell and SoX contributors
+/* (c) 2005-8 Chris Bagwell and SoX contributors
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -16,6 +13,10 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ */
+
+/* Implements the public API for using libSoX file formats.
+ * All public functions & data are prefixed with sox_ .
  */
 
 #define _GNU_SOURCE
@@ -141,8 +142,7 @@ static sox_bool is_adts_header(unsigned char const * data, size_t length)
 
 /* Find an MLP or TrueHD major sync and report which of the two it names, or
  * NULL for neither.  The major sync is not on every access unit and need not
- * be on the first, so the whole probe window is scanned rather than just its
- * start; the access unit length is checked alongside the signature so that
+ * be on the first, so the whole probe window is scanned; the access unit length is checked alongside the signature so that
  * the same three bytes occurring inside audio data do not match. */
 static char const * detect_mlp_major_sync(unsigned char const * data, size_t length)
 {
@@ -295,10 +295,10 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
   }
 #endif
 #ifdef HAVE_FFMPEG_CODECS
-  /* These probes run before the CHECK lines that follow rather than after,
-   * because a bitstream with no magic number at offset zero can happen to
-   * contain any given byte sequence; asking the specific tests first stops a
-   * coincidence from claiming the file.  Within the group the order goes
+  /* These probes run before the CHECK lines that follow: a bitstream with no
+   * magic number at offset zero can happen to contain any given byte
+   * sequence, and asking the specific tests first stops a coincidence from
+   * claiming the file.  Within the group the order goes
    * from the most distinctive signature to the least. */
   if (is_dts_header((unsigned char const *)data, len))
     return "dts";
@@ -789,7 +789,7 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
 static void UNUSED rewind_pipe(FILE * fp)
 {
 /* _FSTDIO is for Torek stdio (i.e. most BSD-derived libc's)
- * In theory, we no longer need to check _NEWLIB_VERSION or __APPLE__ */
+ * In theory, _FSTDIO alone also covers _NEWLIB_VERSION and __APPLE__ */
 #if defined _FSTDIO || defined _NEWLIB_VERSION || defined __APPLE__
   fp->_p -= PIPE_AUTO_DETECT_SIZE;
   fp->_r += PIPE_AUTO_DETECT_SIZE;
@@ -978,9 +978,9 @@ static sox_format_t * open_read(
   ft->mode = 'r';
   ft->filetype = lsx_strdup(filetype);
   ft->filename = lsx_strdup(path);
-  /* Refused rather than ignored, so that an option aimed at a format that
-   * cannot use it is not silently dropped.  The check comes after the type
-   * is known, which for a detected type means after detection. */
+  /* Codec options are refused for a format that cannot use them.  The check
+   * comes after the type is known, which for a detected type means after
+   * detection. */
   ft->codec_options = codec_options;
   if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
     lsx_fail("codec options are unsupported for file type `%s'", filetype);
@@ -1044,10 +1044,9 @@ sox_format_t * sox_open_read(
 }
 
 /* sox_open_read with the extra arguments the FFmpeg-backed handlers need.
- * Kept internal, and separate from the public entry point, so that the
- * published API and ABI are unchanged: sox_open_read stays exactly what it
- * was and passes NULL for the additions.  codec_options is not copied, so it
- * must outlive the returned format. */
+ * Kept internal, so that the public sox_open_read keeps its API and ABI and
+ * passes NULL for the additions.  codec_options is not copied, so it must
+ * outlive the returned format. */
 sox_format_t * lsx_open_read_with_codec_options(
     char               const * path,
     sox_signalinfo_t   const * signal,
@@ -1321,8 +1320,7 @@ static sox_format_t * open_write(
   ft->handler = *handler;
   ft->handler.write_formats = handler_write_formats(handler, filetype);
   ft->handler.write_rates = handler_write_rates(handler, filetype);
-  /* Both are refused rather than ignored when the handler cannot use them,
-   * so that an option aimed at the wrong format is not silently dropped. */
+  /* Both are refused when the handler cannot use them. */
   ft->codec_options = codec_options;
   ft->channel_layout = channel_layout;
   if (codec_options && !(ft->handler.flags & SOX_FILE_CODEC_OPTIONS)) {
@@ -1579,9 +1577,8 @@ size_t sox_write_packed_dsd_words(sox_format_t *ft, const sox_sample_t *buf, siz
  * an effect which has opted into packing.  It advances no length of its own:
  * ft->signal.length counts DSD frames for these formats and the handler keeps
  * its own position, exactly as the ordinary reader does.  A handler that
- * cannot produce words returns nothing rather than a partial answer, which is
- * what lets the caller fall back to sox_read without having to unpick how far
- * it got. */
+ * cannot produce words returns nothing, which lets the caller fall back to
+ * sox_read without having to unpick how far it got. */
 size_t sox_read_packed_dsd_words(sox_format_t *ft, sox_sample_t *buf, size_t len)
 {
   size_t channels = ft->signal.channels;
@@ -1614,8 +1611,9 @@ int sox_close(sox_format_t * ft)
   }
 
   /* An output's failure is reported here, as nothing is left of the format
-   * afterwards to report it from: the handler's own or, failing none, the
-   * error in flushing what was still buffered, such as a full disk. */
+   * afterwards to report it from: the handler's own first and, if the
+   * handler succeeded, the error in flushing what was still buffered, such
+   * as a full disk. */
   if (ft->mode == 'w' && result != SOX_SUCCESS)
     lsx_fail("error writing `%s': %s", ft->filename, ft->sox_errstr[0]? ft->sox_errstr : sox_strerror(ft->sox_errno));
   if (ft->fp == stdin) {

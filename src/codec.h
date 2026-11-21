@@ -1,6 +1,4 @@
-/* libSoX packet codecs: the codec half of a container format.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -15,8 +13,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* A container format (Matroska, Ogg, and in time MP4) only frames the
- * stream: it hands out packets and the parameters it declares for them.
+/* libSoX packet codecs: the codec half of a container format.
+ *
+ * A container format (Matroska, WebM, Ogg, MP4, Monkey's Audio, Musepack)
+ * only frames the stream: it hands out packets and the parameters it declares for them.
  * What turns those packets into samples, and back, is a codec, chosen apart
  * from the container: from the file when reading, and from the type when
  * writing, as in `-t mka:flac'.

@@ -1,7 +1,4 @@
-/* libSoX Monkey's Audio frame decoder and encoder, from the Monkey's Audio
- * SDK.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -16,18 +13,19 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* CAPEDecompressCore and CAPECompressCore are the SDK's frame decoder and
+/* libSoX Monkey's Audio frame decoder and encoder, from the Monkey's Audio
+ * SDK.
+ *
+ * CAPEDecompressCore and CAPECompressCore are the SDK's frame decoder and
  * encoder, which its decompressor and compressor run on worker threads: each
  * works on its own thread when handed a frame and signals when the frame is
  * done.  One worker is used, and waited for.  The decoder asks the stream's
  * parameters of the decompressor it is made for, which here answers from
- * what it is created with rather than from a file.  Floating-point samples
- * are coded as 32-bit integers, their bit patterns transformed: the
- * transform comes before the encoder and is undone after the decoder, as in
- * the SDK's compressor and decompressor.  The
- * SDK is built without
- * its MD5, which the whole-file code linked with these needs: SoX's stands in
- * for it. */
+ * what it is created with.  Floating-point samples are coded as 32-bit
+ * integers, their bit patterns transformed: the transform comes before the
+ * encoder and is undone after the decoder, as in the SDK's compressor and
+ * decompressor.  The SDK is built without its MD5, which the whole-file code
+ * linked with these needs: SoX's stands in for it. */
 
 #include "ape-mac.h"
 

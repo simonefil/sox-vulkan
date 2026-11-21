@@ -1,7 +1,4 @@
-/* libSoX Monkey's Audio frame decoder and encoder, from the Monkey's Audio
- * SDK.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -16,14 +13,17 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* The SDK's decompressor and compressor work on whole files; only their
+/* libSoX Monkey's Audio frame decoder and encoder, from the Monkey's Audio
+ * SDK.
+ *
+ * The SDK's decompressor and compressor work on whole files; only their
  * frame decoder and encoder are used here, so that the file is framed by
  * SoX.  Samples are interleaved little-endian PCM as a WAVE file holds it,
- * 8-bit samples unsigned, floating-point ones IEEE single precision.  A frame is decoded from the 32-bit words of the
- * file that hold it, and the word after, skipping the bytes of its first
- * word that precede it; it is encoded into the bytes it occupies in a file
- * when it starts on a 32-bit boundary, padded with zeros to a whole number of
- * 32-bit words. */
+ * 8-bit samples unsigned, floating-point ones IEEE single precision.  A frame
+ * is decoded from the 32-bit words of the file that hold it, and the word
+ * after, skipping the bytes of its first word that precede it; it is encoded
+ * into the bytes it occupies in a file when it starts on a 32-bit boundary,
+ * padded with zeros to a whole number of 32-bit words. */
 
 #ifndef SOX_APE_MAC_H
 #define SOX_APE_MAC_H

@@ -1,6 +1,4 @@
-/* LOAS/LATM framing implementation shared by the AAC and USAC handlers.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -15,6 +13,8 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA. */
+
+/* LOAS/LATM framing implementation shared by the AAC and USAC handlers. */
 
 #include "sox_i.h"
 #include "ffmpeg-codec.h"
@@ -115,21 +115,21 @@ int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint
   /* Read within whichever is smaller, what the frame claims or what the
    * caller actually has: the object type sits near the front, so a partial
    * frame is usually enough, and the reader's bounds turn "not enough" into
-   * a clean failure rather than an over-read. */
+   * a clean failure. */
   available_size = min(declared_size, packet_size - LSX_LOAS_HEADER_SIZE);
   reader.data = packet + LSX_LOAS_HEADER_SIZE;
   reader.size_bits = available_size * 8;
   reader.position = 0;
 
   /* useSameStreamMux: this frame repeats the previous configuration and so
-   * carries nothing to inspect.  Not an error -- just no answer here. */
+   * carries nothing to inspect, which returns 0. */
   if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS)
     return SOX_EOF;
   if (value)
     return 0;
-  /* Both audioMuxVersions are handled, unlike the stricter parse in usac.c:
-   * this runs during format detection, where being able to read the object
-   * type of any well-formed stream is the whole point.  Version 1 inserts
+  /* Both audioMuxVersions are handled, unlike the stricter parse in usac.c,
+   * since this runs during format detection on any well-formed stream.
+   * Version 1 inserts
    * audioMuxVersionA and taraBufferFullness, and states the config length
    * explicitly, which version 0 does not. */
   if (lsx_bit_read(&reader, 1, &audio_mux_version) != SOX_SUCCESS)
@@ -141,8 +141,8 @@ int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint
   }
   /* allStreamsSameTimeFraming, numSubFrames, numProgram, numLayer.  Anything
    * other than a single synchronous program and layer puts the config
-   * somewhere this shortcut does not follow, so it is reported as unreadable
-   * rather than parsed further. */
+   * somewhere this shortcut does not follow, so it is reported as
+   * unreadable. */
   if (lsx_bit_read(&reader, 1, &value) != SOX_SUCCESS || value != 1 ||
       lsx_bit_read(&reader, 6, &value) != SOX_SUCCESS || value != 0 ||
       lsx_bit_read(&reader, 4, &value) != SOX_SUCCESS || value != 0 ||

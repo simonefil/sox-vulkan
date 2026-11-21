@@ -1,10 +1,4 @@
-/* LOAS/LATM framing, shared by the two handlers that read it: latm for AAC
- * and usac for xHE-AAC.  Both formats put their access units in the same
- * transport, and the object type inside the configuration is what tells them
- * apart -- which is also what lets format detection route a file to the right
- * one of the two.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,6 +14,12 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* LOAS/LATM framing, shared by the two handlers that read it: latm for AAC
+ * and usac for xHE-AAC.  Both formats put their access units in the same
+ * transport, and the object type inside the configuration tells them apart,
+ * which is also what lets format detection route a file to the right one of
+ * the two. */
 
 #ifndef LSX_LATM_COMMON_H
 #define LSX_LATM_COMMON_H
@@ -53,13 +53,13 @@ int lsx_loas_read_packet(
     sox_bool clean_eof,
     char const * codec_name);
 
-/* Read a LATM variable-length integer: a two-bit count of the bytes that
- * follow, then that many bytes, most significant first. */
+/* Read a LATM variable-length integer: a two-bit count, then one byte more
+ * than it says, most significant first. */
 int lsx_latm_read_value(lsx_bit_reader_t * reader, uint32_t * value);
 
 /* Peek at the audioObjectType in the configuration of a LOAS frame, without
- * consuming anything and without requiring the whole frame to be present --
- * which is what makes it usable on the few bytes format detection has.
+ * consuming anything and without requiring the whole frame to be present, so
+ * that it works on the few bytes format detection has.
  * Returns 1 with *object_type set, 0 if the frame carries no configuration to
  * read, or SOX_EOF if it is malformed or too short to reach the field. */
 int lsx_latm_config_object_type(uint8_t const * packet, size_t packet_size, uint32_t * object_type);

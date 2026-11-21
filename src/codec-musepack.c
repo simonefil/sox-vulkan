@@ -1,8 +1,4 @@
-/* libSoX packet codecs: Musepack SV7 and SV8, decoded with libmpcdec, and
- * SV8 encoded with libmpcenc and libmpcpsy.
- *
- * The encoding loop, which those libraries leave to their program, comes
- * from mpcenc.c of musepack_src r475:
+/* The encoding loop comes from mpcenc.c of musepack_src r475:
  * Copyright (c) 2005-2009, The Musepack Development Team
  * Copyright (C) 1999-2004 Buschmann/Klemm/Piecha/Wolf
  * under the GNU Lesser General Public License, version 2.1 or later.
@@ -22,7 +18,11 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* An SV7 packet is a frame: the bits of its first 32-bit word that precede
+/* libSoX packet codecs: Musepack SV7 and SV8, decoded with libmpcdec, and
+ * SV8 encoded with libmpcenc and libmpcpsy, with the encoding loop those
+ * libraries leave to their program taken from mpcenc.c.
+ *
+ * An SV7 packet is a frame: the bits of its first 32-bit word that precede
  * it, its length in bits excluded, a byte, three zero bytes, then the whole
  * 32-bit words of the file that hold it and the word after, which at the end
  * of the file may be missing; its private data is the five words of the file

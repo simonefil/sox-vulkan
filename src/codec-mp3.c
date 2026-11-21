@@ -1,6 +1,4 @@
-/* libSoX packet codec: MP3, through libmad and LAME.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -15,7 +13,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* A packet is one MPEG audio frame, header included; there is no private
+/* libSoX packet codec: MP3, through libmad and LAME.
+ *
+ * A packet is one MPEG audio frame, header included; there is no private
  * data.  A frame may take part of its data from the frames before it, the bit
  * reservoir.  libmad keeps the reservoir only by looking at the next frame in
  * its buffer, which a packet decoded on its own lacks, so the reservoir is
@@ -50,7 +50,6 @@
 #endif
 
 #define DECODER_DELAY 529
-#define MAX_FRAME_SIZE 2881   /* MPEG 2.5 at 160 kbit/s and 8 kHz, padded */
 #define HELD_FRAMES 2         /* encoding: enough to spread the padding over */
 #define RESERVOIR_SIZE 511    /* the furthest back a frame's main data can begin */
 
@@ -116,9 +115,9 @@ static int start_decode(lsx_codec_t * codec)
 
 /* Whether the frame is an information frame, and if its LAME extension gives
  * the delay and padding, the frames to drop and where the signal ends.  The
- * frame is where the main data would begin were there no CRC, which LAME
- * leaves out of the count even when it sets the flag for it, as FFmpeg does
- * in reading. */
+ * Xing or Info tag is looked for where the main data would begin were there
+ * no CRC, which LAME leaves out of the count even when it sets the flag for
+ * it, as FFmpeg does in reading. */
 static sox_bool information_frame(priv_t * p, unsigned char const * data, size_t size)
 {
   unsigned frames, pos, flags;

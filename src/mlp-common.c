@@ -1,6 +1,4 @@
-/* Shared MLP and Dolby TrueHD elementary stream format implementation.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Shared MLP and Dolby TrueHD elementary stream format implementation. */
 
 #include "sox_i.h"
 #include "ffmpeg-codec.h"
@@ -37,16 +37,15 @@ typedef struct {
 
   /* Write side.  A stream is only decodable standalone if its first access
    * unit carries a major sync, which the encoder emits on its own schedule,
-   * so what actually happened is observed rather than assumed. */
+   * so the first unit written is checked for one. */
   sox_bool starts_with_major_sync;
   unsigned packets_written;
 } priv_t;
 
 /* Read up to length bytes, looping because lsx_readbuf may return fewer.
  * Returns how many were read; unlike its namesakes in the ADTS and LOAS
- * handlers it reports a short read rather than judging it, because the
- * callers here distinguish three cases -- nothing, some, all -- and attach
- * different meanings to each. */
+ * handlers it leaves a short read to the callers, which distinguish three
+ * cases -- nothing, some, all -- and attach different meanings to each. */
 static size_t read_exact(sox_format_t * ft, uint8_t * data, size_t length)
 {
   size_t done = 0;
@@ -64,12 +63,12 @@ static size_t read_exact(sox_format_t * ft, uint8_t * data, size_t length)
 /* Supply the next access unit as an AVPacket, header included.  Returns 1 on
  * success, 0 at end of stream, SOX_EOF on error.
  *
- * An access unit begins with a 4-byte header whose first 12 bits are its
- * length in 16-bit words, so the framing is read directly rather than through
- * an FFmpeg parser.  Two shapes are recognised and refused by name instead of
- * being misread: an AC-3 sync word, which means this is the interleaved
- * stream a Blu-ray carries rather than a bare elementary one, and a major
- * sync whose stream type belongs to the other of the two formats. */
+ * An access unit begins with a 4-byte header whose first two bytes carry,
+ * in their low 12 bits, its length in 16-bit words, so the framing is read
+ * directly.  Two shapes are refused with a message of their own: an AC-3
+ * sync word, which means this is the interleaved stream a Blu-ray carries
+ * rather than a bare elementary one, and a major sync whose stream type
+ * belongs to the other of the two formats. */
 static int read_packet(sox_format_t * ft, AVPacket * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -222,12 +221,10 @@ static int stopwrite(sox_format_t * ft)
 
   /* The encoder places a major sync at the start of each header interval, so
    * input shorter than one interval yields a file whose first access unit
-   * has none and which therefore cannot be decoded on its own.  Nothing can
-   * be repaired at this point -- the packets are written -- so this reports
-   * a failure and says what would avoid it, rather than leaving a file that
-   * looks fine and does not play.  Both a warning and an error are emitted:
-   * the warning describes the file that exists, the error is what SoX's exit
-   * status reflects. */
+   * has none and which therefore cannot be decoded on its own.  The packets
+   * are already written, so this reports a failure and says what would avoid
+   * it.  Both a warning and an error are emitted: the warning describes the
+   * file that exists, the error is what SoX's exit status reflects. */
   if (result == SOX_SUCCESS && !p->starts_with_major_sync) {
     lsx_warn("`%s': %s input is too short for the FFmpeg encoder to "
         "start with a major sync header; the output is not a standalone "

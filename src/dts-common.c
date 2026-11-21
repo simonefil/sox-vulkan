@@ -1,6 +1,4 @@
-/* Shared DTS and DTS-HD elementary stream format implementation.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +15,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Shared DTS and DTS-HD elementary stream format implementation. */
+
 #include "sox_i.h"
 #include "dts-common.h"
 #include "ffmpeg-codec.h"
@@ -25,8 +25,7 @@
 
 /* The dts and dtshd handlers share everything but one check.  A DTS-HD file
  * is a DTS core with extension substreams appended, so the same decoder reads
- * both and the profile it reports is what tells them apart -- which is why
- * this file exists rather than two independent handlers. */
+ * both and the profile it reports is what tells them apart. */
 typedef struct {
   lsx_ffmpeg_codec_t * codec;
   sox_bool spatial_metadata_warning_shown;
@@ -37,7 +36,7 @@ typedef struct {
 static lsx_ffmpeg_stream_definition_t const definition = {&lsx_ffmpeg_dts_definition, NULL, NULL, NULL};
 
 /* The profiles that carry an extension substream, and so count as DTS-HD.
- * DTS Express is included: it is a low-rate substream profile, not a core. */
+ * DTS Express is included as a low-rate substream profile. */
 static sox_bool is_dtshd_profile(int profile)
 {
   switch (profile) {
@@ -52,8 +51,8 @@ static sox_bool is_dtshd_profile(int profile)
   }
 }
 
-/* Name a profile for the "this is X, not DTS-HD" message, so a rejected file
- * says what it actually is. */
+/* Name a profile for the "is X rather than DTS-HD" message, so a rejected
+ * file says what it actually is. */
 static char const * profile_name(int profile)
 {
   switch (profile) {

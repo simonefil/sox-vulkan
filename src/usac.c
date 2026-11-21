@@ -1,6 +1,4 @@
-/* xHE-AAC/USAC elementary stream with LOAS/LATM framing.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* xHE-AAC/USAC elementary stream with LOAS/LATM framing. */
 
 #include "codec.h"
 #include "ffmpeg-codec.h"
@@ -56,9 +56,8 @@ typedef struct {
 } priv_t;
 
 /* Copy count bits out of reader into destination, left-aligned from bit 0 and
- * zero-padded to the next byte.  A plain memcpy will not do: the config sits
- * at an arbitrary bit offset inside the LATM element, but FFmpeg wants it
- * byte-aligned.  Leaves the cursor unmoved and destination zeroed if the
+ * zero-padded to the next byte: the config sits at an arbitrary bit offset
+ * inside the LATM element, but FFmpeg wants it byte-aligned.  Leaves the cursor unmoved and destination zeroed if the
  * field does not fit. */
 static int copy_bits(lsx_bit_reader_t * reader, uint8_t * destination, size_t count)
 {
@@ -85,9 +84,8 @@ static int copy_bits(lsx_bit_reader_t * reader, uint8_t * destination, size_t co
  *
  * Only the one LATM shape xHE-AAC is defined for is accepted -- audioMux
  * version 1, a single synchronous program and layer, no otherData -- so the
- * fields below are read and required to be their fixed values rather than
- * being interpreted.  Everything else is refused with a clear message
- * instead of being misparsed. */
+ * fields below are read and required to be their fixed values.  Everything
+ * else is refused with a message naming the expected shape. */
 static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader_t * reader, sox_bool * config_changed)
 {
   uint8_t config[USAC_MAX_CONFIG_SIZE];
@@ -123,8 +121,8 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
     return SOX_EOF;
   }
   /* Object type 42 is USAC.  Plain AAC in the same framing is handled by the
-   * latm format, so anything else here is a file for that handler, not a
-   * malformed one for this. */
+   * latm format, so anything else here is refused as a file for that
+   * handler. */
   if (object_type != 42) {
     lsx_fail_errno(ft, SOX_EFMT, "LOAS/LATM AudioSpecificConfig is not xHE-AAC/USAC");
     return SOX_EOF;
@@ -145,8 +143,8 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
     lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC StreamMuxConfig");
     return SOX_EOF;
   }
-  /* crcCheckPresent; the checksum itself is skipped rather than verified,
-   * since the decoder will reject a corrupt access unit anyway. */
+  /* crcCheckPresent; the checksum itself is skipped unverified, since the
+   * decoder will reject a corrupt access unit anyway. */
   if (value && lsx_bit_read(reader, 8, NULL) != SOX_SUCCESS) {
     lsx_fail_errno(ft, SOX_EHDR, "Truncated xHE-AAC StreamMuxConfig CRC");
     return SOX_EOF;
@@ -168,7 +166,8 @@ static int parse_stream_mux_config(sox_format_t * ft, priv_t * p, lsx_bit_reader
  * The leading useSameStreamMux bit says whether this frame repeats the
  * previous configuration or carries a new one, so a stream that never sends
  * one before its first payload cannot be decoded at all.  The payload length
- * that follows is coded as a chain of bytes, each below 255 ending it. */
+ * that follows is coded as a chain of bytes, summed up to and including the
+ * first one below 255. */
 static int parse_audio_mux_element(
     sox_format_t * ft,
     priv_t * p,
@@ -218,19 +217,17 @@ static int parse_audio_mux_element(
 }
 
 /* Read the next LOAS frame and unpack its access unit.  Returns 1 on
- * success, 0 at end of stream, or SOX_EOF on error.  clean_eof is passed
- * through to the LOAS reader: it says whether running out of input exactly at
- * a frame boundary is normal here, which it is for every caller in this file. */
+ * success, 0 at end of stream, or SOX_EOF on error.  Running out of input
+ * exactly at a frame boundary is a normal end of stream. */
 static int read_loas_access_unit(
     sox_format_t * ft,
     priv_t * p,
     uint8_t * destination,
     size_t * destination_size,
-    sox_bool * config_changed,
-    sox_bool clean_eof)
+    sox_bool * config_changed)
 {
   size_t frame_size;
-  int result = lsx_loas_read_packet(ft, p->loas_frame, sizeof(p->loas_frame), &frame_size, clean_eof, "xHE-AAC");
+  int result = lsx_loas_read_packet(ft, p->loas_frame, sizeof(p->loas_frame), &frame_size, sox_true, "xHE-AAC");
 
   if (result != 1)
     return result;
@@ -253,7 +250,7 @@ static int prepare_usac_decoder(sox_format_t * ft, AVCodecContext * context)
   sox_bool config_changed;
   int result;
 
-  result = read_loas_access_unit(ft, p, p->pending_packet, &p->pending_size, &config_changed, sox_true);
+  result = read_loas_access_unit(ft, p, p->pending_packet, &p->pending_size, &config_changed);
   if (result != 1) {
     if (result == 0)
       lsx_fail_errno(ft, SOX_EHDR, "xHE-AAC stream contains no audio");
@@ -272,7 +269,7 @@ static int prepare_usac_decoder(sox_format_t * ft, AVCodecContext * context)
 }
 
 /* Supply the next access unit as an AVPacket, taking the framing off LOAS
- * rather than letting FFmpeg's parser do it.  The first call hands back the
+ * here.  The first call hands back the
  * frame prepare_usac_decoder already consumed.
  *
  * A config that changed mid-stream travels with the packet as NEW_EXTRADATA
@@ -294,7 +291,7 @@ static int read_usac_packet(sox_format_t * ft, AVPacket * packet)
     p->pending_size = 0;
   }
   else {
-    result = read_loas_access_unit(ft, p, access_unit, &access_unit_size, &config_changed, sox_true);
+    result = read_loas_access_unit(ft, p, access_unit, &access_unit_size, &config_changed);
     if (result != 1)
       return result;
   }

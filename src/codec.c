@@ -1,6 +1,4 @@
-/* libSoX packet codecs: the registry, and what all codecs share.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -14,6 +12,8 @@
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
+/* libSoX packet codecs: the registry, and what all codecs share. */
 
 #include "codec.h"
 
@@ -59,8 +59,8 @@ static lsx_codec_handler_t const * (* const codec_fns[])(void) = {
 };
 
 /* Every identifier a container uses for a codec.  A codec the build lacks
- * keeps its identifiers here, so that a file holding it is reported as such
- * rather than as unknown.  Ogg names a codec by the bytes its first packet
+ * keeps its identifiers here, so that a file holding it is reported as
+ * holding that codec.  Ogg names a codec by the bytes its first packet
  * begins with, and MP4 by its sample entry, or for an MPEG-4 audio entry by
  * the object type its decoder configuration gives, as in mp4a.40.  An AAC
  * identifier stands for xHE-AAC too, which its configuration tells apart.
@@ -116,8 +116,7 @@ static lsx_codec_tag_t const codec_tags[] = {
 };
 
 /* The container each type is, and the codec it writes when its type names
- * none: Ogg has one, Vorbis, which is what `-t ogg' always meant, and MP4
- * ALAC, which is what `-t m4a' did.  The vorbis and opus types are Ogg with
+ * none: Vorbis for Ogg and ALAC for MP4.  The vorbis and opus types are Ogg with
  * the codec fixed, and xhe-m4a and usac-m4a MP4: they take no other, and read
  * only that one.  A Monkey's Audio file holds its own codec only, and a
  * Musepack file either stream version, of which only SV8 is written. */

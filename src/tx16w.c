@@ -1,6 +1,4 @@
-/* libSoX Yamaha TX-16W sampler file support
- *
- * May 20, 1993
+/* May 20, 1993
  * Copyright 1993 Rob Talley   (rob@aii.com)
  * This source code is freely redistributable and may be used for
  * any purpose. This copyright notice and the following copyright
@@ -32,6 +30,8 @@
  * overridden.  cbagwell@sprynet.com
  *
  */
+
+/* libSoX Yamaha TX-16W sampler file support */
 
 #include "sox_i.h"
 #include <stdio.h>
@@ -202,9 +202,8 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
      * two unsigned short samples.
      * TCC 3.0 appeared to do unwanted things, so we really specify
      *  exactly what we want to happen.
-     * Convert unsigned short to sox_sample_t then shift up the result
-     *  so that the 12-bit sample lives in the most significant
-     *  12-bits of the sox_sample_t.
+     * Convert each 12-bit value to sox_sample_t with
+     *  SOX_SIGNED_TO_SAMPLE(12, ...).
      * This gets our two samples into the internal format which we
      * deposit into the given buffer and adjust our counts respectivly.
      */
@@ -247,9 +246,8 @@ static int startwrite(sox_format_t * ft)
     return(SOX_SUCCESS);
 }
 
-/* Scale to twelve bits, round halves toward +inf, clip.  The old spelling was
- * a shift, which could not overflow because it threw the low bits away; a
- * double can sit past full scale, so the limit has to be applied here. */
+/* Scale to twelve bits, round halves toward +inf, clip: a double can sit past
+ * full scale. */
 #define TX16W_SAMPLE_TO_12BIT(d, clips) \
   ((int)((d) >= 1.0 ? (++(clips), 2047) : \
          (d) < -1.0 ? (++(clips), -2048) : floor((d) * 2048. + .5)))
@@ -258,10 +256,7 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t l
 {
   priv_t * sk = (priv_t *) ft->priv;
   size_t last_i, i = 0, len = min(len0, TXMAXLEN - sk->samples_out);
-  /* Twelve-bit words, not samples.  `>> 20` used to take the top twelve bits
-   * of the integer a sample was; the same twelve bits are now what scaling by
-   * 2^11 and rounding produces, and the clip that the shift could not perform
-   * has to be done on purpose. */
+  /* Twelve-bit words, as TX16W_SAMPLE_TO_12BIT produces them. */
   int w1, w2;
 
   while (i < len) {

@@ -1,7 +1,7 @@
-/* AudioCore sound handler
- *
- * Copyright 2008 Chris Bagwell And Sundry Contributors
+/* Copyright 2008 Chris Bagwell And Sundry Contributors
  */
+
+/* AudioCore sound handler */
 
 #include "sox_i.h"
 
@@ -198,40 +198,6 @@ static int setup(sox_format_t *ft, int is_input)
   ft->signal.rate = 44100;
   ft->encoding.bits_per_sample = 32;
 
-  /* TODO: My limited experience with hardware can only get floats working
-   * withh a fixed sample rate and stereo.  I know that is a limitiation of
-   * audio device I have so this may not be standard operating orders.
-   * If some hardware supports setting sample rates and channel counts
-   * then should do that over resampling and mixing.
-   */
-#if  0
-  stream_desc.mSampleRate = ft->signal.rate;
-  stream_desc.mChannelsPerFrame = ft->signal.channels;
-
-  /* Write them back */
-  property_size = sizeof(struct AudioStreamBasicDescription);
-  status = AudioDeviceSetProperty(ac->adid, NULL, 0, is_input,
-                                  kAudioDevicePropertyStreamFormat,
-                                  property_size, &stream_desc);
-  if (status)
-  {
-    lsx_fail_errno(ft, SOX_EPERM, "can not set audio device properties");
-    return SOX_EOF;
-  }
-
-  /* Query device to see if it worked */
-  property_size = sizeof(struct AudioStreamBasicDescription);
-  status = AudioDeviceGetProperty(ac->adid, 0, is_input,
-                                  kAudioDevicePropertyStreamFormat,
-                                  &property_size, &stream_desc);
-
-  if (status)
-  {
-    lsx_fail_errno(ft, SOX_EPERM, "can not get audio device properties");
-    return SOX_EOF;
-  }
-#endif
-
   if (stream_desc.mChannelsPerFrame != ft->signal.channels)
   {
     lsx_debug("audio device did not accept %d channels. Use %d channels instead.", (int)ft->signal.channels,
@@ -246,11 +212,8 @@ static int setup(sox_format_t *ft, int is_input)
     ft->signal.rate = stream_desc.mSampleRate;
   }
 
-  /* `bufsiz' is a count of samples, not a count of bytes, so dividing it by
-   * the size of a sample never meant anything.  It was harmless while a sample
-   * was four bytes wide and the expression happened to yield bufsiz/4; a sample
-   * is eight bytes now, and the same line quietly halved both this ring and the
-   * device buffer asked for below.  The quarter is written as a quarter. */
+  /* `bufsiz' is a count of samples: the device buffer asked for below holds
+   * a quarter of it, and this ring Buffactor such quarters. */
   ac->bufsize = sox_globals.bufsiz / 4 * Buffactor;
   ac->bufrd = 0;
   ac->bufwr = 0;
@@ -363,10 +326,7 @@ static size_t write_samples(sox_format_t *ft, const sox_sample_t *buf, size_t ns
         ac->device_started = 1;
     }
 
-    /* globals.bufsize is in samples
-    * buf_offset is in bytes
-    * buf_size is in bytes
-    */
+    /* ac->bufsize, bufwr and bufrdavail count float samples. */
     for(i = 0; i < nsamp; i++){
         while(ac->bufrdavail == ac->bufsize - 1)
             pthread_cond_wait(&ac->cond, &ac->mutex);

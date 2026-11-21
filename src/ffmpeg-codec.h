@@ -1,6 +1,4 @@
-/* Common libavcodec adapter for SoX format handlers.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +15,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Common libavcodec adapter for SoX format handlers. */
+
 #ifndef LSX_FFMPEG_CODEC_H
 #define LSX_FFMPEG_CODEC_H
 
@@ -27,11 +27,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Bit cursors over a buffer the caller owns, most significant bit first.
- * The handlers around these codecs all have to take apart or assemble a
- * transport header FFmpeg does not deal with itself -- ADTS, LOAS/LATM, an
- * AudioSpecificConfig -- and they all read it in the same bit order, so the
- * plumbing lives here once instead of in each of them.
+/* Bit cursors over a buffer the caller owns, most significant bit first,
+ * shared by the handlers that take apart or assemble a transport header
+ * FFmpeg does not deal with itself: ADTS, LOAS/LATM, an AudioSpecificConfig.
  *
  * data is not owned; size_bits is its length in bits, not bytes; position is
  * the cursor, also in bits, and only ever advances.  A writer expects its

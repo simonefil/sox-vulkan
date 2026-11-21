@@ -1,9 +1,4 @@
-/* adpcm.c  codex functions for MS_ADPCM data
- *          (hopefully) provides interoperability with
- *          Microsoft's ADPCM format, but, as usual,
- *          see LACK-OF-WARRANTY information below.
- *
- *      Copyright (C) 1999 Stanley J. Brooks <stabro@megsinet.net>
+/*      Copyright (C) 1999 Stanley J. Brooks <stabro@megsinet.net>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -21,14 +16,12 @@
  *
  */
 
-/*
- * November 22, 1999
- *  specs I've seen are unclear about ADPCM supporting more than 2 channels,
- *  but these routines support more channels in a manner which looks (IMHO)
- *  like the most natural extension.
+/* adpcm.c  codec functions for MS_ADPCM data, for interoperability with
+ *          Microsoft's ADPCM format.
  *
- *  Remark: code still turbulent, encoding very new.
- *
+ *  Specs are unclear about ADPCM supporting more than 2 channels; these
+ *  routines support more channels in the manner that looks like the most
+ *  natural extension.
  */
 
 #include "sox_i.h"
@@ -37,14 +30,9 @@
 #include <sys/types.h>
 #include <stdio.h>
 
-/* None of this is a sample.
- *
- * The step size, the step-adjust table, the prediction and the four-bit code
- * are all integers of the ADPCM codec, and they were typed sox_sample_t only
- * because sox_sample_t used to be a thirty-two bit integer and was therefore
- * the type at hand.  With samples now doubles the mistyping would have shifted
- * the codec into floating point and left it working -- badly, and silently.
- * They say int32_t because that is what they are. */
+/* The step size, the step-adjust table, the prediction and the four-bit code
+ * are integers of the ADPCM codec, hence int32_t: sox_sample_t is a double,
+ * and would move the codec arithmetic into floating point. */
 typedef struct {
         int32_t step;            /* step size */
         short coef[2];
@@ -129,7 +117,7 @@ const char *lsx_ms_adpcm_block_expand_i(
   const char *errmsg = NULL;
   MsState_t *state = priv;  /* One decompressor state for each channel */
 
-  /* Read the four-byte header for each channel */
+  /* Read the seven-byte header for each channel */
   ip = ibuff;
   for (ch = 0; ch < chans; ch++) {
     unsigned char bpred = *ip++;

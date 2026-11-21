@@ -1,6 +1,4 @@
-/* libSoX container format: Matroska audio, and WebM.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -15,7 +13,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* Only the framing is done here; container.c binds it to the codec.  WebM
+/* libSoX container format: Matroska audio, and WebM.
+ *
+ * Only the framing is done here; container.c binds it to the codec.  WebM
  * is Matroska with fewer codecs and its own document type.
  *
  * Reading goes front to back without seeking, so that a pipe reads like a

@@ -1,6 +1,4 @@
-/* AAC elementary stream with LOAS/LATM framing.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* AAC elementary stream with LOAS/LATM framing. */
 
 #include "codec.h"
 #include "ffmpeg-codec.h"
@@ -63,8 +63,8 @@ static int copy_bits(lsx_bit_writer_t * writer, uint8_t const * source, size_t c
 }
 
 /* Write a LATM variable-length integer, the inverse of lsx_latm_read_value:
- * a two-bit count of the bytes that follow, then the value in as few bytes as
- * carry it, most significant first. */
+ * a two-bit count one less than the bytes that follow, then the value in as
+ * few bytes as carry it, most significant first. */
 static int write_latm_value(lsx_bit_writer_t * writer, uint32_t value)
 {
   unsigned bytes = 1;
@@ -86,8 +86,8 @@ static int write_latm_value(lsx_bit_writer_t * writer, uint32_t value)
 
 /* AAC-LC (2), HE-AAC (5) and HE-AACv2 (29): the object types this handler
  * claims.  USAC in the same framing belongs to the usac handler, and the
- * older or more exotic types are refused by name rather than handed to a
- * decoder that would not produce what the file describes. */
+ * older or more exotic types are refused, since the decoder would not
+ * produce what the file describes. */
 static sox_bool supported_object_type(uint32_t object_type)
 {
   return object_type == 2 || object_type == 5 || object_type == 29;
@@ -138,9 +138,9 @@ static int read_latm_packet(sox_format_t * ft, AVPacket * packet)
 
 /* Emit a StreamMuxConfig describing one synchronous programme and layer,
  * carrying the encoder's AudioSpecificConfig verbatim.  The whole structure
- * is constant apart from that config, so the fields are written as literals
- * rather than derived; a single failed write aborts the lot, which the caller
- * turns into "config too large". */
+ * is constant apart from that config, so the fields are written as literals;
+ * a single failed write aborts the lot, which the caller turns into "config
+ * too large". */
 static int write_stream_mux_config(lsx_bit_writer_t * writer, AVCodecContext const * context)
 {
   uint32_t asc_bits = (uint32_t)context->extradata_size * 8;

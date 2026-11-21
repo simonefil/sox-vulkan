@@ -1,6 +1,4 @@
-/* libSoX libsndfile formats.
- *
- * Copyright 2007 Reuben Thomas <rrt@sc3d.org>
+/* Copyright 2007 Reuben Thomas <rrt@sc3d.org>
  * Copyright 1999-2005 Erik de Castro Lopo <eridk@mega-nerd.com>
  *
  * This library is free software; you can redistribute it and/or modify it
@@ -17,6 +15,8 @@
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
+/* libSoX libsndfile formats. */
 
 #include "sox_i.h"
 
@@ -380,8 +380,8 @@ static int startread(sox_format_t * ft)
 
   /* The double entry points hand back the file's own integer range unless the
    * handle is told otherwise; SoX's scale is [-1, 1], so say so.  Nothing is
-   * clipped on the way in: a value past full scale is one the pipeline can
-   * now carry, and only a writer decides what to do with it (decisione D3). */
+   * clipped on the way in: the pipeline carries values past full scale, and
+   * only a writer clips them. */
   sf->sf_command(sf->sf_file, SFC_SET_NORM_DOUBLE, NULL, SF_TRUE);
 
 #if 0 /* FIXME */
@@ -399,10 +399,8 @@ static int startread(sox_format_t * ft)
 static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
 {
   priv_t * sf = (priv_t *)ft->priv;
-  /* The int entry points used to be right for the wrong reason: the buffer was
-   * cast to `int *` because a sample happened to be one.  libsndfile's double
-   * entry points normalise to [-1, 1] by default, which is the scale SoX now
-   * uses itself, so this is both correct and one requantisation shorter. */
+  /* libsndfile's double entry points normalise to [-1, 1] by default, which
+   * is SoX's own scale, so samples are read straight into buf. */
   return (size_t)sf->sf_read_double(sf->sf_file, buf, (sf_count_t)len);
 }
 
@@ -462,7 +460,7 @@ static int startwrite(sox_format_t * ft)
   }
 
   sf->sf_command(sf->sf_file, SFC_SET_NORM_DOUBLE, NULL, SF_TRUE);
-  /* Here, on the other hand, clipping is the writer's job. */
+  /* On writing, clipping is the writer's job. */
   sf->sf_command(sf->sf_file, SFC_SET_CLIPPING, NULL, SF_TRUE);
 
   return SOX_SUCCESS;

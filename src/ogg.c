@@ -1,6 +1,4 @@
-/* libSoX container format: Ogg, holding Vorbis, Opus or FLAC.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -15,7 +13,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* Only the framing is done here; container.c binds it to the codec.
+/* libSoX container format: Ogg, holding Vorbis, Opus or FLAC.
+ *
+ * Only the framing is done here; container.c binds it to the codec.
  *
  * An Ogg stream is pages of packets, and the logical streams it multiplexes
  * each begin with a page marked as the first, whose first packet names the
@@ -23,9 +23,9 @@
  * SoX has is read and the others are skipped.  Streams may be chained one
  * after another, each group beginning where the last has ended; the stream
  * read goes on into one in each group that follows, which must be in its
- * codec, at its rate and with its channels.  The
- * header packets each codec opens with are turned into the private data it
- * takes in Matroska, and back when writing.
+ * codec, at its rate and with its channels.  The header packets each codec
+ * opens with are turned into the private data it takes in Matroska, and back
+ * when writing.
  *
  * A page's granule position is where in the stream, in frames, its last
  * packet ends.  The frames each packet decodes to come from the codec, and
@@ -232,7 +232,7 @@ static int next_page(sox_format_t * ft, priv_t * p)
 }
 
 /* The streams that begin together each start with a page of their own,
- * page and those after it; of them, the first in the codec wanted is
+ * read from page on; of them, the first in the codec wanted is
  * chosen, or failing that the first in a codec SoX has. */
 static int select_stream(sox_format_t * ft, priv_t * p, ogg_page * page, off_t start,
     char const * wanted, lsx_codec_tag_t const * * tag)
@@ -742,7 +742,7 @@ static int length(sox_format_t * ft, void * v, lsx_codec_t * codec, sox_uint64_t
   return status == SOX_SUCCESS? go_to(ft, p, codec, &p->links[0], 0) : SOX_EOF;
 }
 
-/* Seeking is on a file only, whose chained streams length has found. */
+/* Seeking is on a file only, whose chained streams length() has found. */
 static int seek(sox_format_t * ft, void * v, lsx_codec_t * codec, sox_uint64_t frame)
 {
   priv_t * p = v;

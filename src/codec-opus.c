@@ -1,6 +1,4 @@
-/* libSoX packet codec: Opus, through libopus.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -15,7 +13,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* The private data is the identification header of RFC 7845, OpusHead:
+/* libSoX packet codec: Opus, through libopus.
+ *
+ * The private data is the identification header of RFC 7845, OpusHead:
  * channel count, pre-skip, output gain and channel mapping.  Opus codes at
  * 48 kHz whatever the rate of its input, so it decodes at 48 kHz, and encodes
  * only a 48 kHz signal, which SoX resamples to as it would for any format

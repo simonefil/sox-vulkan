@@ -1,6 +1,4 @@
 /*
- * libsndio sound handler
- *
  * Copyright (c) 2009 Alexandre Ratchov <alex@caoua.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -14,6 +12,10 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+/*
+ * libsndio sound handler
  */
 #include "sox_i.h"
 #include <string.h>
@@ -29,11 +31,8 @@ struct sndio_priv {
 /*
  * convert ``count'' samples from sox encoding to sndio encoding
  *
- * The shift below is how a 32-bit sample became a ``bits''-bit one, and it
- * still is; what changed is that a sample is no longer that 32-bit integer, so
- * it has to be made into one first.  For a sample the old pipeline could carry
- * the two spellings agree exactly, and the conversion adds the clipping the
- * reader used to do.
+ * Each sample is first made a 32-bit integer, clipping and counting in
+ * *clips, and the shift below then takes it down to ``bits'' bits.
  */
 static void encode(struct sio_par *par,
     sox_sample_t const *idata, unsigned char *odata, unsigned count,

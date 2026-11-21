@@ -1,7 +1,4 @@
-/* Implements a libSoX internal interface for use in implementing file formats.
- * All public functions & data are prefixed with lsx_ .
- *
- * (c) 2005-8 Chris Bagwell and SoX contributors
+/* (c) 2005-8 Chris Bagwell and SoX contributors
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -16,6 +13,10 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this library; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ */
+
+/* Implements a libSoX internal interface for use in implementing file formats.
+ * All public functions & data are prefixed with lsx_ .
  */
 
 #include "sox_i.h"
@@ -96,10 +97,9 @@ int lsx_check_read_params(sox_format_t * ft, unsigned channels,
  * Where a pipe cannot be rewound after format auto-detection, the bytes it
  * consumed were kept in ft->read_replay_buffer; they are handed back here
  * before anything more is read from the file, so a handler sees the stream
- * from its start regardless.  The buffer is used up once and never refilled,
- * so this costs one comparison per call thereafter.  A request that spans the
- * end of the replay is served from both, which is why the two reads add into
- * the same count rather than returning separately.
+ * from its start regardless.  The buffer is used up once and never refilled.
+ * A request that spans the end of the replay is served from both, into the
+ * same count.
  */
 size_t lsx_readbuf(sox_format_t * ft, void *buf, size_t len)
 {
@@ -199,13 +199,12 @@ void lsx_clearerr(sox_format_t * ft)
   ft->sox_errno = 0;
 }
 
-/* Put one byte back.  While the replay buffer is being read the byte belongs
- * in it, not in the file's own pushback: ungetc would place it in front of
- * the file, which is behind the replay bytes still to come, and it would
- * surface in the wrong order.  Writing into the buffer also means an
- * unlimited number of bytes can be put back there, whereas ungetc guarantees
- * only one.  Once the replay is spent, or before it has begun, ungetc is
- * correct and is what is used. */
+/* Put one byte back.  While the replay buffer is being read the byte goes
+ * back into it: ungetc would place it in front of the file, which is behind
+ * the replay bytes still to come, and it would surface in the wrong order.
+ * The buffer also takes back as many bytes as have been read from it,
+ * whereas ungetc guarantees only one.  Once the replay is spent, or before it
+ * has begun, ungetc is used. */
 int lsx_unreadb(sox_format_t * ft, unsigned b)
 {
   if (ft->read_replay_pos < ft->read_replay_size && ft->read_replay_pos > 0) {
@@ -228,10 +227,10 @@ int lsx_seeki(sox_format_t * ft, off_t offset, int whence)
     if (ft->seekable == 0) {
         /* If a stream peel off chars else EPERM */
         if (whence == SEEK_CUR) {
-            /* Discarded through lsx_readb rather than getc so that the
-             * replay buffer is consumed too; going straight to the FILE
-             * would skip bytes the handler has not been given yet, and
-             * would leave tell_off disagreeing with the position. */
+            /* Discarded through lsx_readb so that the replay buffer is
+             * consumed too and tell_off follows the position; reading the
+             * FILE directly would skip bytes the handler has not been given
+             * yet. */
             while (offset > 0 && !lsx_eof(ft)) {
                 unsigned char byte;
 

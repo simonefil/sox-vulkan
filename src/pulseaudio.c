@@ -1,7 +1,7 @@
-/* Pulse Audio sound handler
- *
- * Copyright 2008 Chris Bagwell And Sundry Contributors
+/* Copyright 2008 Chris Bagwell And Sundry Contributors
  */
+
+/* Pulse Audio sound handler */
 
 #include "sox_i.h"
 
@@ -10,7 +10,7 @@
 
 typedef struct {
   pa_simple *pasp;
-  int32_t * buf;    /* The stream carries S32; the pipeline no longer does. */
+  int32_t * buf;    /* The stream carries S32 samples. */
   size_t    buf_len;  /* In samples. */
 } priv_t;
 
@@ -100,11 +100,9 @@ static int stopread(sox_format_t * ft)
   return SOX_SUCCESS;
 }
 
-/* Pulse Audio buffer lengths are true buffer lengths and not count of samples,
- * and the two used to be the same thing said twice: a sample was an int32 and
- * the stream is S32, so the pipeline buffer could go to the device untouched.
- * A sample is a double now, so it goes through the same conversion every other
- * device driver uses, one bufsiz-sized block at a time. */
+/* Pulse Audio buffer lengths are in bytes.  Samples are converted between
+ * the pipeline's doubles and the S32 stream through pa->buf, as in the other
+ * device drivers, one bufsiz-sized block at a time. */
 static size_t read_samples(sox_format_t *ft, sox_sample_t *buf, size_t nsamp)
 {
   priv_t *pa = (priv_t *)ft->priv;

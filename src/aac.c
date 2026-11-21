@@ -1,6 +1,4 @@
-/* AAC elementary stream with ADTS framing.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +15,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* AAC elementary stream with ADTS framing. */
+
 #include "sox_i.h"
 #include "ffmpeg-codec.h"
 
@@ -32,7 +32,7 @@
 /* Room for the largest programme config element worth carrying.  A PCE is
  * variable length -- it grows with the element count and its trailing comment
  * -- but the layouts this handler writes need well under this, and the bound
- * keeps it in the private state rather than on the heap. */
+ * lets it live in the private state. */
 #define AAC_MAX_PCE_SIZE 40
 
 typedef struct {
@@ -77,8 +77,8 @@ static int read_exact(sox_format_t * ft, uint8_t * data, size_t size, sox_bool c
   return 1;
 }
 
-/* Skip size bytes by reading and dropping them.  Seeking is not an option:
- * these streams are commonly read from a pipe. */
+/* Skip size bytes by reading and dropping them, since these streams are
+ * commonly read from a pipe. */
 static int discard_bytes(sox_format_t * ft, size_t size)
 {
   uint8_t buffer[1024];
@@ -97,14 +97,13 @@ static int discard_bytes(sox_format_t * ft, size_t size)
  * metadata tags these files are routinely wrapped in.  Returns 1 on success,
  * 0 at end of stream, SOX_EOF on error.
  *
- * The framing is done here rather than by FFmpeg's ADTS parser so that those
- * tags can be recognised: the parser would resynchronise past them, and a tag
- * body can hold anything, including bytes that look like a frame header.  The
- * loop is what lets any number of tags precede or separate frames.
+ * The framing is done here so that those tags can be recognised: FFmpeg's
+ * ADTS parser would resynchronise past them, and a tag body can hold bytes
+ * that look like a frame header.  The loop lets any number of tags precede or
+ * separate frames.
  *
- * Nothing here resynchronises.  Once past the tags, a byte that is not a
- * frame header is a corrupt file, and saying so beats hunting for the next
- * plausible sync word. */
+ * Nothing here resynchronises: once past the tags, a byte that is not a frame
+ * header is reported as a corrupt file. */
 static int read_adts_packet(sox_format_t * ft, AVPacket * packet)
 {
   /* Big enough for either an ADTS header or an ID3v2 one. */
@@ -131,10 +130,9 @@ static int read_adts_packet(sox_format_t * ft, AVPacket * packet)
         return SOX_EOF;
       }
       /* An ID3v2 size is four synchsafe bytes: seven bits each, so that no
-       * byte of it can be mistaken for a sync word.  The checks above are
-       * what that costs -- version in range, and the high bit clear in each
-       * size byte -- and they also stop a stray "ID3" in the audio from
-       * swallowing the rest of the file. */
+       * byte of it can be mistaken for a sync word.  The checks above
+       * (version in range, high bit clear in each size byte) also stop a
+       * stray "ID3" in the audio from swallowing the rest of the file. */
       payload_size = ((size_t)header[6] << 21) + ((size_t)header[7] << 14) + ((size_t)header[8] << 7) + header[9];
       /* A v2.4 tag may be followed by a 10-byte footer, which the size does
        * not include. */
@@ -184,9 +182,8 @@ static int read_adts_packet(sox_format_t * ft, AVPacket * packet)
   }
 }
 
-/* ADTS names the sample rate by its index in this fixed table rather than
- * carrying the rate itself.  Returns -1 for a rate the table has no slot
- * for, which is a rate ADTS simply cannot express. */
+/* ADTS names the sample rate by its index in this fixed table.  Returns -1
+ * for a rate the table has no slot for, which ADTS cannot express. */
 static int sampling_frequency_index(int rate)
 {
   static int const rates[] = {
@@ -229,9 +226,8 @@ static int align_reader(lsx_bit_reader_t * reader)
   return SOX_SUCCESS;
 }
 
-/* Pad to the next byte boundary with zeros.  Written out bit by bit rather
- * than by moving the cursor, so that the padding is bounds-checked like any
- * other field. */
+/* Pad to the next byte boundary with zeros.  Written out bit by bit so that
+ * the padding is bounds-checked like any other field. */
 static int align_writer(lsx_bit_writer_t * writer)
 {
   while (writer->position & 7)
@@ -246,15 +242,14 @@ static int align_writer(lsx_bit_writer_t * writer)
  * is left just past it, destination holds the element and *destination_size
  * its length in bytes.
  *
- * The PCE is not simply memcpy'd, for two reasons.  It is variable length, so
- * where it ends can only be learned by parsing it: three counts of elements
- * whose descriptors are 5 bits and two whose descriptors are 4, then three
- * optional mixdown fields, then a comment whose length is stated inline.  And
- * it is relocated: inside the config it follows a byte-aligned 16-bit header,
- * whereas in a raw data block it follows the 3-bit element identifier written
- * below.  Its internal byte_alignment() therefore falls at a different bit
- * offset in each, which is why the two cursors are aligned separately rather
- * than the padding being copied along with everything else.
+ * The PCE is copied field by field, for two reasons.  It is variable length,
+ * so where it ends can only be learned by parsing it: four counts of
+ * elements whose descriptors are 5 bits and two whose descriptors are 4, then
+ * three optional mixdown fields, then a comment whose length is stated
+ * inline.  And it is relocated: inside the config it follows a byte-aligned
+ * 16-bit header, whereas in a raw data block it follows the 3-bit element
+ * identifier written below.  Its internal byte_alignment() therefore falls at
+ * a different bit offset in each, so the two cursors are aligned separately.
  *
  * Fields whose values do not matter here are moved through without being
  * interpreted; only the counts and flags that decide what follows are read
@@ -313,8 +308,8 @@ static int extract_pce(lsx_bit_reader_t * reader, uint8_t * destination, size_t 
   if (flag && copy_bits(reader, &writer, 3, NULL) != SOX_SUCCESS)
     return SOX_EOF;
 
-  /* The descriptors themselves, which are just moved across; chunked only
-   * because a single copy_bits carries at most 32 bits. */
+  /* The descriptors themselves, moved across in chunks because a single
+   * copy_bits carries at most 32 bits. */
   count = five_bit_elements * 5 + four_bit_elements * 4;
   while (count) {
     unsigned chunk = (unsigned)min(count, 16U);
@@ -343,11 +338,10 @@ static int extract_pce(lsx_bit_reader_t * reader, uint8_t * destination, size_t 
  * first packet, because the config is only final after the encoder is open.
  *
  * ADTS carries strictly less than the config does, so anything the header has
- * no room for is refused rather than written as something else: only object
- * types 1 to 4 have a two-bit spelling, the rate must be one the index table
- * names and must agree with what the header will claim, and the 960-sample
- * frame length, core coder dependency and extension flags have nowhere to go
- * at all. */
+ * no room for is refused: only object types 1 to 4 have a two-bit spelling,
+ * the rate must be one the index table names and must agree with what the
+ * header will claim, and the 960-sample frame length, core coder dependency
+ * and extension flags have no ADTS field. */
 static int configure_adts(sox_format_t * ft, AVCodecContext const * context, priv_t * p)
 {
   lsx_bit_reader_t reader;
@@ -401,9 +395,9 @@ static int configure_adts(sox_format_t * ft, AVCodecContext const * context, pri
 }
 
 /* Write one encoded frame with an ADTS header in front, and the PCE too if
- * this is the first frame.  The header is assembled by hand rather than
- * through FFmpeg's ADTS bitstream filter, because that filter has no way to
- * insert the PCE, which has to sit between the header and the payload. */
+ * this is the first frame.  The header is assembled by hand because FFmpeg's
+ * ADTS bitstream filter has no way to insert the PCE, which has to sit
+ * between the header and the payload. */
 static int write_adts_packet(sox_format_t * ft, AVCodecContext const * context, AVPacket const * packet)
 {
   priv_t * p = (priv_t *)ft->priv;
@@ -421,9 +415,9 @@ static int write_adts_packet(sox_format_t * ft, AVCodecContext const * context, 
   }
 
   /* Sync word, then MPEG-4, layer 0 and no CRC in 0xf1.  The object type is
-   * stored biased by one, and the sample rate index, private bit and channel
-   * configuration straddle bytes 2 and 3, as does the 13-bit frame length
-   * across bytes 3 to 5.  The trailing 0x1f and 0xfc set the buffer
+   * stored biased by one, followed in byte 2 by the sample rate index and
+   * private bit; the channel configuration straddles bytes 2 and 3, and the
+   * 13-bit frame length bytes 3 to 5.  The trailing 0x1f and 0xfc set the buffer
    * fullness to its "variable rate" value of all ones and declare one raw
    * data block in this frame. */
   header[0] = 0xff;

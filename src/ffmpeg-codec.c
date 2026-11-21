@@ -1,6 +1,4 @@
-/* Common libavcodec adapter for SoX format handlers.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Common libavcodec adapter for SoX format handlers. */
 
 #include "sox_i.h"
 #include "ffmpeg-codec.h"
@@ -139,9 +139,9 @@ static int fail_av(sox_format_t * ft, int sox_error, char const * operation, int
   return SOX_EOF;
 }
 
-/* Options SoX derives from the signal and encoding it was given.  Letting
- * --ffmpeg-opts set them too would silently disagree with what SoX has told
- * the rest of the chain, so they are refused rather than overridden. */
+/* Options SoX derives from the signal and encoding it was given.  Setting
+ * them through --ffmpeg-opts would disagree with what SoX has told the rest
+ * of the chain, so they are refused. */
 static sox_bool is_reserved_codec_option(char const * key)
 {
   static char const * const reserved[] = {
@@ -163,8 +163,7 @@ static sox_bool is_reserved_codec_option(char const * key)
 
 /* Open state->context, applying --ffmpeg-opts on the way in.  avcodec_open2
  * consumes the options it recognises and leaves the rest in the dictionary,
- * so anything still there afterwards is a user typo worth failing on rather
- * than ignoring silently. */
+ * so anything still there afterwards is reported as an unknown option. */
 static int open_codec(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool encoding)
 {
   AVDictionary * options = NULL;
@@ -597,8 +596,7 @@ static void map_decoded_channels(lsx_ffmpeg_codec_t * state, AVChannelLayout con
 
 /* Check a freshly decoded frame against what the handler supports and against
  * the first frame, then latch its rate and channel count.  SoX fixes both for
- * the whole file at startread time, so a mid-stream change cannot be honoured
- * and is refused instead of being silently misinterpreted. */
+ * the whole file at startread time, so a mid-stream change is refused. */
 static int validate_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   AVChannelLayout const * layout = &state->frame->ch_layout;
@@ -644,8 +642,7 @@ static int validate_decoded_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 }
 
 /* Warn once for the formats that carry an object or spatial layer on top of a
- * channel bed.  FFmpeg decodes the bed only, which is a correct result but
- * not the whole file, so say so rather than let it pass for the full mix.
+ * channel bed: FFmpeg decodes the bed only, which is not the full mix.
  * Deferred until after the first frame, since the profile is not reliably
  * known before then. */
 static void warn_ignored_metadata(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
@@ -677,14 +674,12 @@ static void const * decoded_sample_address(AVFrame const * frame, int sample, in
 }
 
 /* Convert one decoded sample to SoX's normalised scale.  The integer formats
- * go through the sox.h macros and are exact.  S64 used to throw away its low
- * thirty-two bits, because a sample had no room for them; a double has room
- * for fifty-three, so the shift is gone.  The float formats already speak the
- * scale the pipeline now uses, so they pass through untouched -- values past
- * full scale included, which is why nothing here counts a clip: on the way in
- * there is nothing to clip against (decisione D3).
+ * up to S32 go through the sox.h macros and are exact; S64 is scaled by 2^63
+ * directly and keeps the fifty-three bits a double holds.  The float formats
+ * are already on the pipeline's scale and pass through untouched, values past
+ * full scale included: on the way in there is nothing to clip against.
  * Unsupported formats are filtered out beforehand by supported_sample_format;
- * the default arm exists only to keep the switch total. */
+ * the default arm keeps the switch total. */
 static sox_sample_t decoded_sample_to_sox(
     AVFrame const * frame,
     int sample,
@@ -817,10 +812,9 @@ static int read_parsed_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
         return fail_av(ft, SOX_EHDR, "Unable to parse compressed audio", consumed);
       state->input_offset += (size_t)consumed;
       /* A parse that consumes nothing and emits nothing is retried once and
-       * then treated as fatal.  Without the guard the loop would call the
-       * parser forever on the same bytes: the buffer is only refilled once
-       * it has been fully consumed, so nothing about the next call would
-       * differ.  Failing here turns that hang into an error. */
+       * then treated as fatal: the buffer is only refilled once it has been
+       * fully consumed, so further calls on the same bytes would loop
+       * forever. */
       if (consumed == 0 && packet_size == 0) {
         if (!state->parser_zero_progress) {
           state->parser_zero_progress = sox_true;
@@ -885,8 +879,8 @@ static int send_packet(sox_format_t * ft, lsx_ffmpeg_codec_t * state, AVPacket *
  * The order is receive-then-send, as the API requires: the decoder is asked
  * for output first and only fed when it wants more, and end of input is
  * signalled by sending a NULL packet exactly once.  A decoder that asks for
- * more input after that flush is treated as an error rather than retried,
- * since it would leave the loop spinning. */
+ * more input after that flush is treated as an error, since retrying would
+ * leave the loop spinning. */
 static int decode_next_frame(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
   for (;;) {
@@ -948,7 +942,7 @@ int lsx_ffmpeg_codec_startread(
   ft->signal.channels = p->decoded_channels;
   ft->signal.precision = definition->precision ? definition->precision : (unsigned)p->context->bits_per_raw_sample;
   /* None of these streams carry a reliable sample count in their header, so
-   * the length stays unknown rather than being guessed from the file size. */
+   * the length stays unknown. */
   if (ft->signal.length == SOX_IGNORE_LENGTH)
     ft->signal.length = SOX_UNSPEC;
   ft->encoding.encoding = definition->encoding;
@@ -1183,10 +1177,10 @@ static int choose_sample_format(
   return SOX_EOF;
 }
 
-/* Turn -C into whatever quality knob this codec actually has.  For the
- * lossless codecs that is an integer compression level, passed through as
- * given; for the lossy ones it is a bit rate in kbit/s, so the value is
- * scaled to bit/s and range-checked.  -C absent is HUGE_VAL, which selects
+/* Turn -C into whatever quality knob this codec actually has.  For a
+ * definition with use_compression_level that is an integer compression level,
+ * range-checked and passed through; otherwise it is a bit rate in kbit/s, so
+ * the value is scaled to bit/s and range-checked.  -C absent is HUGE_VAL, which selects
  * the definition's default. */
 static int set_encoder_bit_rate(sox_format_t * ft, lsx_ffmpeg_codec_t * state)
 {
@@ -1253,12 +1247,12 @@ static void * encoded_sample_address(AVFrame * frame, int sample, int channel)
 }
 
 /* Store one sox sample into the encoder's input frame in its own PCM format.
- * This is a writer, so it is where clipping belongs (decisione D3): a sample
- * can now sit past full scale, and every arm has to bring it back and say so.
- * The narrowing integer cases go through the sox.h macros, which round to
- * nearest and count the clip; S64 is spelled out because there is no macro for
- * a width the pipeline cannot represent exactly anyway.  Formats outside this
- * set are never selected by choose_sample_format. */
+ * This is a writer, so it is where clipping belongs: a sample can sit past
+ * full scale, and the integer arms bring it back and count the clip in
+ * ft->clips, while the float arms pass it through.  The narrowing integer
+ * cases go through the sox.h macros, which round to nearest and count the
+ * clip; S64 is spelled out because sox.h has no macro for it.  Formats outside
+ * this set are never selected by choose_sample_format. */
 static void sox_sample_to_encoded(sox_format_t * ft, AVFrame * frame, int sample, int channel, sox_sample_t value)
 {
   enum AVSampleFormat format = av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
@@ -1279,7 +1273,7 @@ static void sox_sample_to_encoded(sox_format_t * ft, AVFrame * frame, int sample
       double scaled = floor(value * 9223372036854775808. + .5);
 
       /* INT64_MAX has no double image; compare against 2^63 and hand back the
-       * integer, rather than converting a double that is out of range. */
+       * integer, since converting an out-of-range double is undefined. */
       if (scaled >= 9223372036854775808.) {
         ++ft->clips;
         *(int64_t *)destination = INT64_MAX;
@@ -1302,10 +1296,10 @@ static void sox_sample_to_encoded(sox_format_t * ft, AVFrame * frame, int sample
 }
 
 /* Drain every packet the encoder currently has and write it out, through the
- * definition's packet writer if it has one.  EAGAIN means the encoder simply
- * wants more input, which is the normal way out mid-stream; during the final
- * flush it must not happen, since a flushed encoder is required to answer
- * with packets until AVERROR_EOF, so there it is an error.  The packet is
+ * definition's packet writer if it has one.  EAGAIN means the encoder wants
+ * more input, which is the normal way out mid-stream; during the final flush
+ * it must not happen, since a flushed encoder is required to answer with
+ * packets until AVERROR_EOF, so there it is an error.  The packet is
  * unreffed on every path, including the failing one. */
 static int write_available_packets(sox_format_t * ft, lsx_ffmpeg_codec_t * state, sox_bool flushing)
 {
@@ -1336,8 +1330,7 @@ static int write_available_packets(sox_format_t * ft, lsx_ffmpeg_codec_t * state
 
 /* Convert the buffered sox samples into the encoder's frame and submit it.
  * samples_per_channel is normally the codec's frame size and is smaller only
- * for a final partial frame, which is why it is a parameter rather than read
- * from the state.
+ * for a final partial frame.
  *
  * The frame is reused across calls, so it has to be made writable again each
  * time -- the encoder may still hold a reference to the buffers it was given

@@ -1,7 +1,4 @@
-/* libSoX packet codecs backed by libavcodec: AAC, xHE-AAC, ALAC, AC-3,
- * E-AC-3, DTS, MLP and TrueHD.
- *
- * This library is free software; you can redistribute it and/or modify it
+/* This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or (at
  * your option) any later version.
@@ -16,7 +13,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* The definitions below say what each codec is to the libavcodec adapter,
+/* libSoX packet codecs backed by libavcodec: AAC, xHE-AAC, ALAC, AC-3,
+ * E-AC-3, DTS, MLP and TrueHD.
+ *
+ * The definitions below say what each codec is to the libavcodec adapter,
  * and serve both the elementary stream handlers (aac.c, ac3.c and the rest)
  * and the containers, through the packet codecs at the end of this file.
  * Only libavcodec is used: the containers frame the packets themselves.
@@ -64,8 +64,8 @@ static int prepare_experimental_encoder(AVCodecContext * context)
   return 0;
 }
 
-/* Apple's channel layouts, which differ from SoX's canonical ones above four
- * channels: 4.0 rather than quad, 6.1 back rather than 6.1, and 7.1 wide back
+/* Apple's channel layouts, which differ from SoX's canonical ones at four,
+ * seven and eight channels: 4.0 rather than quad, 6.1 back rather than 6.1, and 7.1 wide back
  * rather than 7.1.  A file written with the canonical layouts would be read
  * by Apple software with its channels in the wrong places. */
 static int select_alac_layout(unsigned channels, AVChannelLayout * layout)
@@ -139,8 +139,8 @@ static int check_lossless_depth(sox_format_t * ft, lsx_ffmpeg_codec_definition_t
   return SOX_SUCCESS;
 }
 
-/* -C is rejected rather than ignored: for MLP and TrueHD it would mean
- * nothing, and silently dropping it would look like it had taken effect. */
+/* -C is rejected: for MLP and TrueHD it has no meaning, and ignoring it
+ * would look like it had taken effect. */
 static int check_mlp_encoder(sox_format_t * ft, lsx_ffmpeg_codec_definition_t const * definition)
 {
   if (check_lossless_depth(ft, definition) != SOX_SUCCESS)

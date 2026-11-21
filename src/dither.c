@@ -267,37 +267,24 @@ typedef struct {
   sdm_t         *sdm;
 } priv_t;
 
-/* The output grid, in the units a sample now has.
- *
- * A sample used to be an integer whose low 32-prec bits were exactly the ones
- * the target format could not carry, so quantising to the grid was a shift and
- * asking whether a sample already sat on the grid was a mask.  Neither has a
- * counterpart in a double, and both questions have to be put as arithmetic:
- * how many steps of size 2^-(prec-1) is this sample, and is that a whole
- * number.
- *
- * DITHER_HALF_STEP is what (1 << (31 - prec)) meant: half an output step. */
+/* The output grid: steps of 2^-(prec-1) in sample units.  A sample is on the
+ * grid when its step count is a whole number; DITHER_HALF_STEP is half an
+ * output step. */
 #define DITHER_SCALE(prec)     ((double)(1ull << ((prec) - 1)))
 #define DITHER_HALF_STEP(prec) (0.5 / DITHER_SCALE(prec))
 #define DITHER_OFF_GRID(sample, prec) \
   ((sample) * DITHER_SCALE(prec) != floor((sample) * DITHER_SCALE(prec)))
 
-/* The noise, likewise: RANQD1 >> prec was half an output step written as an
- * integer in the old sample units, so here it becomes that same fraction. */
+/* An integer in 32-bit sample units as a fraction of full scale; applied to
+ * RANQD1 >> prec it gives up to half an output step of noise. */
 #define DITHER_NOISE(r) ((double)(r) / 2147483648.)
 
-/* Rounding to the output grid, bounded.
- *
- * The reader does not clip any more, so the sample arriving here is whatever a
- * float file happened to hold, and `d' -- the sample scaled by 2^(prec-1) --
- * with it.  Converting a double that lies outside the range of `int' is
- * undefined: arm64 saturates and gets the right answer by luck, x86-64 yields
- * INT_MIN, which would send a positive overload down the negative branch below
- * and write a full-scale click of the wrong sign.
- *
- * Bounding `d' one step past each limit leaves every in-range value exactly as
- * it was and lets the two tests at the call site decide, as they always did.
- * `prec' is at most 24 (see start()), so both bounds fit an int comfortably. */
+/* Round `d' (the sample scaled by 2^(prec-1)) to the output grid, bounded one
+ * step past each limit.  Input is unclipped, and converting an out-of-range
+ * double to int is undefined: x86-64 yields INT_MIN, which would turn a
+ * positive overload into a full-scale click of the wrong sign.  In-range
+ * values are unchanged and the call site's clip tests still decide.  `prec'
+ * is at most 24 (see start()), so both bounds fit an int. */
 static int dither_round(double d, size_t prec)
 {
   double lo = -DITHER_SCALE(prec) - 1, hi = DITHER_SCALE(prec);

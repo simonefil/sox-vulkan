@@ -19,17 +19,10 @@
 #include <ctype.h>
 #include <string.h>
 
-/* The bit pattern a sample would have had, back when a sample was an integer.
- *
- * `stats` reports how many bits of the file are really in use, and it worked
- * that out by ORing the samples together and counting the trailing zeros.
- * That is a question about the representation, not about the sound, and the
- * representation is gone -- so the pattern has to be rebuilt: a sample sitting
- * on the 2^-31 grid is exactly the integer it used to be.
- *
- * Material finer than that grid -- float input, or an effect's full-precision
- * output, which is now most of what reaches here -- rounds at this point and
- * reports 32.  That is the honest answer: no integer format would hold it. */
+/* A sample as a 32-bit integer on the 2^-31 grid, for the bit-depth report,
+ * which ORs the samples and counts the trailing zeros.  Material finer than
+ * the grid (float input, full-precision effect output) rounds here and
+ * reports 32 bits. */
 #define STATS_SAMPLE_BITS(d) \
   ((int32_t)llround(fmax(-2147483648., fmin(2147483647., (d) * 2147483648.))))
 
@@ -155,8 +148,8 @@ static void output(priv_t const * p, double x)
     unsigned mult = 1 << (p->scale_bits - 1);
     int i;
     x = floor(x * mult + .5);
-    /* The reader does not clip, so x can be anywhere; bound it at both ends
-     * before the conversion, which is undefined outside the range of `int'. */
+    /* The reader does not clip: bound x before the conversion, undefined
+     * outside the range of `int'. */
     i = min(max(x, -(double)mult), mult - 1.);
     if (p->hex_bits)
       if (x < 0) {

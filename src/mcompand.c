@@ -263,8 +263,7 @@ static int start(sox_effect_t * effp)
 
 static void doVolume(double *v, double samp, comp_band_t * l, size_t chan)
 {
-  /* The sample already is the normalised value this used to divide for.  The
-   * old divisor, ~(1<<31), was 0x7fffffff spelled the long way round. */
+  /* samp is already normalised to [-1, 1]. */
   double delta = samp - *v;
 
   if (delta > 0.0) /* increase volume according to attack rate */

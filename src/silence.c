@@ -276,16 +276,10 @@ static sox_bool aboveThreshold(sox_effect_t const * effp,
     sox_sample_t value /* >= 0 */, double threshold, int unit)
 {
   /* When scaling low bit data, noise values got scaled way up.
-   * Only consider the original bits when looking for silence.
-   *
-   * The old spelling masked off the bits below the input's precision, which
-   * worked because a sample was an integer whose low bits were exactly the
-   * ones the file did not have.  A double has no such bits to mask, so the
-   * same idea has to be said as arithmetic: quantise down to the precision the
-   * file actually carried, discarding the fraction as the mask did.
-   *
-   * The precision is clamped because a float input reports 24 or more and a
-   * scale of 2^53 would take the product past what the fraction can hold. */
+   * Only consider the original bits when looking for silence: quantise down
+   * to the precision the file carried.  The precision is clamped to 32
+   * because a float input reports 24 or more, and a scale of 2^53 would take
+   * the product past what the fraction can hold. */
   unsigned prec = effp->in_signal.precision;
   double scale, scaled_value;
 

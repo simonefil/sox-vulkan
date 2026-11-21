@@ -1722,7 +1722,18 @@ sdm_t *sdm_init(const char *filter_name,
   p->threads = threads;
   p->filter = sdm_find_filter(filter_name, freq);
   if (!p->filter) {
-    lsx_fail("invalid filter name `%s'", filter_name);
+    unsigned lowest = 0;
+
+    for (i = 0; i < array_length(sdm_filters); i++)
+      if (!filter_name || !strcmp(filter_name, sdm_filters[i].name))
+        if (!lowest || sdm_filters[i].freq < lowest)
+          lowest = sdm_filters[i].freq;
+    if (!lowest)
+      lsx_fail("invalid filter name `%s'", filter_name);
+    else if (!filter_name)
+      lsx_fail("no filter for 1-bit output at %u Hz; the lowest rate is %u Hz", freq, lowest);
+    else
+      lsx_fail("filter `%s' needs at least %u Hz, not %u Hz", filter_name, lowest, freq);
     aligned_free(p);
     return NULL;
   }

@@ -34,10 +34,9 @@
  *   1 packed         -- in: DSD words, channel major, 32 frames per word.
  *   2 output_samples -- out: interleaved output frames, pairs.
  *
- * Push constants (parameters_t, 56 bytes): output_frames, decimation, taps,
- * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
- * normalize, reserved, and the domain factor as the pair scale_high,
- * scale_low.
+ * Push constants (parameters_t, 48 bytes): output_frames, decimation, taps,
+ * channels, words_per_channel, frame_offset, lead_frames, valid_frames, and
+ * the output's factor as the pair scale_high, scale_low.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
  * and y one invocation per channel, hence both bounds tests.
@@ -71,14 +70,9 @@ layout(push_constant) uniform Parameters {
   uint frame_offset;
   uint lead_frames;
   uint valid_frames;
-  uint normalize;
-  uint reserved;
   double scale_high;
   double scale_low;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
-
 
 /* Accumulation for this stage, cheaper than the general pair addition.
  *
@@ -148,11 +142,7 @@ void main()
     tap += run;
     frame += run;
   }
-  if (parameters.normalize != 0u)
-    sum = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
-  /* The domain factor, applied to the pair before collapsing: one rounding
-   * instead of two, which keeps this profile's accuracy on a scaled-sample
-   * build. */
+  /* The output's factor, applied to the pair before collapsing. */
   sum = multiply_dd(sum, dvec2(parameters.scale_high, parameters.scale_low));
   output_samples.values[output_frame * parameters.channels + channel] = sum;
 }

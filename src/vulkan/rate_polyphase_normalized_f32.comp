@@ -22,18 +22,13 @@
  * output.  The host selects it when an FP64 stage feeds a consumer that
  * wants normalized FP32 samples; the FP64 shader's output is typed double.
  *
- * As in rate_select_*.comp, the host sets normalize only when the consumer
- * wants normalized output and the build's samples are not already
- * normalized, so SOX_SAMPLE_SCALE is never applied twice.
- *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:
  *   0 coefficients    -- in: the response, tap major, phase minor, FP64.
  *   1 input_samples   -- in: interleaved input frames, FP64.
  *   2 output_samples  -- out: interleaved output frames, FP32 and normalized.
  *
- * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize (whether to scale),
- * symmetric_presum.  The counter's quotient by phase_count is the input frame
+ * Push constants (parameters_t, 28 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, symmetric_presum.  The counter's quotient by phase_count is the input frame
  * and its remainder the sub-filter; see the FP64 shader.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
@@ -64,11 +59,8 @@ layout(push_constant) uniform Parameters {
   uint phase_start;
   uint taps;
   uint channels;
-  uint normalize;
   uint symmetric_presum;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -108,6 +100,5 @@ void main()
           input_samples[
               (input_base + tap) *
               parameters.channels + channel];
-  double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
-  output_samples[output_frame * parameters.channels + channel] = float(sum * scale);
+  output_samples[output_frame * parameters.channels + channel] = float(sum);
 }

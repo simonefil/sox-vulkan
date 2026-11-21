@@ -2767,8 +2767,8 @@ static int process_vulkan_resident_chain(sox_effect_t *effp, lsx_vulkan_resident
  * at the new input. Input is never accepted while output is waiting, so the
  * plan's held blocks cannot accumulate.
  *
- * Normalization is fixed by the first call: the stages were built for one
- * scaling, and switching would mix two in one stream. */
+ * Normalization is fixed by the first call: the stages publish one output
+ * form, and switching would mix two in one stream. */
 static int flow_vulkan_resident_input_mode(sox_effect_t *effp, lsx_vulkan_resident_buffer_t const *input, sox_bool normalize_output, sox_bool *input_consumed, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   priv_t *p;

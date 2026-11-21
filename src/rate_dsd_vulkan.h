@@ -95,13 +95,12 @@ int lsx_rate_dsd_vulkan_process(
     size_t available_words, sox_bool flush, double const **output,
     size_t *output_frames, size_t *consumed_words);
 
-/* The same, publishing the result as a resident buffer instead of waiting.
- * normalize scales the output to +/-1 rather than SoX's sample range. */
+/* The same, publishing the result as a resident buffer instead of waiting. */
 int lsx_rate_dsd_vulkan_process_resident(
     lsx_rate_dsd_vulkan_t *context, uint32_t const *const *words,
     size_t available_words, sox_bool flush, size_t *output_frames,
     size_t *consumed_words, sox_rate_t rate,
-    lsx_vulkan_resident_state_t state, sox_bool normalize,
+    lsx_vulkan_resident_state_t state,
     lsx_vulkan_resident_buffer_t *resident);
 
 #endif

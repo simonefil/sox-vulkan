@@ -18,9 +18,8 @@
  */
 
 /* The precise profile's member of the select family; rate_select_f64.comp
- * carries the family's rationale.  Samples are double-single pairs, so
- * normalisation uses multiply_double_single: 1/2147483647 is not
- * representable in FP32, and the pair keeps what that rounding loses.
+ * carries the family's rationale.  Samples are double-single pairs, and both
+ * words are copied unchanged.
  *
  * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
  * them:
@@ -28,8 +27,8 @@
  *                        as fir_partition_precise_f32.comp emitted them.
  *   1 output_samples  -- out: the decimated block, interleaved, still pairs.
  *
- * Push constants (select_parameters_t, 24 bytes): output_frames,
- * first_input_frame, input_step, input_channel_stride, channels and normalize.
+ * Push constants (select_parameters_t, 20 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride and channels.
  * The strides count vec2 elements.
  *
  * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
@@ -54,27 +53,7 @@ layout(push_constant) uniform Parameters {
   uint input_step;
   uint input_channel_stride;
   uint channels;
-  uint normalize;
 } parameters;
-
-const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
-
-/* Scale a double-single pair by a plain float, carrying the low word.
- *
- * fma(value.x, scale, -product) is exactly what the high product lost to
- * rounding; adding value.y * scale gives the residual, and the last two steps
- * renormalise.  The `precise` locals are what keep a reassociating compiler
- * from deleting terms that are algebraically zero -- see double_double.glsl,
- * which states the same rules for the FP64 pairs. */
-vec2 multiply_double_single(vec2 value, float scale)
-{
-  precise float product = value.x * scale;
-  precise float residual = fma(value.x, scale, -product) + value.y * scale;
-  precise float high = product + residual;
-  precise float low = residual - (high - product);
-
-  return vec2(high, low);
-}
 
 void main()
 {
@@ -85,9 +64,6 @@ void main()
     return;
 
   const uint input_frame = parameters.first_input_frame + output_frame * parameters.input_step;
-  vec2 value = input_samples.values[channel * parameters.input_channel_stride + input_frame];
-
-  if (parameters.normalize != 0u)
-    value = multiply_double_single(value, SOX_SAMPLE_SCALE);
-  output_samples.values[output_frame * parameters.channels + channel] = value;
+  output_samples.values[output_frame * parameters.channels + channel] =
+      input_samples.values[channel * parameters.input_channel_stride + input_frame];
 }

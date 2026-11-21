@@ -29,7 +29,7 @@
  *   1 input_samples   -- in: interleaved input frames.
  *   2 output_samples  -- out: interleaved output frames.
  *
- * Push constants (parameters_t, 32 bytes):
+ * Push constants (parameters_t, 28 bytes):
  *   output_frames     frames to produce, worked out by the host.
  *   phase_count       phases in the response; the counter's divisor.
  *   phase_step        counter increment per output frame.
@@ -37,7 +37,6 @@
  *                     across calls.
  *   taps              taps per phase.
  *   channels          channels, and the interleaved frame stride.
- *   normalize         scale SoX's integer sample domain to unity.
  *   symmetric_presum  use the symmetric form below.
  *
  * One counter carries both coordinates: its quotient by phase_count is the
@@ -78,11 +77,8 @@ layout(push_constant) uniform Parameters {
   uint phase_start;
   uint taps;
   uint channels;
-  uint normalize;
   uint symmetric_presum;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -94,7 +90,6 @@ void main()
   uint position = parameters.phase_start + output_frame * parameters.phase_step;
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
-  double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   double sum = 0.0;
   /* The symmetric form: a linear-phase response has coefficient[tap] equal to
    * coefficient[taps - 1 - tap], so the mirrored input pair is added before
@@ -123,5 +118,5 @@ void main()
           input_samples[
               (input_base + tap) *
               parameters.channels + channel];
-  output_samples[output_frame * parameters.channels + channel] = sum * scale;
+  output_samples[output_frame * parameters.channels + channel] = sum;
 }

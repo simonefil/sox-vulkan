@@ -92,9 +92,8 @@ size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context);
 int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, double const **output, size_t *output_frames);
 
 /* Process one block of host samples and publish the result as a resident
- * buffer.  normalize asks for output scaled to +/-1 rather than in SoX's
- * sample range, for a consumer that wants it that way; the resident domain
- * field records which was produced. */
+ * buffer.  normalize marks the output for a consumer that asks for
+ * normalized samples; the resident domain field records it. */
 int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *input, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident);
 
 /*

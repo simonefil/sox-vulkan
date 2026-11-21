@@ -59,10 +59,9 @@ typedef struct {
   uint32_t input_step;
   uint32_t input_channel_stride;
   uint32_t channels;
-  uint32_t normalize;
 } select_parameters_t;
 
-lsx_static_assert(sizeof(select_parameters_t) == 24, vulkan_rate_select_push_layout);
+lsx_static_assert(sizeof(select_parameters_t) == 20, vulkan_rate_select_push_layout);
 
 typedef struct {
   uint32_t block_frames;
@@ -786,7 +785,6 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
   parameters.input_step = context->down_factor;
   parameters.input_channel_stride = (uint32_t)filtered->channel_stride_elements;
   parameters.channels = context->channels;
-  parameters.normalize = normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   context->decimation_phase =
       (context->decimation_phase +
       (uint32_t)(available % context->down_factor)) %

@@ -18,17 +18,15 @@
 
 /* The reference profile's member of the select family; rate_select_f64.comp
  * carries the family's rationale.  Every sample is a double-double pair, and
- * the normalisation goes through multiply_dd_scalar: 1/2147483647 is not
- * representable, and the pair keeps the product's residual instead of a
- * plain FP64 rounding.
+ * both words are copied unchanged.
  *
  * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
  * them:
  *   0 input_samples   -- in: the filtered block, planar.
  *   1 output_samples  -- out: the decimated block, interleaved.
  *
- * Push constants (select_parameters_t, 24 bytes): output_frames,
- * first_input_frame, input_step, input_channel_stride, channels and normalize.
+ * Push constants (select_parameters_t, 20 bytes): output_frames,
+ * first_input_frame, input_step, input_channel_stride and channels.
  * first_input_frame and input_step together carry the decimation phase
  * across block boundaries.
  *
@@ -38,8 +36,6 @@
 
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
-
-#include "double_double.glsl"
 
 layout(local_size_x = 128) in;
 
@@ -57,10 +53,7 @@ layout(push_constant) uniform Parameters {
   uint input_step;
   uint input_channel_stride;
   uint channels;
-  uint normalize;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -71,9 +64,6 @@ void main()
     return;
 
   const uint input_frame = parameters.first_input_frame + output_frame * parameters.input_step;
-  dvec2 value = input_samples.values[channel * parameters.input_channel_stride + input_frame];
-
-  if (parameters.normalize != 0u)
-    value = multiply_dd_scalar(value, SOX_SAMPLE_SCALE);
-  output_samples.values[output_frame * parameters.channels + channel] = value;
+  output_samples.values[output_frame * parameters.channels + channel] =
+      input_samples.values[channel * parameters.input_channel_stride + input_frame];
 }

@@ -617,16 +617,11 @@ static void write_captures(void)
     snprintf(key, sizeof(key), "capture.%u.interleave", index);
     lsx_diagnostics_setf(key, "1");
     /* Nothing is scaled on the way into a capture, so the reader is told the
-     * sample domain and its full scale.  lsx_sample_values_are_normalized()
-     * is always true, so these keys are always "normalized" and "1"; the
-     * other arm names the scaled domain, whose full scale 2^31 is a power of
-     * two and so converts exactly. */
+     * sample domain and its full scale: normalized samples, full scale one. */
     snprintf(key, sizeof(key), "capture.%u.domain", index);
-    lsx_diagnostics_setf(key, "%s",
-        lsx_sample_values_are_normalized() ? "normalized" : "sox-sample");
+    lsx_diagnostics_setf(key, "normalized");
     snprintf(key, sizeof(key), "capture.%u.full_scale", index);
-    lsx_diagnostics_setf(key, "%s",
-        lsx_sample_values_are_normalized() ? "1" : "2147483648");
+    lsx_diagnostics_setf(key, "1");
     snprintf(key, sizeof(key), "capture.%u.frames", index);
     lsx_diagnostics_setf(key, "%llu", (unsigned long long)frames);
     ++index;

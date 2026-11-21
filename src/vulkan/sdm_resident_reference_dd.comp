@@ -39,9 +39,9 @@
  *   output_frames  frames the modulator's block holds; the difference is the
  *                  silence padding, and also the planar channel stride.
  *   channels       channels, and the interleaved input's frame stride.
- *   scale          the producer's domain as a factor: one for a normalized
- *                  stream; for a sox_sample stream, one or 1/2^31 as
- *                  ensure_resident_pipeline() in sdm_vulkan.c decides.
+ *   scale          the producer's domain as a factor, one for both PCM
+ *                  domains; ensure_resident_pipeline() in sdm_vulkan.c sets
+ *                  it.
  *
  * Dispatch is two-dimensional: x covers output_frames, padding included,
  * rounded up to whole workgroups of 128, and y is one invocation per

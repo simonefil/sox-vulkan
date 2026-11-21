@@ -21,11 +21,8 @@
  * the consumer wants normalized FP32 from a reference-profile stage, whose
  * own shader writes dvec2.
  *
- * The pair survives accumulation and normalisation and is narrowed once at
- * the final store: multiply_dd_scalar keeps the residual of an inexact
- * scale, then the two words are added and the sum narrowed.  Rounding twice,
- * or scaling after narrowing, would reintroduce the error the profile
- * avoids.  The normalize push constant follows rate_select_*.comp.
+ * The pair survives accumulation and is narrowed once at the final store:
+ * the two words are added and the sum narrowed.
  *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:
  *   0 coefficients    -- in: the response, tap major, phase minor,
@@ -33,9 +30,8 @@
  *   1 input_samples   -- in: interleaved input frames, pairs.
  *   2 output_samples  -- out: interleaved output frames, plain FP32.
  *
- * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize (whether to scale),
- * symmetric_presum.  The counter's quotient by phase_count is the input frame
+ * Push constants (parameters_t, 28 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, symmetric_presum.  The counter's quotient by phase_count is the input frame
  * and its remainder the sub-filter; see the FP64 shader.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
@@ -68,11 +64,8 @@ layout(push_constant) uniform Parameters {
   uint phase_start;
   uint taps;
   uint channels;
-  uint normalize;
   uint symmetric_presum;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -124,8 +117,6 @@ void main()
       sum = add_dd(sum, multiply_dd(coefficient, input_value));
     }
   }
-  if (parameters.normalize != 0u)
-    sum = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
   precise double combined = sum.x + sum.y;
 
   output_samples.values[output_frame * parameters.channels + channel] = float(combined);

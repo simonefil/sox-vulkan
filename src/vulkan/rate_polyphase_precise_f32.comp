@@ -31,8 +31,8 @@
  *   1 input_samples   -- in: interleaved input frames, pairs.
  *   2 output_samples  -- out: interleaved output frames, pairs.
  *
- * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize, symmetric_presum.  The
+ * Push constants (parameters_t, 28 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, symmetric_presum.  The
  * counter's quotient by phase_count is the input frame and its remainder the
  * sub-filter.  The strides count vec2 elements.
  *
@@ -63,11 +63,8 @@ layout(push_constant) uniform Parameters {
   uint phase_start;
   uint taps;
   uint channels;
-  uint normalize;
   uint symmetric_presum;
 } parameters;
-
-const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 /* Double-single primitives, the FP32 counterpart of double_double.glsl and
  * subject to its rules for the same reason: every compensation term is
@@ -149,7 +146,5 @@ void main()
       sum = add_double_single(sum, multiply_double_single(coefficient, input_value));
     }
   }
-  if (parameters.normalize != 0u)
-    sum = multiply_double_single(sum, vec2(SOX_SAMPLE_SCALE, 0.0));
   output_samples.values[output_frame * parameters.channels + channel] = sum;
 }

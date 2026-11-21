@@ -29,8 +29,8 @@
  *   1 input_samples   -- in: interleaved input frames, pairs.
  *   2 output_samples  -- out: interleaved output frames, pairs.
  *
- * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize, symmetric_presum.  The
+ * Push constants (parameters_t, 28 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, symmetric_presum.  The
  * counter's quotient by phase_count is the input frame and its remainder the
  * sub-filter.  The strides count dvec2 elements.
  *
@@ -64,11 +64,8 @@ layout(push_constant) uniform Parameters {
   uint phase_start;
   uint taps;
   uint channels;
-  uint normalize;
   uint symmetric_presum;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -119,7 +116,5 @@ void main()
       sum = add_dd(sum, multiply_dd(coefficient, input_value));
     }
   }
-  if (parameters.normalize != 0u)
-    sum = multiply_dd_scalar(sum, SOX_SAMPLE_SCALE);
   output_samples.values[output_frame * parameters.channels + channel] = sum;
 }

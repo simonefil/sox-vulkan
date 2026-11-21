@@ -32,7 +32,7 @@
  *                        producer's own offset.
  *   1 output_samples  -- out: the decimated block, interleaved.
  *
- * Push constants (select_parameters_t, 24 bytes):
+ * Push constants (select_parameters_t, 20 bytes):
  *   output_frames         frames to produce; the host has already worked out
  *                         how many survive the decimation.
  *   first_input_frame     offset of the first kept frame.  Together with
@@ -43,17 +43,12 @@
  *   input_channel_stride  elements between channels of the planar input.
  *   channels              channels in the block, and the interleaved output's
  *                         frame stride.
- *   normalize             scale SoX's integer sample domain to unity.  The
- *                         host sets it only when the consumer wants
- *                         normalized samples and the build's sample type is
- *                         not already normalized.
  *
  * Dispatch is two-dimensional: x covers output_frames rounded up to whole
  * workgroups of 128, y is one invocation per channel, hence both bounds
  * tests.  Each invocation writes one distinct output element.
  *
- * Plain FP64, no compensation: the only arithmetic is one multiply by a
- * constant.
+ * Plain FP64: each kept sample is copied unchanged.
  */
 
 #version 450
@@ -75,10 +70,7 @@ layout(push_constant) uniform Parameters {
   uint input_step;
   uint input_channel_stride;
   uint channels;
-  uint normalize;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -88,6 +80,5 @@ void main()
     return;
 
   uint input_frame = parameters.first_input_frame + output_frame * parameters.input_step;
-  double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
-  output_samples[output_frame * parameters.channels + channel] = input_samples[channel * parameters.input_channel_stride + input_frame] * scale;
+  output_samples[output_frame * parameters.channels + channel] = input_samples[channel * parameters.input_channel_stride + input_frame];
 }

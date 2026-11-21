@@ -66,11 +66,10 @@ typedef struct {
   uint32_t phase_start;
   uint32_t taps;
   uint32_t channels;
-  uint32_t normalize;
   uint32_t symmetric_presum;
 } parameters_t;
 
-lsx_static_assert(sizeof(parameters_t) == 32, vulkan_rate_polyphase_push_layout);
+lsx_static_assert(sizeof(parameters_t) == 28, vulkan_rate_polyphase_push_layout);
 
 struct lsx_rate_polyphase_vulkan {
   lsx_vulkan_context_t *vulkan;
@@ -363,7 +362,7 @@ static int create_pipeline(lsx_rate_polyphase_vulkan_t *context)
    * the plain FP64 family; precise_fp32 is set only when double precision is
    * unavailable.
    *
-   * The normalized kernel writes host-scaled FP32 samples, so above FP32 it
+   * The normalized kernel writes normalized FP32 samples, so above FP32 it
    * has its own shader (reference_dd_normalized_f32 for the reference
    * profile, normalized_f32 for plain FP64); the two FP32 profiles reuse
    * their resident kernel. */
@@ -574,7 +573,6 @@ int lsx_rate_polyphase_vulkan_process(lsx_rate_polyphase_vulkan_t *context, doub
   upload_samples(context, context->input_staging.mapped, input, input_frames * context->parameters.channels);
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_start = context->phase_start;
-  context->parameters.normalize = 0;
   if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences rate polyphase") != SOX_SUCCESS || vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer rate polyphase") != SOX_SUCCESS || vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer rate polyphase") != SOX_SUCCESS)
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate polyphase");
@@ -752,7 +750,6 @@ int lsx_rate_polyphase_vulkan_process_resident_input_normalized(lsx_rate_polypha
   source_barrier.size = append.size;
   context->parameters.output_frames = (uint32_t)count;
   context->parameters.phase_start = context->phase_start;
-  context->parameters.normalize = normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   output_buffer = normalize ? &context->normalized_output : &context->output;
 
   /* Phase 3: bind coefficients, the completed input window and the selected

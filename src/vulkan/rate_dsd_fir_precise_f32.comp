@@ -33,9 +33,9 @@
  *   1 packed         -- in: DSD words, channel major, 32 frames per word.
  *   2 output_samples -- out: interleaved output frames, pairs.
  *
- * Push constants (the first 40 bytes of parameters_t): output_frames,
+ * Push constants (the first 32 bytes of parameters_t): output_frames,
  * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
- * valid_frames, normalize, reserved.
+ * valid_frames.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
  * and y one invocation per channel, hence both bounds tests.
@@ -66,11 +66,7 @@ layout(push_constant) uniform Parameters {
   uint frame_offset;
   uint lead_frames;
   uint valid_frames;
-  uint normalize;
-  uint reserved;
 } parameters;
-
-const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 /* Knuth: the error term is exactly representable, for any two operands. */
 vec2 two_sum(float left, float right)
@@ -88,14 +84,6 @@ vec2 add_double_single(vec2 left, vec2 right)
   precise float low = left.y + right.y + high_sum.y;
 
   return two_sum(high_sum.x, low);
-}
-
-vec2 multiply_double_single(vec2 left, vec2 right)
-{
-  precise float product = left.x * right.x;
-  precise float residual = fma(left.x, right.x, -product) + left.x * right.y + left.y * right.x;
-
-  return two_sum(product, residual);
 }
 
 void main()
@@ -137,7 +125,5 @@ void main()
     tap += run;
     frame += run;
   }
-  if (parameters.normalize != 0u)
-    sum = multiply_double_single(sum, vec2(SOX_SAMPLE_SCALE, 0.0));
   output_samples.values[output_frame * parameters.channels + channel] = sum;
 }

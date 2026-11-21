@@ -36,9 +36,9 @@
  *                       bit zero the earliest frame.
  *   2 output_samples -- out: interleaved output frames.
  *
- * Push constants (the first 40 bytes of parameters_t): output_frames,
+ * Push constants (the first 32 bytes of parameters_t): output_frames,
  * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
- * valid_frames, normalize, reserved.  frame_offset is where output frame
+ * valid_frames.  frame_offset is where output frame
  * zero's window starts within the uploaded words, so the host can retain a
  * tail at word granularity while the position stays exact to the frame;
  * lead_frames and valid_frames bound the frames the stream has, the rest
@@ -74,11 +74,7 @@ layout(push_constant) uniform Parameters {
   uint frame_offset;
   uint lead_frames;
   uint valid_frames;
-  uint normalize;
-  uint reserved;
 } parameters;
-
-const double SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -90,7 +86,6 @@ void main()
 
   uint start = parameters.frame_offset + output_frame * parameters.decimation;
   uint base = channel * parameters.words_per_channel;
-  double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   double sum = 0.0;
   /* The taps that land on a frame the stream has.  Outside that range, at
    * the head (the response's delay) and the tail (what it holds after the
@@ -118,5 +113,5 @@ void main()
     tap += run;
     frame += run;
   }
-  output_samples[output_frame * parameters.channels + channel] = sum * scale;
+  output_samples[output_frame * parameters.channels + channel] = sum;
 }

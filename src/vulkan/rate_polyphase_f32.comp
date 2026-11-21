@@ -29,8 +29,8 @@
  *   1 input_samples   -- in: interleaved input frames.
  *   2 output_samples  -- out: interleaved output frames.
  *
- * Push constants (parameters_t, 32 bytes): output_frames, phase_count,
- * phase_step, phase_start, taps, channels, normalize, symmetric_presum.  The
+ * Push constants (parameters_t, 28 bytes): output_frames, phase_count,
+ * phase_step, phase_start, taps, channels, symmetric_presum.  The
  * counter's quotient by phase_count is the input frame the window starts on
  * and its remainder is the sub-filter, which is how one counter carries both.
  *
@@ -61,11 +61,8 @@ layout(push_constant) uniform Parameters {
   uint phase_start;
   uint taps;
   uint channels;
-  uint normalize;
   uint symmetric_presum;
 } parameters;
-
-const float SOX_SAMPLE_SCALE = 1.0 / 2147483647.0;
 
 void main()
 {
@@ -77,7 +74,6 @@ void main()
   uint position = parameters.phase_start + output_frame * parameters.phase_step;
   uint input_base = position / parameters.phase_count;
   uint phase = position % parameters.phase_count;
-  float scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   float sum = 0.0;
 
   /* The symmetric form: a linear-phase response has coefficient[tap] equal to
@@ -110,5 +106,5 @@ void main()
               (input_base + tap) *
               parameters.channels + channel],
           sum);
-  output_samples[output_frame * parameters.channels + channel] = sum * scale;
+  output_samples[output_frame * parameters.channels + channel] = sum;
 }

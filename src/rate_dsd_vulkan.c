@@ -51,12 +51,11 @@
  * valid_frames bound the frames the stream really has within that window; a
  * tap outside them reads a zero sample, not a bit.
  *
- * scale_high and scale_low carry the factor from this stage's normalised
- * output (the bits are +-1) to the build's sample domain. The reference
- * profile applies the pair before collapsing, so it rounds once where a
- * collapsed double would round twice; the other forms take the same factor
- * on the host. Only the reference shader declares the pair; the others cover
- * the first 40 bytes. */
+ * scale_high and scale_low carry the output's factor as a pair, one and
+ * zero, since the stage's output is a normalised sample by construction (the
+ * bits are +-1). The reference profile applies the pair before collapsing.
+ * Only the reference shader declares the pair; the others cover the first 32
+ * bytes. */
 typedef struct {
   uint32_t output_frames;
   uint32_t decimation;
@@ -66,13 +65,11 @@ typedef struct {
   uint32_t frame_offset;
   uint32_t lead_frames;
   uint32_t valid_frames;
-  uint32_t normalize;
-  uint32_t reserved;
   double scale_high;
   double scale_low;
 } parameters_t;
 
-lsx_static_assert(sizeof(parameters_t) == 56, vulkan_rate_dsd_push_layout);
+lsx_static_assert(sizeof(parameters_t) == 48, vulkan_rate_dsd_push_layout);
 
 struct lsx_rate_dsd_vulkan {
   lsx_vulkan_context_t *vulkan;
@@ -124,29 +121,12 @@ static lsx_vulkan_resident_format_t sample_format(lsx_rate_dsd_vulkan_t const *c
       lsx_vulkan_resident_format_f32;
 }
 
-/* The factor between what this stage computes and what the chain carries.
- *
- * The stage sums coefficients against bits of +-1, so its output is a
- * normalised sample by construction, whatever the device.
- * lsx_sample_values_are_normalized() says whether this build carries samples
- * that way or scaled to SOX_SAMPLE_MAX (effects_i_dsp.c has both). On a
- * scaled build the unscaled output is about 2^31 times too small and
- * lsx_save_samples() rounds every sample of it to zero, writing silence.
- *
- * The push constant named `normalize` divides, for paths whose device data is
- * already scaled; this factor multiplies. */
-static double output_scale(void)
-{
-  return lsx_sample_values_are_normalized() ? 1. : (double)SOX_SAMPLE_MAX;
-}
-
 /* A pointer to count output samples as host doubles. Plain FP64 is returned
  * in place, the mapping already being doubles; the other forms are converted
  * into the scratch buffer, the paired ones collapsing through the shared
  * routine so that every collapse in the engine agrees. */
 static double const *host_samples(lsx_rate_dsd_vulkan_t *context, size_t count)
 {
-  double const scale = output_scale();
   size_t index;
 
   if (context->reference_dd) {
@@ -159,32 +139,25 @@ static double const *host_samples(lsx_rate_dsd_vulkan_t *context, size_t count)
     for (index = 0; index < count; ++index) {
       double const *value = (double const *)context->output_staging.mapped + 2u * index;
 
-      /* Already scaled on the device, in the pair. */
+      /* The factor is applied on the device, in the pair. */
       context->host_output[index] =
           lsx_vulkan_collapse_pair(value[0], value[1]);
     }
     return context->host_output;
   }
-  if (context->double_precision) {
-    double const *source = context->output_staging.mapped;
-
-    if (scale == 1.)
-      return source;
-    for (index = 0; index < count; ++index)
-      context->host_output[index] = source[index] * scale;
-    return context->host_output;
-  }
+  if (context->double_precision)
+    return context->output_staging.mapped;
   if (context->precise_fp32) {
     for (index = 0; index < count; ++index) {
       float const *value = (float const *)context->output_staging.mapped + 2u * index;
 
-      context->host_output[index] = ((double)value[0] + (double)value[1]) * scale;
+      context->host_output[index] = (double)value[0] + (double)value[1];
     }
     return context->host_output;
   }
   for (index = 0; index < count; ++index)
     context->host_output[index] =
-        (double)((float const *)context->output_staging.mapped)[index] * scale;
+        (double)((float const *)context->output_staging.mapped)[index];
   return context->host_output;
 }
 
@@ -208,10 +181,7 @@ static int create_buffers(lsx_rate_dsd_vulkan_t *context)
   for (index = 0; index < LSX_VULKAN_RESIDENT_BATCH_DEPTH; ++index)
     if (lsx_vulkan_buffer_create(context->vulkan, &context->input[index], input_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory) != SOX_SUCCESS)
       return SOX_EOF;
-  /* The scratch buffer is also what a scaled build needs for the plain FP64
-   * form, which would otherwise be handed back in place. */
-  if (context->reference_dd || !context->double_precision ||
-      output_scale() != 1.)
+  if (context->reference_dd || !context->double_precision)
     context->host_output = lsx_malloc(
         (size_t)context->max_output_frames *
         context->parameters.channels * sizeof(*context->host_output));
@@ -428,9 +398,8 @@ lsx_rate_dsd_vulkan_t *lsx_rate_dsd_vulkan_create(
    * exact when the delay is not a multiple of thirty-two. */
   context->preload_words = preload_words;
   context->parameters.lead_frames = preload_words * RATE_DSD_FRAMES_PER_WORD;
-  /* SOX_SAMPLE_MAX is exactly a double, so the pair is the factor and a zero
-   * low word; the shader's multiply then rounds once, at the end. */
-  context->parameters.scale_high = output_scale();
+  /* The output's factor, one, as a pair with a zero low word. */
+  context->parameters.scale_high = 1.;
   context->parameters.scale_low = 0.;
   context->parameters.frame_offset =
       preload_words * RATE_DSD_FRAMES_PER_WORD - preload_frames;
@@ -558,7 +527,7 @@ static void upload_words(
  * samples on the device and does not want it. */
 static int record_block(
     lsx_rate_dsd_vulkan_t *context, uint32_t bank, uint32_t count,
-    sox_bool normalize, sox_bool to_host)
+    sox_bool to_host)
 {
   VkBufferCopy output_copy;
   VkMemoryBarrier host_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
@@ -568,8 +537,6 @@ static int record_block(
   VkMemoryBarrier output_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
 
   context->parameters.output_frames = count;
-  context->parameters.normalize =
-      normalize && !lsx_sample_values_are_normalized() ? 1u : 0u;
   if (vk_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer rate dsd") != SOX_SUCCESS ||
       vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer rate dsd") != SOX_SUCCESS)
     return SOX_EOF;
@@ -634,7 +601,7 @@ int lsx_rate_dsd_vulkan_process(
   }
   upload_words(context, 0, words, needed_words);
   if (vk_result(vkResetFences(context->vulkan->device, 1, &context->fence), "vkResetFences rate dsd") != SOX_SUCCESS ||
-      record_block(context, 0, count, sox_false, sox_true) != SOX_SUCCESS ||
+      record_block(context, 0, count, sox_true) != SOX_SUCCESS ||
       lsx_vulkan_submit_and_wait(context->vulkan, context->command_buffers[0], context->fence, lsx_vulkan_wait_rate_synchronous) != SOX_SUCCESS)
     return SOX_EOF;
   *output = host_samples(context, (size_t)count * context->parameters.channels);
@@ -647,7 +614,7 @@ int lsx_rate_dsd_vulkan_process_resident(
     lsx_rate_dsd_vulkan_t *context, uint32_t const *const *words,
     size_t available_words, sox_bool flush, size_t *output_frames,
     size_t *consumed_words, sox_rate_t rate,
-    lsx_vulkan_resident_state_t state, sox_bool normalize,
+    lsx_vulkan_resident_state_t state,
     lsx_vulkan_resident_buffer_t *resident)
 {
   uint32_t needed_words = 0;
@@ -665,7 +632,7 @@ int lsx_rate_dsd_vulkan_process_resident(
   }
   bank = context->bank_index;
   upload_words(context, bank, words, needed_words);
-  if (record_block(context, bank, count, normalize, sox_false) != SOX_SUCCESS)
+  if (record_block(context, bank, count, sox_false) != SOX_SUCCESS)
     return SOX_EOF;
   memset(resident, 0, sizeof(*resident));
   resident->buffer = &context->output;
@@ -681,9 +648,7 @@ int lsx_rate_dsd_vulkan_process_resident(
   resident->channels = context->parameters.channels;
   resident->frames_per_element = 1u;
   resident->format = sample_format(context);
-  resident->domain = context->parameters.normalize ?
-      lsx_vulkan_resident_domain_normalized :
-      lsx_vulkan_resident_domain_sox_sample;
+  resident->domain = lsx_vulkan_resident_domain_sox_sample;
   resident->layout = lsx_vulkan_resident_layout_interleaved;
   resident->state = state;
   if (lsx_vulkan_resident_buffer_validate(resident) != SOX_SUCCESS ||

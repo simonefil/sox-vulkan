@@ -617,9 +617,7 @@ void lsx_plot_fir(double * h, int num_points, sox_rate_t rate, sox_plot_t type, 
 /* Moving samples between an effect's double buffers and the chain's.
  *
  * sox_sample_t is a double in [-1, +1), the same value an effect computes
- * in, so lsx_save_samples and lsx_load_samples are copies, and lsx_sample_values_are_normalized always returns sox_true.
- * Its callers -- the Vulkan rate and SDM paths and diagnostics -- still
- * branch on it.
+ * in, so lsx_save_samples and lsx_load_samples are copies.
  */
 
 void lsx_save_samples(sox_sample_t * const dest, double const * const src,
@@ -638,9 +636,4 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
 {
   if (dest != src)
     memcpy(dest, src, n * sizeof(*dest));
-}
-
-sox_bool lsx_sample_values_are_normalized(void)
-{
-  return sox_true;
 }

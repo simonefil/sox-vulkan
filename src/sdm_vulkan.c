@@ -873,8 +873,8 @@ static void record_mash(lsx_sdm_vulkan_t *context)
 /* Make sure the ingest pipeline matches the producer's format and domain.
  *
  * The format decides the shader, so it is latched on the first slice and a
- * later change is refused.  The domain only decides a scale factor, which the
- * ingest applies as it reads, bringing SoX's sample range to +/-1. */
+ * later change is refused.  Both PCM domains carry samples normalized to
+ * +/-1, so the ingest's scale factor is one for either. */
 static int ensure_resident_pipeline(
     lsx_sdm_vulkan_t *context,
     lsx_vulkan_resident_format_t format,
@@ -883,13 +883,8 @@ static int ensure_resident_pipeline(
   float scale;
 
   switch (domain) {
-    case lsx_vulkan_resident_domain_normalized: scale = 1.0f; break;
-    case lsx_vulkan_resident_domain_sox_sample:
-      /* With normalized sample values the two domains coincide and the
-       * scale is one.  As with the rate shaders' `normalize` parameter, the
-       * scale follows the build's sample domain. */
-      scale = lsx_sample_values_are_normalized() ? 1.0f : 1.0f / 2147483648.0f;
-      break;
+    case lsx_vulkan_resident_domain_normalized:
+    case lsx_vulkan_resident_domain_sox_sample: scale = 1.0f; break;
     default: lsx_fail("unsupported resident Vulkan SDM input domain");
       return SOX_EOF;
   }

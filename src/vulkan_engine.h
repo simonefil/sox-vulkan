@@ -62,13 +62,11 @@ typedef enum {
   lsx_vulkan_resident_format_dsd_u32
 } lsx_vulkan_resident_format_t;
 
-/* What the stored numbers mean. sox_sample is whatever scale the chain's own
- * samples are on, which is what most of the pipeline passes around; normalized
- * is that signal scaled to +/-1; dsd holds one-bit values. A consumer must
- * check this, since the same format can carry either scaling. The chain
- * carries normalised values, so the two amplitude domains coincide:
- * lsx_sample_values_are_normalized() says so, and producers and consumers
- * ask it before assuming either scale. */
+/* What the stored numbers mean. sox_sample is the chain's own samples, which
+ * is what most of the pipeline passes around; normalized is output a producer
+ * wrote for a consumer that asked for normalized samples; dsd holds one-bit
+ * values. Both PCM domains are on the +/-1 scale, and a consumer checks the
+ * tag to know which of a producer's outputs it was handed. */
 typedef enum {
   lsx_vulkan_resident_domain_sox_sample,
   lsx_vulkan_resident_domain_normalized,

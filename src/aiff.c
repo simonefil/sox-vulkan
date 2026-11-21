@@ -632,10 +632,12 @@ int lsx_aiffstopwrite(sox_format_t * ft)
             lsx_rawwrite(ft, &buf, (size_t) 1);
         }
 
+        /* On a pipe the header keeps the "very large number" written by
+           startwrite: the data itself is complete. */
         if (!ft->seekable)
         {
-            lsx_fail_errno(ft,SOX_EOF,"Non-seekable file.");
-            return(SOX_EOF);
+            lsx_warn("can't seek in output file `%s'; length in file header will be unspecified", ft->filename);
+            return(SOX_SUCCESS);
         }
         if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
         {
@@ -829,10 +831,12 @@ int lsx_aifcstopwrite(sox_format_t * ft)
             lsx_rawwrite(ft, &buf, (size_t) 1);
         }
 
+        /* On a pipe the header keeps the "very large number" written by
+           startwrite: the data itself is complete. */
         if (!ft->seekable)
         {
-            lsx_fail_errno(ft,SOX_EOF,"Non-seekable file.");
-            return(SOX_EOF);
+            lsx_warn("can't seek in output file `%s'; length in file header will be unspecified", ft->filename);
+            return(SOX_SUCCESS);
         }
         if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
         {

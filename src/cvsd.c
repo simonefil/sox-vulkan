@@ -659,11 +659,9 @@ int lsx_dvmsstopwrite(sox_format_t * ft)
         int rc;
 
         lsx_cvsdstopwrite(ft);
+        /* startwrite already warned that the length can't be fixed. */
         if (!ft->seekable)
-        {
-            lsx_warn("File not seekable");
-            return (SOX_EOF);
-        }
+            return (SOX_SUCCESS);
         if (lsx_seeki(ft, (off_t)0, 0) != 0)
         {
                 lsx_fail_errno(ft,errno,"Can't rewind output file to rewrite DVMS header.");

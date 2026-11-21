@@ -1596,8 +1596,10 @@ static int stopwrite(sox_format_t * ft)
         if (ft->signal.length && wav->numSamples <= 0xffffffff && 
             wav->numSamples == ft->signal.length)
           return SOX_SUCCESS;
+        /* On a pipe the header keeps the length written at the start, as
+           startwrite already warned: the data itself is complete. */
         if (!ft->seekable)
-          return SOX_EOF;
+          return SOX_SUCCESS;
 
         if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
         {

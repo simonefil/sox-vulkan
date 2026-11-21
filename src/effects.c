@@ -883,9 +883,11 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
 #if HAVE_VULKAN
   lsx_vulkan_resident_buffer_t resident;
   size_t resident_producer = SOX_SIZE_MAX;
-  size_t resident_consumer = SOX_SIZE_MAX;
   sox_bool resident_pending = sox_false;
-  sox_bool resident_consumer_active = sox_false;
+  /* Per consumer: two pairs in a row can both hold output at once, and each
+   * has to be asked again for its own. */
+  sox_bool *resident_consumer_active = lsx_calloc(chain->length, sizeof(*resident_consumer_active));
+  size_t resident_consumers_active = 0;
   vulkan_resident_segment_state_t resident_segment;
 
   vulkan_resident_segment_state_init(&resident_segment, chain->length);
@@ -959,7 +961,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
      * while the previous one is still unwinding.  Segments of two are left
      * to the simpler producer-consumer path below, which needs none of the
      * edge bookkeeping. */
-    if (!resident_segment.enabled && !resident_pending && !resident_consumer_active && e > 0 && e < chain->length) {
+    if (!resident_segment.enabled && !resident_pending && !resident_consumers_active && e > 0 && e < chain->length) {
       size_t segment_end = vulkan_resident_segment_end(chain, e);
       size_t available = chain->effects[e - 1u]->oend - chain->effects[e - 1u]->obeg;
       sox_bool can_flow = e != source_e && available && available >= chain->effects[e]->imin;
@@ -1112,12 +1114,13 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
       continue;
     }
 
-    if (e < chain->length && vulkan_endpoint(chain->effects[e]) && vulkan_endpoint(chain->effects[e])->consume && ((resident_pending && resident_producer + 1u == e) || (resident_consumer_active && resident_consumer == e))) {
+    if (e < chain->length && vulkan_endpoint(chain->effects[e]) && vulkan_endpoint(chain->effects[e])->consume && ((resident_pending && resident_producer + 1u == e) || resident_consumer_active[e])) {
       sox_bool input_consumed;
-      int status = flow_vulkan_resident_consumer(chain, e, resident_pending ? &resident : NULL, &input_consumed, &resident_consumer_active, &resident_progress);
+      sox_bool was_active = resident_consumer_active[e];
+      int status = flow_vulkan_resident_consumer(chain, e, resident_pending ? &resident : NULL, &input_consumed, &resident_consumer_active[e], &resident_progress);
 
       resident_handled = sox_true;
-      resident_consumer = e;
+      resident_consumers_active += (size_t)resident_consumer_active[e] - (size_t)was_active;
       if (input_consumed) {
         resident_pending = sox_false;
         resident_producer = SOX_SIZE_MAX;
@@ -1159,7 +1162,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         ++e;
       else if (e < chain->length && chain->effects[e]->oend - chain->effects[e]->obeg > osize)
         ++e;
-      else if (resident_consumer_active && resident_consumer == e)
+      else if (e < chain->length && resident_consumer_active[e])
         resident_progress = sox_true;
       else if (e == source_e)
         draining = sox_true;
@@ -1279,6 +1282,7 @@ int sox_flow_effects(sox_effects_chain_t * chain, int (* callback)(sox_bool all_
         resident_segment.consumer_final_received);
   }
   vulkan_resident_segment_state_destroy(&resident_segment);
+  free(resident_consumer_active);
 #endif
   /* While the effects are still alive: their clip counts and frame totals are
    * final here, and the chain is deleted before the diagnostics are closed. */

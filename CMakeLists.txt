@@ -1,21 +1,17 @@
 cmake_minimum_required(VERSION 3.15)
 
-# The static build needs all three of these, and each is guarded because it
-# only exists from a later CMake than the minimum above.
+# The static build needs these three policies, each guarded because it only
+# exists in a later CMake than the minimum above.
 #
-#   CMP0091  the MSVC runtime is chosen through CMAKE_MSVC_RUNTIME_LIBRARY
-#            rather than by rewriting the compile flags; the static build sets
-#            that variable below.
-#   CMP0156  de-duplicate the link line according to what the linker can
-#            actually do, instead of the older fixed rule.
-#   CMP0179  when a static library is de-duplicated, keep its first
-#            occurrence rather than its last.
+#   CMP0091  the MSVC runtime is chosen through CMAKE_MSVC_RUNTIME_LIBRARY,
+#            which the static build sets below.
+#   CMP0156  de-duplicate the link line according to what the linker can do.
+#   CMP0179  a de-duplicated static library keeps its first occurrence.
 #
-# The last two matter because a static link resolves left to right: a codec
-# library dropped to the end of the line, or kept only at its last mention,
-# stops satisfying the references that came before it.  REORDER_FREELY goes
-# further and lets CMake arrange the line itself, which is what handles the
-# cyclic dependencies among the FFmpeg libraries.
+# A static link resolves left to right, so a codec library moved to the end
+# of the line stops satisfying the references before it.  REORDER_FREELY lets
+# CMake arrange the line, which handles the cyclic dependencies among the
+# FFmpeg libraries.
 if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
@@ -35,16 +31,14 @@ project(SoX
     LANGUAGES C
 )
 
-# The shared library's version, inherited from the libtool current:revision:age
-# of the Autotools build that no longer exists here.  It feeds VERSION and
-# SOVERSION in src/CMakeLists.txt and is independent of the project version
-# above: changing it is an ABI decision, not a release one.
+# The shared library's version, inherited from the libtool
+# current:revision:age of the Autotools build.  It feeds VERSION and SOVERSION
+# in src/CMakeLists.txt and is independent of the project version: changing
+# it is an ABI decision.
 #
-# Bumped to 4 for the fp64 pipeline: sox_sample_t is a double normalised to
-# [-1, +1) where it was a 32-bit integer.  It appears in the signature of
-# sox_read, sox_write, the packed-DSD entry points and every effect handler, and
-# an int32_t* is not a double* under any cast.  Every consumer of libsox has to
-# be recompiled; nothing about this is source- or binary-compatible.
+# 4 is the fp64 pipeline: sox_sample_t is a double normalised to [-1, +1) in
+# the signature of sox_read, sox_write, the packed-DSD entry points and every
+# effect handler, so every consumer of libsox must be recompiled.
 set(SOX_VERSION_MAJOR 4)
 set(SOX_VERSION_MINOR 0)
 set(SOX_VERSION_PATCH 0)
@@ -94,10 +88,9 @@ option(WITH_OPENMP "Enable OpenMP support" ON)
 option(SOX_REQUIRE_OPENMP "Fail configuration when OpenMP support is unavailable" OFF)
 option(WITH_VULKAN "Enable the Vulkan backend for FIR and DSD modulation" OFF)
 
-# macOS is absent on purpose: it ships no static libSystem, so -static cannot
-# work there and the option means "static dependencies, system libraries
-# shared" instead.  That is why this sets SOX_REQUIRE_STATIC_DEPENDENCIES,
-# which every platform honours, and adds -static only where it is achievable.
+# macOS ships no static libSystem, so there this means "static dependencies,
+# system libraries shared": SOX_REQUIRE_STATIC_DEPENDENCIES applies on every
+# platform, -static only where it is achievable.
 if(BUILD_STATIC_EXECUTABLE)
     set(BUILD_SHARED_LIBS OFF)
     set(SOX_REQUIRE_STATIC_DEPENDENCIES ON)
@@ -182,11 +175,10 @@ endif()
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# The Vulkan build compiles one C++ translation unit (vulkan_fft_dd.cpp) that
-# vendors vkFFT.h. That header relies on C++11 empty-brace pointer
-# initialization ("PfContainer* x = {};"), which is invalid before C++11 --
-# without an explicit standard here, some toolchains default a bare .cpp file
-# to a pre-C++11 dialect and fail with "scalar initializer cannot be empty".
+# vulkan_fft_dd.cpp vendors vkFFT.h, which uses C++11 empty-brace pointer
+# initialization ("PfContainer* x = {};"); some toolchains default a bare .cpp
+# file to a pre-C++11 dialect and fail with "scalar initializer cannot be
+# empty".
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -259,18 +251,15 @@ if(WITH_OPENMP)
     endif()
 endif()
 
-# Three separate Vulkan dependencies, and only the first is the loader:
-# glslc compiles this tree's own shaders at build time, glslang is what VkFFT
-# calls at run time to compile the GLSL it generates, and VkFFT itself is
-# header-only.
+# Besides the Vulkan loader: glslc compiles this tree's shaders at build
+# time, glslang is what VkFFT calls at run time to compile its generated
+# GLSL, and VkFFT itself is header-only.
 #
-# glslang is found differently per platform because it is consumed
-# differently.  The Windows SDK ships it as a DLL whose import library is not
-# usable from a build that does not otherwise link the SDK, so the DLL is
-# located here to be copied and installed beside the executable, and
-# glslang_dynamic.c resolves the entry points at run time; everywhere else it
-# is an ordinary library and gets linked.  NO_DEFAULT_PATH keeps the search on
-# the SDK, since any other glslang.dll on the machine is the wrong build.
+# On Windows the SDK's glslang import library is unusable without linking
+# the SDK, so the DLL is located here to be installed beside the executable
+# and glslang_dynamic.c resolves its entry points at run time; elsewhere it
+# is linked normally.  NO_DEFAULT_PATH keeps the search on the SDK, since any
+# other glslang.dll on the machine is the wrong build.
 if(WITH_VULKAN)
     if(NOT IS_WINDOWS AND NOT IS_MACOS AND NOT IS_LINUX AND NOT IS_FREEBSD)
         message(FATAL_ERROR "The Vulkan FIR and DSD backends support Windows, macOS, Linux, and FreeBSD")
@@ -403,17 +392,16 @@ endif()
 
 # Ogg Vorbis
 #
-# The modules are listed dependents first, which is the order a static link
-# resolves them in, and the same shape recurs for sndfile below.
+# The modules are listed dependents first, the order a static link resolves
+# them in; sndfile below has the same shape.
 #
-# On a fully static link, PkgConfig:: carries only Libs, so the transitive
-# dependencies in Libs.private never reach the link line; the _STATIC_ variant
-# is the flattened list that does.  It is used only where -static is actually
-# in effect -- Linux and BSD -- because elsewhere the imported target is
-# correct and pulls in fewer system libraries.
+# On a fully static link, PkgConfig:: carries only Libs, so Libs.private never
+# reaches the link line; the _STATIC_ variant is the flattened list.  It is
+# used only where -static is in effect (Linux and BSD); elsewhere the imported
+# target is correct and pulls in fewer system libraries.
 #
-# libvorbis is the codec; the Ogg container, which Opus streams also come in,
-# is SoX's own over libogg.
+# libvorbis is the codec; the Ogg container, also used by Opus, is SoX's own
+# over libogg.
 if(WITH_OGGVORBIS)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(VORBIS IMPORTED_TARGET vorbisenc vorbis)
@@ -469,13 +457,10 @@ endif()
 
 # FFmpeg codecs
 #
-# The version floor is real, not a guess: ffmpeg-codec.c calls
-# avcodec_get_supported_config(), which arrived in libavcodec 61 and replaced
-# the per-field capability arrays that came before it.  libavutil 59 is the
-# matching major from the same FFmpeg release; the two are not independently
-# selectable in practice.  Only the pkg-config path can test it: the
-# find_library fallback below has no version to read, so an older libavcodec
-# gets past configure and fails at the call site instead.
+# ffmpeg-codec.c calls avcodec_get_supported_config(), first in libavcodec 61;
+# libavutil 59 is the matching major of the same FFmpeg release.  Only the
+# pkg-config path can check the version: with the find_library fallback an
+# older libavcodec passes configure and fails at the call site.
 if(WITH_FFMPEG_CODECS)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(FFMPEG_CODECS IMPORTED_TARGET
@@ -553,15 +538,12 @@ if(WITH_LAME)
         cmake_push_check_state(RESET)
         set(CMAKE_REQUIRED_INCLUDES ${LAME_INCLUDE_DIR})
         check_include_file(lame/lame.h HAVE_LAME_LAME_H)
-        # The ID3 tag API is an optional part of LAME: without it mp3.c
-        # falls back to stubs and writes MP3 files with no ID3 tags, so
-        # comments given on the command line or carried over from the input
-        # are silently lost.  id3tag_set_textinfo_utf16 is the newest of the
-        # functions mp3.c uses (the UTF-16 setters that carry non-Latin-1
-        # text), so finding it means the whole set is there.
-        # The check links a test program against the library that will
-        # actually be used; a static libmp3lame calls into libm, which has
-        # to be named for the link to succeed where it is a separate library.
+        # The ID3 tag API is an optional part of LAME; without it mp3.c uses
+        # stubs and writes MP3 files without ID3 tags.
+        # id3tag_set_textinfo_utf16 is the newest function mp3.c uses, so
+        # finding it means the whole set is there.  The test program links
+        # the library that will be used; a static libmp3lame needs libm named
+        # where it is a separate library.
         set(CMAKE_REQUIRED_LIBRARIES ${LAME_LIBRARY} ${MATH_LIBRARY})
         check_symbol_exists(id3tag_set_textinfo_utf16 "stdio.h;lame/lame.h" HAVE_LAME_ID3TAG)
         cmake_pop_check_state()
@@ -841,9 +823,9 @@ endif()
 # Windows-specific settings
 if(IS_WINDOWS)
     set(HAVE_WIN32_GLOB_H TRUE)
-    # Release builds link all format handlers statically.  Do not enable the
-    # legacy ltdl-compatible format-plugin discovery, which otherwise scans
-    # the process working directory and attempts to load every entry as a DLL.
+    # Release builds link all format handlers statically.  ltdl-style plugin
+    # discovery stays off: it scans the working directory and tries to load
+    # every entry as a DLL.
     set(HAVE_WIN32_LTDL_H FALSE)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     if(MSVC)

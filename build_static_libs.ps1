@@ -872,14 +872,12 @@ function Build-Wavpack {
 # Monkey's Audio SDK: libMAC, the C++ library SoX reads and writes APE with.
 #
 # The zip has no top-level directory, so it is unpacked into one of its own.
-# Two files are dropped from the build. MD5.cpp is RSA's reference MD5, under
-# a licence of its own; SoX defines the three MD5 functions the library calls
-# itself. MACDll.cpp is the C interface of the SDK's DLL, which SoX does not
-# use, and under MSVC it includes MFC. The SDK's GCC warning options are
-# dropped too: cl reads -Wextra as /W with a non-numeric level and stops. The
-# frame decoder and encoder SoX uses are declared in headers the SDK does
-# not install, so all of them are copied beside the public ones. The C++
-# runtime is the static one every other library here uses (Get-CMakeFlags).
+# MD5.cpp (RSA's reference MD5, own licence) is dropped: SoX defines the three
+# MD5 functions the library calls. MACDll.cpp, the DLL's C interface, is
+# dropped: SoX does not use it and under MSVC it includes MFC. The SDK's GCC
+# warning options are dropped, since cl rejects -Wextra. The frame decoder
+# and encoder headers are not installed by the SDK, so all headers are copied
+# beside the public ones. The C++ runtime is static (Get-CMakeFlags).
 function Build-MonkeysAudio {
     Write-Info "========== Building Monkey's Audio SDK $($Versions.mac) =========="
 
@@ -918,15 +916,14 @@ function Build-MonkeysAudio {
 
 # Musepack: libmpcdec reads SV7 and SV8, libmpcenc and libmpcpsy write SV8.
 #
-# Only the three libraries are compiled, from a CMakeLists of our own beside
-# the sources. Upstream's also configures the command-line tools, which need
-# libreplaygain and libcuefile, and libcuefile r475 no longer compiles with a
-# current clang. The flags are upstream's: FAST_MATH and CVD_FASTLOG, which
-# SoX's encoder is compiled to match. build_static_libs.sh writes the same.
+# The three libraries are compiled from our own CMakeLists beside the sources,
+# without upstream's command-line tools, whose libcuefile r475 no longer
+# compiles with a current clang. The flags are upstream's, FAST_MATH and
+# CVD_FASTLOG, matched by SoX's encoder; build_static_libs.sh writes the same.
 #
-# The SV8 bit reader and writer each keep a table named log2, which the UCRT
-# headers already declare as the C99 function, and cl refuses the clash. The
-# two tables are renamed mpc_log2 in the sources; nothing else uses the name.
+# The SV8 bit reader and writer each define a table named log2, which clashes
+# with the C99 function declared by the UCRT headers; both are renamed
+# mpc_log2.
 function Build-Musepack {
     Write-Info "========== Building Musepack $($Versions.musepack) =========="
 
@@ -1054,20 +1051,14 @@ function Find-MsysBash {
     return $null
 }
 
-# Workaround for an FFmpeg build that MSVC rejects.
+# Patches libavcodec/cbs.c for MSVC.
 #
-# cbs_type_table in libavcodec/cbs.c is populated by #ifdefs, one entry per
-# coded-bitstream type. None of the codecs SoX enables brings one in, so with
-# --disable-everything the initialiser is empty; a zero-sized array is a GNU
-# extension that MSVC refuses outright, and the build stops there.
-#
-# The fix is the smallest one that keeps the semantics: append a NULL sentinel
-# so the array has an element, and terminate the loop on that sentinel instead
-# of on FF_ARRAY_ELEMS, which would now count one entry too many. Both edits
-# are idempotent, so re-running over an already-patched tree is harmless, and
-# every step throws rather than continuing if the source does not look as
-# expected -- an FFmpeg upgrade that reshapes this file must be noticed here,
-# not miscompiled.
+# cbs_type_table gets one entry per coded-bitstream type through #ifdefs; none
+# of the codecs SoX enables adds one, so with --disable-everything the array
+# is empty, a GNU extension MSVC rejects. The patch appends a NULL sentinel
+# and ends the loop on it instead of on FF_ARRAY_ELEMS. Both edits are
+# idempotent, and each step throws if the source does not match, so an FFmpeg
+# upgrade that reshapes the file stops the build.
 function Patch-FfmpegMsvcEmptyCbsTable($src) {
     $cbsPath = Join-Path $src "libavcodec\cbs.c"
     $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cbsPath)
@@ -1108,20 +1099,16 @@ function Patch-FfmpegMsvcEmptyCbsTable($src) {
     Write-Info "Applied FFmpeg MSVC empty CBS table compatibility patch"
 }
 
-# FFmpeg has no MSVC project: its build system is autoconf-shaped and needs a
-# POSIX shell, so this drives configure and make under MSYS2 bash while the
-# actual compiler stays MSVC through --toolchain=msvc. That is why MSYS2 is a
-# requirement of this script and of nothing else in it.
+# FFmpeg's build needs a POSIX shell, so configure and make run under MSYS2
+# bash while --toolchain=msvc keeps cl as the compiler; FFmpeg is the only
+# reason this script needs MSYS2.
 #
-# MSYS2_PATH_TYPE=inherit is what makes it work: without it the MSYS2 shell
-# replaces PATH with its own and cl.exe, from the Developer PowerShell this
-# script must run in, disappears. Paths cross the boundary through cygpath,
-# and the environment is passed by variable rather than interpolated into the
-# script text so that a path containing a space or a quote cannot break it.
+# MSYS2_PATH_TYPE=inherit keeps the Developer PowerShell PATH, and cl.exe with
+# it. Paths are converted with cygpath and passed through environment
+# variables, so spaces or quotes cannot break the script text.
 #
-# The component selection matches build_static_libs.sh exactly; the two must
-# stay in step, since they produce the same library for the same SoX sources:
-# libavcodec's codecs and parsers only, since the containers are SoX's own.
+# The component selection must match build_static_libs.sh: libavcodec's
+# codecs and parsers only, since the containers are SoX's own.
 function Build-Ffmpeg {
     Write-Info "========== Building FFmpeg $($Versions.ffmpeg) =========="
 
@@ -1237,11 +1224,10 @@ function Test-StaticDependencies($binary) {
         throw "Unable to inspect executable dependencies with dumpbin"
     }
 
-    # A deny list rather than an allow list: the system DLLs a release build
-    # legitimately imports vary with the toolchain and the Windows version,
-    # while the codec libraries that must not appear are exactly the ones this
-    # script builds. msys- catches an FFmpeg accidentally linked against the
-    # MSYS2 runtime, which would run here and nowhere else.
+    # A deny list: the system DLLs a build imports vary with toolchain and
+    # Windows version, while the forbidden ones are the codec libraries this
+    # script builds. msys- catches an FFmpeg linked against the MSYS2
+    # runtime, which runs only on a machine with MSYS2.
     $forbidden = "avcodec|avutil|swresample|FLAC|ogg|vorbis|opus|sndfile|libmad|mad\.dll|mp3lame|twolame|id3tag|wavpack|MACDll|libMAC|mpcdec|mpcenc|mpcpsy|opencore-amr|png|magic|libao|msys-"
     $unexpected = $dependencies | Select-String -Pattern $forbidden
     if ($unexpected) {

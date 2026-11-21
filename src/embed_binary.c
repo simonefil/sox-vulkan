@@ -4,12 +4,10 @@
  * header the Vulkan host code includes, so that a built SoX carries its
  * shaders in the executable and needs no data files at run time.
  *
- * The output is an array of 32-bit words rather than bytes because that is
- * what vkCreateShaderModule takes, and because a word array is guaranteed the
- * 4-byte alignment SPIR-V requires.  The words are assembled little-endian
- * from the file, which is the byte order SPIR-V modules are written in and,
- * on every platform SoX targets, the host order too -- so the array reads
- * back identical to the file it came from.
+ * The output is 32-bit words, as vkCreateShaderModule takes them, which also
+ * guarantees the 4-byte alignment SPIR-V requires.  Words are assembled
+ * little-endian, the byte order of SPIR-V modules and of every platform SoX
+ * targets, so the array reads back identical to the file.
  *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *

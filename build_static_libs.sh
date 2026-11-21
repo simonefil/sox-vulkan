@@ -67,13 +67,11 @@ ENABLE_MAGIC=ON
 ENABLE_FFMPEG=ON
 ENABLE_APE=ON
 ENABLE_MUSEPACK=ON
-# Off by default: unlike the Windows script, which requires VULKAN_SDK up front,
-# a Unix host is not guaranteed to provide a loader, glslang and glslc.  Opt in
-# with --vulkan once those are installed.
+# Off by default: a Unix host may lack the Vulkan loader, glslang and glslc.
+# Enable with --vulkan once they are installed.
 ENABLE_VULKAN=OFF
-# Whether the downloaded sources, static libraries and build trees survive the
-# build, so a rebuild is incremental rather than starting over.  The Windows
-# script spells the same option -KeepBuild.
+# Keep downloaded sources, static libraries and build trees for incremental
+# rebuilds (-KeepBuild in the Windows script).
 KEEP_BUILD=OFF
 LIBRARY=OFF
 
@@ -108,11 +106,10 @@ LIBOGG_VERSION="1.3.6"
 LIBVORBIS_VERSION="1.3.7"
 FLAC_VERSION="1.5.0"
 OPUS_VERSION="1.6.1"
-# Opus 1.6 is published only on downloads.xiph.org, which redirects to
-# ftp.osuosl.org: its certificate chains to SSL.com TLS RSA Root CA 2022, a
-# root older macOS releases do not trust.  The archive is therefore fetched
-# without certificate verification and checked against the digest Xiph lists
-# in https://downloads.xiph.org/releases/opus/SHA256SUMS.txt.
+# Opus 1.6 is served from ftp.osuosl.org, whose certificate chains to SSL.com
+# TLS RSA Root CA 2022, untrusted by older macOS.  It is fetched without
+# certificate verification and checked against the digest in
+# https://downloads.xiph.org/releases/opus/SHA256SUMS.txt.
 OPUS_SHA256="6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
 LIBMAD_VERSION="0.16.5"
 LAME_VERSION="4.0"
@@ -125,20 +122,18 @@ FILE_VERSION="5.48"
 LIBTOOL_VERSION="2.6.2"
 LIBAO_VERSION="1.2.2"
 FFMPEG_VERSION="9.0.2"
-# Monkey's Audio SDK and Musepack publish no checksums of their own: these are
-# the digests of the archives SoX's APE and Musepack support was verified
-# with, kept identical to the ones in build_static_libs.ps1.
+# Monkey's Audio SDK and Musepack publish no checksums: these are the digests
+# of the archives SoX was verified with, the same as in build_static_libs.ps1.
 MAC_SDK_VERSION="13.47"
 MAC_SDK_SHA256="6aec852ecf38ef91c0b323b83356f16cc6d485f1cc7a338151e60995a87e8166"
 MUSEPACK_VERSION="r475"
 MUSEPACK_SHA256="a4b1742f997f83e1056142d556a8c20845ba764b70365ff9ccf2e3f81c427b2b"
 VKFFT_VERSION="1.3.4"
-# VkFFT ships no release tarball checksum of its own; this is the digest of the
-# GitHub-generated archive for the tag above, kept identical to the one pinned
-# in build_static_libs.ps1 so both platforms install the same headers.
+# Digest of the GitHub-generated VkFFT archive for the tag above, the same as
+# in build_static_libs.ps1.
 VKFFT_SHA256="b61055393adb3adc79009fe12401cbfbbdfba584e665e9c35fcbf4b32fb31f30"
-# The SHA-256 digest the Tenacity team publishes with the libmad release
-# tarball, kept identical to the one in build_static_libs.ps1.
+# SHA-256 published by Tenacity for the libmad tarball, the same as in
+# build_static_libs.ps1.
 LIBMAD_SHA256="f401b2ccf49c26ad0c3a6ef0179b1cbbff2406338b0603bb2033e6dcaf706114"
 
 # Colors for output
@@ -278,12 +273,10 @@ verify_static_dependencies() {
                     /usr/lib/*|/System/Library/*)
                         ;;
                     */libvulkan.*|*/libglslang.*)
-                        # The same exemption the Windows build makes.  The
-                        # Vulkan loader belongs to the display driver and
-                        # glslang is what VkFFT compiles shaders with; neither
-                        # can be linked statically, and neither appears at all
-                        # unless --vulkan was given.  Codec libraries still
-                        # may not, which is what this check is for.
+                        # The Vulkan loader (display driver) and glslang
+                        # (VkFFT's shader compiler) cannot be linked
+                        # statically and appear only with --vulkan; codec
+                        # libraries must be static.
                         ;;
                     *)
                         log_error "Unexpected dynamic dependency: ${dependency}"
@@ -503,13 +496,10 @@ build_opus() {
     log_success "opus installed"
 }
 
-# FFmpeg is built --disable-everything and then opted back in, one component
-# at a time, because SoX uses a fixed and small set: libavcodec's AAC, ALAC,
-# AC-3, E-AC-3, DTS, MLP and TrueHD codecs behind codec-ffmpeg.c, plus the
-# parsers the raw aac, latm, ac3, eac3, dts, mlp and truehd handlers frame
-# their input with.  The containers are SoX's own, so libavformat is not built.
-# A default FFmpeg build would be an order of magnitude larger for nothing, and
-# every enabled decoder is one more thing linked into a static executable.
+# FFmpeg is built --disable-everything plus the components SoX uses:
+# libavcodec's AAC, ALAC, AC-3, E-AC-3, DTS, MLP and TrueHD codecs behind
+# codec-ffmpeg.c, and the parsers of the raw aac, latm, ac3, eac3, dts, mlp and
+# truehd handlers.  SoX has its own containers, so libavformat is not built.
 #
 # The BSDs need gmake: FFmpeg's generated makefiles use GNU extensions.
 build_ffmpeg() {
@@ -571,13 +561,10 @@ build_ffmpeg() {
 
 # Update outdated config.guess/config.sub for ARM64 support.
 #
-# Several of the autotools tarballs below predate arm64-apple-darwin and their
-# bundled config.guess rejects the host outright.  The replacement is taken
-# from the libtool source already unpacked here when it is available, and
-# fetched from GNU config only as a fallback -- so a machine with no network
-# still works once libtool has been built.  The result is validated before it
-# replaces anything, since a proxy error page saved over config.guess would
-# break every later package.
+# Several autotools tarballs predate arm64-apple-darwin.  The replacement
+# comes from the unpacked libtool source when available, else from GNU config,
+# and is validated before use so a saved proxy error page cannot overwrite
+# config.guess.
 update_config_scripts() {
     local dir="$1"
     log_info "Updating config.guess/config.sub for ARM64 compatibility..."
@@ -747,11 +734,11 @@ build_wavpack() {
 # Monkey's Audio SDK: libMAC, the C++ library SoX reads and writes APE with.
 #
 # The zip has no top-level directory, so it is unpacked into one of its own.
-# Two files are dropped from the build.  MD5.cpp is RSA's reference MD5, under
-# a licence of its own; SoX defines the three MD5 functions the library calls
-# itself.  MACDll.cpp is the C interface of the SDK's DLL, which SoX does not
-# use, and under MSVC it includes MFC.  The frame decoder and encoder SoX uses are declared in headers the SDK does
-# not install, so all of them are copied beside the public ones.
+# Two files are dropped: MD5.cpp (RSA's reference MD5, under its own licence;
+# SoX defines the three MD5 functions the library calls) and MACDll.cpp (the
+# SDK DLL's C interface, unused, and it includes MFC under MSVC).  The frame
+# decoder and encoder are declared in headers the SDK does not install, so all
+# headers are copied beside the public ones.
 build_monkeys_audio() {
     log_info "========== Building Monkey's Audio SDK ${MAC_SDK_VERSION} =========="
 
@@ -791,11 +778,10 @@ build_monkeys_audio() {
     log_success "Monkey's Audio SDK installed"
 }
 
-# The CMakeLists build_musepack compiles libmpcdec, libmpcenc and libmpcpsy
-# with.  Upstream's own also configures the command-line tools, which need
-# libreplaygain and libcuefile, and libcuefile r475 no longer compiles with a
-# current clang.  The flags are upstream's: FAST_MATH and CVD_FASTLOG, which
-# SoX's encoder is compiled to match.  build_static_libs.ps1 writes the same.
+# CMakeLists for libmpcdec, libmpcenc and libmpcpsy only: upstream's also
+# builds the command-line tools, whose libcuefile r475 fails on current clang.
+# Flags are upstream's (FAST_MATH, CVD_FASTLOG), matched by SoX's encoder.
+# build_static_libs.ps1 writes the same file.
 write_musepack_cmakelists() {
     cat <<'EOF'
 cmake_minimum_required(VERSION 3.15)
@@ -807,10 +793,9 @@ add_compile_definitions(FAST_MATH CVD_FASTLOG)
 if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_DEPRECATE)
 else()
-    # The sources predate two GCC defaults.  requant.h declares its tables
-    # without extern, which links only with common symbols (GCC 10 stopped
-    # making them).  libmpcpsy's ans.c passes an int * where a
-    # const int (*)[3] is declared, which GCC 14 made an error.
+    # requant.h declares its tables without extern, which needs common
+    # symbols (off by default since GCC 10); libmpcpsy's ans.c passes an
+    # int * for a const int (*)[3], an error since GCC 14.
     add_compile_options(-fomit-frame-pointer -fcommon -Wno-error=incompatible-pointer-types)
 endif()
 include_directories("${MPC_ROOT}/include")
@@ -1417,10 +1402,9 @@ main() {
         )
     fi
 
-    # The Monkey's Audio SDK and the Vulkan backend are C++.  On Linux the C++
-    # runtime is linked statically, like the codec libraries, so the binary does
-    # not depend on the host's libstdc++ version; macOS links the system libc++,
-    # which every release has.
+    # The Monkey's Audio SDK and the Vulkan backend are C++.  Linux links the
+    # C++ runtime statically, independent of the host's libstdc++; macOS links
+    # the system libc++.
     CXX_RUNTIME_CMAKE_ARGS=()
     if [ "${PLATFORM}" = "Linux" ] && { [ "${ENABLE_APE}" = "ON" ] || [ "${ENABLE_VULKAN}" = "ON" ]; }; then
         CXX_RUNTIME_CMAKE_ARGS+=("-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc")

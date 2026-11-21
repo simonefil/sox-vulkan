@@ -27,7 +27,7 @@ __pycache__/
 .DS_Store
 /.idea/
 
-# Directory di lavoro (build-vk, build-fp64, build-hybrid, ...) e librerie statiche
+# Working directories (build-vk, build-fp64, build-hybrid, ...) and static libraries
 build-*/
 cmake-build-debug/
 ffbuild/

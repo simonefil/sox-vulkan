@@ -20,11 +20,10 @@
  * by the Vulkan SDM modulator.
  *
  * This is the ingest step of the resident DSD path: a single dispatch
- * transposes interleaved to planar, folds the producer's domain in through
- * scale, and zero-fills the tail up to the fixed block the modulator's
- * finite-state machine requires.  The modulator
- * is FP32, so every member of this family writes plain floats however wide
- * its input is.
+ * transposes interleaved to planar and zero-fills the tail up to the fixed
+ * block the modulator's finite-state machine requires.  The modulator is
+ * FP32, so every member of this family writes plain floats however wide its
+ * input is.
  *
  * Bindings, in the order update_resident_descriptors() in sdm_vulkan.c writes
  * them:
@@ -34,14 +33,11 @@
  *   2 clipped_samples  -- in/out: a single counter, incremented atomically
  *                         for every sample outside full scale.
  *
- * Push constants (resident_parameters_t, 16 bytes):
+ * Push constants (resident_parameters_t, 12 bytes):
  *   input_frames   frames the producer actually supplied.
  *   output_frames  frames the modulator's block holds; the difference is the
  *                  silence padding, and also the planar channel stride.
  *   channels       channels, and the interleaved input's frame stride.
- *   scale          the producer's domain as a factor, one for both PCM
- *                  domains; ensure_resident_pipeline() in sdm_vulkan.c sets
- *                  it.
  *
  * Dispatch is two-dimensional: x covers output_frames, padding included,
  * rounded up to whole workgroups of 128, and y is one invocation per
@@ -76,7 +72,6 @@ layout(push_constant) uniform Parameters {
   uint input_frames;
   uint output_frames;
   uint channels;
-  float scale;
 } parameters;
 
 void main()
@@ -89,7 +84,7 @@ void main()
 
   float value = 0.0;
   if (frame < parameters.input_frames) {
-    value = input_samples[frame * parameters.channels + channel] * parameters.scale;
+    value = input_samples[frame * parameters.channels + channel];
   }
   if (value < -1.0 || value > 1.0)
     atomicAdd(clipped_samples[0], 1u);

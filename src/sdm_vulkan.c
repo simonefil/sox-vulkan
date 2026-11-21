@@ -137,12 +137,11 @@ typedef struct {
   uint32_t input_frames;       /* PCM frames available to the ingest shader. */
   uint32_t output_frames;      /* DSD-rate samples generated per channel. */
   uint32_t channels;
-  float scale;                 /* Producer domain to normalized PCM conversion. */
 } resident_parameters_t;
 
 lsx_static_assert(sizeof(state_t) == 8, vulkan_state_layout);
 lsx_static_assert(sizeof(mash_parameters_t) == 56, vulkan_mash_push_layout);
-lsx_static_assert(sizeof(resident_parameters_t) == 16, vulkan_resident_push_layout);
+lsx_static_assert(sizeof(resident_parameters_t) == 12, vulkan_resident_push_layout);
 
 typedef lsx_vulkan_buffer_t buffer_t;
 
@@ -193,7 +192,6 @@ struct lsx_sdm_vulkan {
    * still owe a padded terminal batch for resident_pending_frames, which
    * _resident_active exposes to the scheduler. */
   sox_bool resident_final;
-  float resident_scale;          /* Domain conversion folded into the ingest. */
 
   /* Prefix-scan geometry, computed from the batch size.  The scan is
    * hierarchical: each level scans the sums of the level below it, so
@@ -874,17 +872,16 @@ static void record_mash(lsx_sdm_vulkan_t *context)
  *
  * The format decides the shader, so it is latched on the first slice and a
  * later change is refused.  Both PCM domains carry samples normalized to
- * +/-1, so the ingest's scale factor is one for either. */
+ * +/-1, which is what the modulator takes, so the ingest passes them as they
+ * are; any other domain is refused. */
 static int ensure_resident_pipeline(
     lsx_sdm_vulkan_t *context,
     lsx_vulkan_resident_format_t format,
     lsx_vulkan_resident_domain_t domain)
 {
-  float scale;
-
   switch (domain) {
     case lsx_vulkan_resident_domain_normalized:
-    case lsx_vulkan_resident_domain_sox_sample: scale = 1.0f; break;
+    case lsx_vulkan_resident_domain_sox_sample: break;
     default: lsx_fail("unsupported resident Vulkan SDM input domain");
       return SOX_EOF;
   }
@@ -892,7 +889,6 @@ static int ensure_resident_pipeline(
     lsx_fail("the Vulkan SDM ingest cannot change input format mid-stream");
     return SOX_EOF;
   }
-  context->resident_scale = scale;
   return SOX_SUCCESS;
 }
 
@@ -1081,7 +1077,6 @@ static int record_resident_and_run(lsx_sdm_vulkan_t *context, uint32_t input_fra
   parameters.input_frames = input_frames;
   parameters.output_frames = context->output_frames;
   parameters.channels = context->channels;
-  parameters.scale = context->resident_scale;
   if (update_resident_descriptors(context) != SOX_SUCCESS ||
       vk_result(vkResetCommandBuffer(
       context->command_buffer, 0),

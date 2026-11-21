@@ -987,8 +987,6 @@ static int initialize_kernels(
           ((double *)context->working_host)[2u * target_index] = coefficient;
           ((double *)context->working_host)[2u * target_index + 1u] = channel_lows ? channel_lows[first + index] : 0.;
         }
-        else if (context->double_precision)
-          ((double *)context->working_host)[target_index] = coefficient;
         else
           ((float *)context->working_host)[target_index] = (float)coefficient;
       }

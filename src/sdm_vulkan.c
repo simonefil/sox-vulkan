@@ -1,6 +1,4 @@
-/* Vulkan FIR and DSD modulation backend for SoX.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Vulkan DSD modulation backend for SoX. */
 
 #include "sox_i.h"
 #include "sdm_vulkan.h"
@@ -34,10 +34,11 @@
 #endif
 
 /*
- * The Vulkan encoder is deliberately split into two GPU stages:
+ * The Vulkan encoder runs in two GPU stages:
  *
- *  1. An ingest shader converts the incoming stream, host or resident, to
- *     fixed DSD rate without materialising an intermediate SoX stream.
+ *  1. An ingest shader converts the incoming stream, host or resident and
+ *     already at the DSD rate, to the planar FP32 the modulator reads,
+ *     without materialising an intermediate SoX stream.
  *  2. A conservative MASH-2 produces values in [-1, 2].  Two modular prefix
  *     scans expose its otherwise serial accumulators.  The final one-bit
  *     reducer is a 69-state finite-state machine: every 256-sample block
@@ -50,8 +51,8 @@
  */
 #define SDM_VULKAN_LOCAL_SIZE 256u
 #define SDM_VULKAN_INGEST_LOCAL_SIZE 128u
-/* Samples per finite-state block.  Equal to the workgroup size, so one block
- * is one workgroup's worth of the replay that follows. */
+/* Samples per finite-state block, a whole number of 32-bit output words.
+ * The replay handles one block per shader invocation. */
 #define SDM_VULKAN_BLOCK_SAMPLES 256u
 #define SDM_VULKAN_INPUT_FRAMES 16384u
 #define SDM_VULKAN_RESIDENT_BATCH_SAMPLES \
@@ -64,14 +65,13 @@
 #define SDM_VULKAN_MASH_BINDINGS 11u
 #define SDM_VULKAN_RESIDENT_BINDINGS 3u
 /* Input headroom, about -3 dB.  A conservative MASH-2 is only stable while
- * its input stays well inside full scale; driving it harder makes the
- * modulator's noise shaping break down rather than merely clip. */
+ * its input stays well inside full scale; driven harder, its noise shaping
+ * breaks down. */
 #define SDM_VULKAN_INPUT_GAIN 0.7079457844f
 
 /* Which job one dispatch of the MASH shader performs.  A single pipeline
- * serves them all, selected by a push constant, because they share the same
- * eleven buffers and the alternative would be eleven pipelines over one set
- * of bindings.  Values must match the shader's own constants. */
+ * serves them all, selected by a push constant, since they share the same
+ * eleven buffers.  Values must match the shader's own constants. */
 #define MODE_INPUT 0u
 #define MODE_SCAN 1u
 #define MODE_ADD 2u
@@ -189,16 +189,16 @@ struct lsx_sdm_vulkan {
    * would need a different shader. */
   lsx_vulkan_resident_format_t resident_input_format;
   sox_bool resident_input_format_known;
-  /* Latched when the final producer slice is accepted.  It does not mean the
-   * modulator is drained: resident_pending_frames may still owe a padded
-   * terminal batch, which _resident_active exposes to the scheduler. */
+  /* Latched when the final producer slice is accepted.  The modulator may
+   * still owe a padded terminal batch for resident_pending_frames, which
+   * _resident_active exposes to the scheduler. */
   sox_bool resident_final;
   float resident_scale;          /* Domain conversion folded into the ingest. */
 
-  /* Prefix-scan geometry, computed once from the batch size.  The scan is
+  /* Prefix-scan geometry, computed from the batch size.  The scan is
    * hierarchical: each level scans the sums of the level below it, so
    * offsets and counts describe where each level's data lives within the
-   * scan buffer.  Eight levels is far more than 256^8 samples could need. */
+   * scan buffer.  Eight levels cover up to 256^8 samples. */
   uint32_t block_count;
   uint32_t scan_count;
   uint32_t offsets[8];
@@ -257,10 +257,8 @@ static void destroy_buffer(lsx_sdm_vulkan_t *context, buffer_t *buffer)
 
 /* Lay out the scan hierarchy for a batch of samples: where each level's data
  * begins, how many elements it has, and how many levels there are.  Returns
- * the total storage required, or 0 if the hierarchy would be deeper than the
- * eight levels the arrays hold -- which for a workgroup of 256 would need a
- * batch beyond any conceivable size, so the limit is a guard rather than a
- * constraint. */
+ * the total storage required, or 0 if the hierarchy would need more than the
+ * eight levels the arrays hold or more than 32-bit storage. */
 static uint32_t scan_storage_count(uint32_t samples, uint32_t *offsets, uint32_t *counts, uint32_t *level_count)
 {
   uint64_t total = 0;
@@ -292,13 +290,10 @@ static uint32_t scan_storage_count(uint32_t samples, uint32_t *offsets, uint32_t
 /* Enumerate every state the one-bit reducer can reach, and build the lookup
  * from a state's two accumulator values to its index.
  *
- * The set is found by closure rather than being tabulated: start from the
- * zero state and repeatedly apply the four possible MASH-2 inputs to every
- * state found so far until nothing new appears.  Doing it this way means the
- * table follows from the reducer's arithmetic rather than being a constant
- * that could silently fall out of step with it -- and the caller checks the
- * result against the known count of 69, so if the arithmetic ever changes the
- * mismatch is reported instead of producing wrong transition tables.
+ * The set is the closure of the zero state under the four possible MASH-2
+ * inputs, so the table follows from the reducer's arithmetic.  A count other
+ * than SDM_VULKAN_STATE_COUNT, or a state outside the lookup, returns 0 and
+ * the caller reports the failure.
  *
  * Returns the number of states, with *initial_state the index of the one a
  * fresh modulator starts in. */
@@ -315,8 +310,8 @@ static uint32_t discover_states(state_t *states, int32_t *lookup, uint32_t *init
   present[(0 + 13) * 11 + 0 + 5] = 1;
   /*
    * Enumerate the closure of the reducer for every possible MASH-2 value.
-   * The result is intentionally checked against the known 69-state topology:
-   * silently changing this set would invalidate every transition table.
+   * The result is checked against the known 69-state topology, on which
+   * every transition table depends.
    */
   while (previous_count != count) {
     previous_count = count;
@@ -473,7 +468,7 @@ static VkDeviceSize resident_sample_size(lsx_vulkan_resident_format_t format)
 /*
  * One ingest per producer format: the four the resident chain can carry.
  * Each writes the same planar FP32 the modulator reads, so the profile
- * chooses the arithmetic that reaches the modulator, not a different route.
+ * changes only the arithmetic of the conversion.
  */
 static int create_resident_pipeline(lsx_sdm_vulkan_t *context, lsx_vulkan_resident_format_t input_format)
 {
@@ -718,8 +713,7 @@ static int upload_buffer(lsx_sdm_vulkan_t *context, uint32_t target, void const 
 }
 
 /* Barrier between two compute dispatches.  Every step of the modulator reads
- * what the last wrote, so one follows each dispatch without exception, which
- * is why mash_dispatch issues it rather than each caller. */
+ * what the last wrote, so mash_dispatch issues one after each dispatch. */
 static void shader_barrier(VkCommandBuffer command_buffer)
 {
   VkMemoryBarrier barrier = {
@@ -750,15 +744,12 @@ static void mash_dispatch(lsx_sdm_vulkan_t *context, mash_parameters_t const *pa
 
 /* Record a hierarchical prefix scan over the current stage's accumulator.
  *
- * A running sum is serial by nature, which is exactly what makes a sigma-delta
- * modulator hard to parallelise.  The standard answer is used: scan each
- * workgroup independently, scan the workgroup sums recursively, then add each
- * group's preceding total back down.  The result is the same sums a serial
- * pass would produce, and the accumulators are modular integers, so this is
- * exact rather than merely close.
+ * Scan each workgroup independently, scan the workgroup sums recursively,
+ * then add each group's preceding total back down.  The accumulators are
+ * modular integers, so the result equals the serial running sums exactly.
  *
- * The recursion is unrolled into the level arrays computed at creation, since
- * their depth is known from the batch size. */
+ * The recursion is unrolled into the level arrays computed from the batch
+ * size. */
 static void record_scan(lsx_sdm_vulkan_t *context, mash_parameters_t *parameters)
 {
   uint32_t level;
@@ -882,10 +873,8 @@ static void record_mash(lsx_sdm_vulkan_t *context)
 /* Make sure the ingest pipeline matches the producer's format and domain.
  *
  * The format decides the shader, so it is latched on the first slice and a
- * later change is refused rather than reinterpreted.  The domain only decides
- * a scale factor, which the ingest applies as it reads: SoX's sample range is
- * brought to +/-1, normalized input already being there.  Folding it into the
- * ingest costs nothing, the samples being read anyway. */
+ * later change is refused.  The domain only decides a scale factor, which the
+ * ingest applies as it reads, bringing SoX's sample range to +/-1. */
 static int ensure_resident_pipeline(
     lsx_sdm_vulkan_t *context,
     lsx_vulkan_resident_format_t format,
@@ -896,10 +885,9 @@ static int ensure_resident_pipeline(
   switch (domain) {
     case lsx_vulkan_resident_domain_normalized: scale = 1.0f; break;
     case lsx_vulkan_resident_domain_sox_sample:
-      /* SoX's own domain is normalised too now, so the two coincide and the
-       * scale is one.  The branch stays for the same reason it stays in the
-       * rate shaders' `normalize` parameter: it is what says the ingest reads
-       * the build's sample domain rather than assuming it. */
+      /* With normalized sample values the two domains coincide and the
+       * scale is one.  As with the rate shaders' `normalize` parameter, the
+       * scale follows the build's sample domain. */
       scale = lsx_sample_values_are_normalized() ? 1.0f : 1.0f / 2147483648.0f;
       break;
     default: lsx_fail("unsupported resident Vulkan SDM input domain");
@@ -972,8 +960,8 @@ static int update_resident_descriptors(lsx_sdm_vulkan_t *context)
 }
 
 /* Copy frames from a producer's slice into the modulator's input buffer,
- * behind whatever is already pending.  Queued, not submitted, so a run of
- * appends costs one submission between them.
+ * behind whatever is already pending.  The copy is queued for a later
+ * submission, so a run of appends costs one submission between them.
  *
  * source_frame lets a slice be taken in pieces, which is what happens when it
  * would overflow the batch: the head fills the batch and the tail begins the
@@ -1035,9 +1023,9 @@ static int append_resident_input(
 
 /* Wait once the appends in flight have filled the rotation of command
  * buffers, so that the next append does not overwrite one the device is still
- * executing.  Submits an empty command buffer: the point is the batch it
- * carries with it and the fence it signals, not any work of its own.  Below
- * the depth there is nothing to do, which is the usual case. */
+ * executing.  An empty command buffer is submitted to flush the queued
+ * appends and signal the fence.  Below the depth there is nothing to do,
+ * which is the usual case. */
 static int retire_resident_appends(lsx_sdm_vulkan_t *context)
 {
   VkCommandBufferBeginInfo begin = {
@@ -1064,18 +1052,12 @@ static int retire_resident_appends(lsx_sdm_vulkan_t *context)
 }
 
 /* Run one batch end to end and wait: ingest, modulate, download the packed
- * words, and retain whatever did not fill a whole block.
- *
- * retained_frames is the tail that must wait for the next batch, the state
- * machine's blocks being a fixed 256 samples; it is moved down within the
- * same buffer, which is safe here because everything before it has been
- * consumed by dispatches in this same command buffer and ordered by the
- * barriers above.
+ * words.
  *
  * The optional timestamps split the batch into its ingest and its modulation
- * for the -V3 report; they are only recorded where the device supports
+ * for the -V4 debug report; they are only recorded where the device supports
  * timestamp queries, and affect nothing else. */
-static int record_resident_and_run(lsx_sdm_vulkan_t *context, uint32_t input_frames, uint32_t retained_frames)
+static int record_resident_and_run(lsx_sdm_vulkan_t *context, uint32_t input_frames)
 {
   VkCommandBufferBeginInfo begin = {
     VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
@@ -1096,10 +1078,6 @@ static int record_resident_and_run(lsx_sdm_vulkan_t *context, uint32_t input_fra
   VkBufferCopy output_copy = {
     0, 0, context->download.size
   };
-  VkBufferCopy retain_copy;
-  VkDeviceSize resident_frame_size =
-      (VkDeviceSize)context->channels *
-      resident_sample_size(context->resident_input_format);
   resident_parameters_t parameters;
   uint64_t timestamps[3];
   double period = (double)context->vulkan->properties.limits.timestampPeriod * 1e-9;
@@ -1164,16 +1142,6 @@ static int record_resident_and_run(lsx_sdm_vulkan_t *context, uint32_t input_fra
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_HOST_BIT, 0,
       1, &download_barrier, 0, NULL, 0, NULL);
-  if (retained_frames) {
-    retain_copy.srcOffset = (VkDeviceSize)input_frames * resident_frame_size;
-    retain_copy.dstOffset = 0;
-    retain_copy.size = (VkDeviceSize)retained_frames * resident_frame_size;
-    lsx_vulkan_label_begin(context->vulkan, context->command_buffer, "Retain partial DSD input block");
-    vkCmdCopyBuffer(
-        context->command_buffer, context->resident_input.buffer,
-        context->resident_input.buffer, 1, &retain_copy);
-    lsx_vulkan_label_end(context->vulkan, context->command_buffer);
-  }
   if (vk_result(vkEndCommandBuffer(
       context->command_buffer),
       "vkEndCommandBuffer") != SOX_SUCCESS ||
@@ -1193,9 +1161,8 @@ static int record_resident_and_run(lsx_sdm_vulkan_t *context, uint32_t input_fra
   return SOX_SUCCESS;
 }
 
-/* DSD rates are whole-power-of-two multiples of the CD rate, named by the
- * multiple: DSD64 through DSD1024.  Anything else is not a DSD rate at all,
- * so the test is exact rather than a range. */
+/* DSD rates are power-of-two multiples of the CD rate, named by the
+ * multiple.  This backend implements DSD64 through DSD1024. */
 sox_bool lsx_sdm_vulkan_dsd_rate_supported(unsigned rate)
 {
   unsigned factor = rate % 44100u ? 0u : rate / 44100u;
@@ -1205,9 +1172,9 @@ sox_bool lsx_sdm_vulkan_dsd_rate_supported(unsigned rate)
 
 /* Build the modulator for a given batch size.
  *
- * Everything the batch implies is fixed here: the buffer sizes, the block
- * count, and the depth of the scan hierarchy, so the steady state allocates
- * nothing.  The state machine is then enumerated on the host and its table
+ * The buffer sizes follow from the batch and are fixed here, so the steady
+ * state allocates nothing; process_resident_pending recomputes the block
+ * count and the scan hierarchy for each batch within them.  The state machine is then enumerated on the host and its table
  * uploaded, along with the per-channel initial state -- which is what makes
  * the first block start from the same state a serial modulator would.
  *
@@ -1259,8 +1226,8 @@ static lsx_sdm_vulkan_t *create_with_input_target(
   }
   /*
    * Keep one producer block plus a partial FSM block.  Non-final input is
-   * dispatched only in complete 256-sample blocks, so padding can occur
-   * once, at the logical end of the stream, instead of between slices.
+   * dispatched only in complete 256-sample blocks, so padding occurs only
+   * once, at the logical end of the stream.
    */
   context->input_frames = (uint32_t)input_capacity;
   if (!context->input_frames)
@@ -1395,7 +1362,6 @@ size_t lsx_sdm_vulkan_input_capacity(lsx_sdm_vulkan_t const *context)
 
 static int process_resident_pending(
     lsx_sdm_vulkan_t *context, uint32_t input_frames,
-    uint32_t retained_frames,
     uint8_t const **channel_bytes,
     size_t *bytes_per_channel, size_t *channel_stride);
 
@@ -1424,7 +1390,7 @@ int lsx_sdm_vulkan_process(
   if (upload_resident_input(context, input, (VkDeviceSize)frames * context->channels * sizeof(float)) != SOX_SUCCESS)
     return SOX_EOF;
   if (process_resident_pending(
-      context, (uint32_t)frames, 0, channel_bytes,
+      context, (uint32_t)frames, channel_bytes,
       bytes_per_channel, channel_stride) != SOX_SUCCESS)
     return SOX_EOF;
   context->process_seconds += monotonic_seconds() - started;
@@ -1441,7 +1407,6 @@ int lsx_sdm_vulkan_process(
  * which varies from batch to batch on the resident path. */
 static int process_resident_pending(
     lsx_sdm_vulkan_t *context, uint32_t input_frames,
-    uint32_t retained_frames,
     uint8_t const **channel_bytes,
     size_t *bytes_per_channel, size_t *channel_stride)
 {
@@ -1462,7 +1427,7 @@ static int process_resident_pending(
   context->mash_parameters.scan_storage_count = context->scan_count;
   if (!context->scan_count || !context->resident_pipeline)
     return SOX_EOF;
-  if (record_resident_and_run(context, input_frames, retained_frames) != SOX_SUCCESS)
+  if (record_resident_and_run(context, input_frames) != SOX_SUCCESS)
     return SOX_EOF;
   context->valid_output_words = divide_up(input_frames, 32u);
   *channel_bytes = context->download.mapped;
@@ -1545,7 +1510,7 @@ int lsx_sdm_vulkan_consume_resident(
       context->resident_final = sox_true;
     if (context->resident_pending_frames == capacity) {
       if (process_resident_pending(
-          context, capacity, 0, channel_bytes,
+          context, capacity, channel_bytes,
           bytes_per_channel, channel_stride) != SOX_SUCCESS)
         return SOX_EOF;
       context->resident_pending_frames = 0;
@@ -1558,16 +1523,16 @@ int lsx_sdm_vulkan_consume_resident(
       context->resident_pending_frames = remaining;
     }
   }
-  /* Producer slices are deliberately accumulated into a large GPU batch.
-   * Processing every complete state-machine block as soon as it arrives
-   * turns a high-rate conversion into thousands of submit/wait/download
-   * cycles.  A partial final batch is the only mid-capacity dispatch. */
+  /* Producer slices are accumulated into a large GPU batch, since a batch
+   * per state-machine block would turn a high-rate conversion into thousands
+   * of submit/wait/download cycles.  A partial final batch is the only
+   * mid-capacity dispatch. */
   if (!*output_ready && context->resident_final &&
       context->resident_pending_frames) {
     uint32_t process_frames = context->resident_pending_frames;
 
     if (process_resident_pending(
-        context, process_frames, 0, channel_bytes,
+        context, process_frames, channel_bytes,
         bytes_per_channel, channel_stride) != SOX_SUCCESS)
       return SOX_EOF;
     context->resident_pending_frames = 0;

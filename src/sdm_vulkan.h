@@ -1,6 +1,4 @@
-/* Vulkan FIR and DSD modulation backend for SoX.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +15,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Vulkan DSD modulation backend for SoX. */
+
 #ifndef LSX_SDM_VULKAN_H
 #define LSX_SDM_VULKAN_H
 
@@ -26,16 +26,15 @@
 typedef struct lsx_sdm_vulkan lsx_sdm_vulkan_t;
 
 /*
- * The modulator does not resample.  It consumes a stream already at the DSD
- * rate, from the host or from a resident producer, and emits packed DSD.
+ * The modulator consumes a stream already at the DSD rate, from the host or
+ * from a resident producer, and emits packed DSD.
  *
- * A sigma-delta modulator is serial by construction -- each output bit
- * depends on the error left by the one before it -- so what makes a GPU
- * implementation possible is that both of its parts are associative in
- * disguise: the noise-shaping accumulators are prefix sums, and the one-bit
- * reducer is a finite-state machine whose per-block transitions compose.
- * Both are exact integer computations, so the result is bit for bit what a
- * serial modulator would have produced, not an approximation of it.
+ * A sigma-delta modulator is serial by construction: each output bit depends
+ * on the error left by the one before it.  The GPU implementation rests on
+ * both of its parts being associative: the noise-shaping accumulators are
+ * prefix sums, and the one-bit reducer is a finite-state machine whose
+ * per-block transitions compose.  Both are exact integer computations, so
+ * the result is bit for bit what a serial modulator would produce.
  */
 
 /* Whether a rate is one of the DSD rates this backend implements. */
@@ -83,8 +82,8 @@ int lsx_sdm_vulkan_consume_resident(
  * buffered, so the caller must call again with a NULL input. */
 sox_bool lsx_sdm_vulkan_resident_active(lsx_sdm_vulkan_t const *context);
 
-/* Samples the ingest had to clamp, counted on the device.  Meaningful only
- * once the work that wrote them has completed. */
+/* Samples outside full scale, counted on the device by the ingest.
+ * Meaningful only once the work that wrote them has completed. */
 uint64_t lsx_sdm_vulkan_resident_clips(lsx_sdm_vulkan_t const *context);
 
 #endif

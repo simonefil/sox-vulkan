@@ -1,6 +1,4 @@
-/* DSF file support
- *
- * Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
+/* Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -17,7 +15,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* File format specification available at
+/* DSF file support
+ *
+ * File format specification available at
  * http://dsd-guide.com/sites/default/files/white-papers/DSFFileFormatSpec_E.pdf
  */
 
@@ -217,16 +217,14 @@ static size_t dsf_read(sox_format_t *ft, sox_sample_t *buf, size_t len)
 /* Whole 32-frame words taken straight out of the file's own layout.
  *
  * DSF already stores each channel's bits the way the device kernels want
- * them -- byte b of a word holds frames 8b..8b+7, bit zero the earliest --
- * so a word is an assembly of four adjacent bytes and nothing is unpacked
- * here.  This is the whole point of the packed path: a bit never becomes a
+ * them (byte b of a word holds frames 8b..8b+7, bit zero the earliest), so a
+ * word is an assembly of four adjacent bytes and a bit never becomes a
  * sox_sample_t on the host.
  *
  * Only word-aligned positions qualify.  A seek can leave the block position
- * part-way through a word, and a call that lands there returns nothing,
- * which sends the caller to dsf_read; that reader has no such constraint and
- * realigns the stream on the way past.  The same is true of the final frames
- * of a file that does not end on a whole word. */
+ * part-way through a word; a call there returns nothing and the caller falls
+ * back to dsf_read, which realigns the stream on the way past.  The same
+ * holds for the final frames of a file that does not end on a whole word. */
 static size_t dsf_read_packed_words(sox_format_t *ft, sox_sample_t *buf, size_t len)
 {
 	struct dsf *dsf = ft->priv;
@@ -279,9 +277,8 @@ static size_t dsf_read_packed_words(sox_format_t *ft, sox_sample_t *buf, size_t 
 	}
 
 	/* The channel runs were laid out for the count this call set out to
-	 * produce.  Coming up short leaves gaps between them, so close the gaps
-	 * rather than report a stride the caller cannot deduce from the return
-	 * value. */
+	 * produce.  A short read closes the gaps between them, so the stride
+	 * follows from the return value. */
 	if (produced && produced < total_groups)
 		for (channel = 1; channel < channels; ++channel)
 			memmove(buf + channel * produced,
@@ -555,10 +552,8 @@ static size_t dsf_write_packed_words(sox_format_t *ft, const sox_sample_t *buf, 
 
 			/* DSF stores the earliest DSD bit in bit zero of each byte,
 			 * and the four bytes of a word least significant first.
-			 * A packed sample carries the word's value, not its bytes:
-			 * on a little-endian machine the two used to coincide, so a
-			 * block memcpy served, but a double is neither four bytes
-			 * wide nor the word's own representation. */
+			 * A packed sample carries the word as its numeric value, so
+			 * each word is converted and written byte by byte. */
 			size_t group;
 			for (group = 0; group < groups; ++group) {
 				uint32_t word = SOX_DSD_PACKED_WORD_VALUE(source[group]);

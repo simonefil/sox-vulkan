@@ -1,5 +1,4 @@
-/* Sigma-Delta modulator
- * Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
+/* Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -16,7 +15,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/*
+/* Sigma-Delta modulator
+ *
  * References:
  *
  * Derk Reefman, Erwin Janssen. 2002.
@@ -1149,17 +1149,18 @@ static sox_sample_t sdm_sample_1bit(sdm_t *p, double x)
   *obuf++ = (sox_sample_t)(y * SOX_SAMPLE_MAX)
 
 /* The modulator step rearranged so the loop-carried chain is one multiply-add
- * and the sign test. The direct form ran y -> d0 -> the a[] tree -> v ->
- * signbit -> y, about twenty cycles of latency for four of work. The state
- * update is linear and y enters it once, so the feedback comes out:
+ * and the sign test. In the direct form of sdm_filter_calc the chain runs
+ * y -> d0 -> the a[] tree -> v -> signbit -> y, about twenty cycles of
+ * latency for four of work. The state update is linear and y enters it once,
+ * so the feedback separates:
  *
  *   s_n = A s_{n-1} + e0 (x_n - y_{n-1})
  *   v_n = x_n + a . s_n = (1 + a0) x_n + w . s_{n-1} - a0 y_{n-1},  w = A' a
  *
- * The dot product reads the previous state, so it no longer waits for y.
- * Costs about ten more flops per sample, paid out of throughput the
- * latency-bound loop had spare. The two forms agree exactly but round
- * differently, so the bit stream is not identical to the older one.
+ * The dot product reads the previous state, so it does not wait for y. This
+ * costs about ten more flops per sample, paid out of throughput the
+ * latency-bound loop has spare. The two forms are algebraically equal but
+ * round differently, so their bit streams differ.
  *
  * w is indexed by constants below, so it stays in registers. */
 #define SDM_FEEDFORWARD_COEFFS(order)                                        \
@@ -1374,11 +1375,10 @@ static void sdm_process_simple(sdm_t *p, const sox_sample_t *ibuf, sox_sample_t 
 /* Whether the modulator's integrators are still in a usable range.
  *
  * A high-order sigma-delta loop is only conditionally stable: driven too
- * hard, its integrators run away and the output becomes a stream of alternate
- * bits carrying nothing. Once that has happened the state cannot be
- * recovered, so it is detected and reported rather than left to produce
- * noise. Both tests matter, a state may become infinite outright, or merely
- * grow past the point from which the loop cannot return. */
+ * hard, its integrators run away and the output no longer carries the
+ * signal. The state cannot recover from that, so the failure is detected and
+ * reported. A state may become infinite outright or grow past
+ * SDM_STATE_LIMIT; both are tested. */
 static sox_bool sdm_simple_state_valid(const sdm_t *p)
 {
   int i;
@@ -1398,17 +1398,16 @@ static sox_bool sdm_simple_state_valid(const sdm_t *p)
  * integrator state, the last output, and the partly filled byte with its bit
  * count. Nothing is read from an sdm_t, so several channels can run through
  * this at once from different threads, each with its own state; the strides
- * are what let each read and write its own channel of an interleaved buffer.
+ * select each channel of an interleaved buffer.
  *
- * The three loops are one packing problem: finish the byte a previous call
- * left partial, then run whole bytes at a time, then start a new partial byte
- * with whatever is left. Only the middle loop is on the fast path.
+ * The three loops finish the byte a previous call left partial, run whole
+ * bytes at a time (the fast path), then start a new partial byte with
+ * whatever is left.
  *
- * The order-8 case is written out with the state in locals and the loop body
- * in a macro. It is the common case, and most of the speed comes from keeping
- * the eight integrators in registers across the byte instead of reading and
- * writing an array each sample. Every other order goes through the general
- * routine, whose shape is otherwise identical. */
+ * The order-8 case, the common one, is written out with the state in locals
+ * and the loop body in a macro, so the eight integrators stay in registers
+ * across the byte. Every other order goes through the general routine of the
+ * same shape. */
 static size_t sdm_process_simple_packed(const sdm_filter_t *f,
                                         double *state, double *prev_y,
                                         uint8_t *packet,
@@ -1501,7 +1500,7 @@ static size_t sdm_process_simple_packed(const sdm_filter_t *f,
     state[7] = s7;
   } else {
     /* Every order other than eight, in the same rearranged form. The two
-     * state buffers alternate instead of one being copied over the other. */
+     * state buffers are swapped after each sample. */
     const double *a = f->a;
     const double *g = f->g;
     const int order = f->order;
@@ -1781,9 +1780,8 @@ typedef struct sdm_effect {
   uint32_t      trellis_order;
   uint32_t      trellis_num;
   uint32_t      trellis_lat;
-  /* Set by the `sdm-vulkan' handler only. `sdm' stays on the CPU even under
-   * --vulkan-*: the two are different modulators, not two precisions of
-   * one. */
+  /* Set by the `sdm-vulkan' handler only. `sdm' is a different modulator and
+   * stays on the CPU even under --vulkan-*. */
   sox_bool      want_vulkan;
 #if HAVE_VULKAN
   lsx_sdm_vulkan_t *vulkan;
@@ -1810,18 +1808,11 @@ static lsx_vulkan_effect_endpoint_t const vulkan_resident_endpoint = {
   NULL
 };
 
-/*
- * The logical modulator batch follows whoever feeds it, so the context is
- * built on first use: the resident producer's declared block when the chain
- * pairs up, the default host batch otherwise. The backend owns the small
- * carry area needed for a partial FSM block between producer slices.
- */
-/* Build the modulator on first use, sized to the producer's block.
- *
- * It cannot be built at start: the batch size should match what the upstream
- * effect actually hands over, and that is only known when the first resident
- * block arrives. Sizing it to anything else would either waste device memory
- * or force every block to be split. */
+/* Build the modulator on first use, sized to whoever feeds it: the resident
+ * producer's declared block when the chain pairs up, the default host batch
+ * otherwise. The producer's block is known only when its first slice
+ * arrives. The backend owns the small carry area needed for a partial FSM
+ * block between producer slices. */
 static int ensure_vulkan_context(sdm_effect_t *p, size_t batch_frames)
 {
   if (p->vulkan)
@@ -1846,10 +1837,9 @@ static int ensure_vulkan_host_input(sdm_effect_t *p)
 /* Hand out as much of the modulator's packed output as the caller has room
  * for, keeping the rest for the next call.
  *
- * A caller wanting fewer than four bytes' worth gets nothing rather than a
- * partial word: the packed word mode carries whole 32-bit words, and a
- * half-emitted one would put the channels out of step for the rest of the
- * file. */
+ * A caller with room for less than one word per channel gets nothing: the
+ * packed word mode carries whole 32-bit words, and a half-emitted one would
+ * put the channels out of step for the rest of the file. */
 static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf, size_t *osamp)
 {
   size_t capacity = *osamp / p->channels;
@@ -1859,12 +1849,9 @@ static void emit_vulkan_output(sdm_effect_t *p, sox_sample_t *obuf, size_t *osam
 
   /*
    * The GPU output is planar because DSF stores channels in separate blocks.
-   * A SoX sample carries one complete 32-bit DSD word in this packed mode --
-   * as the word's numeric value, not as its four bytes laid into the sample's
-   * storage. The two used to be the same thing, when a sample was an int32
-   * and a memcpy of the whole block did the job; a double has neither the
-   * same width nor the same representation, so each word is loaded and
-   * converted on its own.
+   * In this packed mode a SoX sample carries one complete 32-bit DSD word as
+   * the word's numeric value, so each word is loaded and converted on its
+   * own.
    */
   for (channel = 0; channel < p->channels; ++channel) {
     uint8_t const *source = p->vulkan_output +
@@ -2106,8 +2093,8 @@ static int start(sox_effect_t *effp)
     }
 
     /*
-     * The modulator does not resample: it consumes whatever arrives at the
-     * DSD rate, so the chain must carry a rate effect ahead of it.
+     * The modulator consumes its input at the DSD rate, so the chain must
+     * carry a rate effect ahead of it.
      */
     if (sdm_rate > UINT_MAX || sdm_rate != (unsigned)sdm_rate) {
       lsx_fail("Vulkan SDM requires an integer input sample rate");
@@ -2128,9 +2115,8 @@ static int start(sox_effect_t *effp)
     p->vulkan_engine = vulkan;
     p->vulkan_rate = (unsigned)sdm_rate;
     if (lsx_diagnostics_on) {
-      /* Two modulators, not two precisions: the Vulkan path is MASH-2/FSM and
-       * the CPU has no such modulator, so a row comparing the two is
-       * comparing algorithms and has to say so. */
+      /* The Vulkan path is MASH-2/FSM, an algorithm the CPU modulators do
+       * not implement, so the row names the modulator. */
       lsx_diagnostics_effect_setf(effp, "backend", "vulkan");
       lsx_diagnostics_effect_setf(effp, "modulator", "MASH-2/FSM");
       lsx_diagnostics_effect_setf(effp, "dsd_rate", "%u", (unsigned)sdm_rate);
@@ -2244,14 +2230,14 @@ static int flow(sox_effect_t *effp, const sox_sample_t *ibuf,
       if (!sdm_simple_state_valid(sdm))
         sdm->failed = 1;
     }
-    /* Checked after the parallel region, not inside it: a failure found in
-     * one thread cannot break out of an OpenMP loop, so each channel records
-     * its own outcome and they are all examined here.
+    /* A failure found in one thread cannot break out of an OpenMP loop, so
+     * each channel records its own outcome and all are examined here, after
+     * the parallel region.
      *
      * The channels are given identical counts and identical starting bit
      * offsets, so they must produce identical byte counts; a disagreement
-     * would mean the channels had gone out of step, which every later frame
-     * would inherit, so it is refused rather than carried forward. */
+     * means the channels have gone out of step, which every later frame
+     * would inherit, so it is an error. */
     for (job = 0; job < (ptrdiff_t)channels; ++job) {
       if (p->sdm[job]->failed) {
         *osamp = 0;
@@ -2352,10 +2338,9 @@ const sox_effect_handler_t *lsx_sdm_effect_fn(void)
   return &handler;
 }
 
-/* A separate name rather than a flag on `sdm': the two are different
- * modulators, `sdm' the selectable high-order loops and `sdm-vulkan' the fixed
- * MASH-2/FSM, and no option carries between them. It is also what makes the
- * hybrid chain expressible, `rate' on the device with `sdm' on the host. */
+/* `sdm' runs the selectable high-order loops and `sdm-vulkan' the fixed
+ * MASH-2/FSM; no option carries between them. The separate name also makes
+ * the hybrid chain expressible, `rate' on the device with `sdm' on the host. */
 const sox_effect_handler_t *lsx_sdmvulkan_effect_fn(void)
 {
   static sox_effect_handler_t handler = {

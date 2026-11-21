@@ -1,6 +1,4 @@
 /*
- * Vulkan MASH-2 and finite-state DSD modulator for SoX.
- *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -17,6 +15,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Vulkan MASH-2 and finite-state DSD modulator for SoX. */
 
 #version 450
 
@@ -42,8 +42,9 @@
  * A two-stage MASH can be evaluated with modular prefix scans, but its final
  * one-bit error-feedback reducer remains causal.  The reducer has only 69
  * reachable states.  Each 256-sample block therefore computes a transition
- * for all 69 inputs, the transition tables are prefix-composed to obtain the
- * true seed of every block, and the blocks are replayed concurrently.
+ * for all 69 source states, the transition tables are prefix-composed to
+ * obtain the true seed of every block, and the blocks are replayed
+ * concurrently.
  *
  * Dispatches select one operation through Parameters.mode.  WorkGroupID.y
  * selects the channel, so all channels follow the same command sequence while
@@ -73,7 +74,7 @@ layout(push_constant) uniform Parameters {
  * The eleven bindings below are in the order of the BUFFER_* enumeration in
  * sdm_vulkan.c, which is what the descriptor writes iterate: binding n is
  * buffers[n].  Nothing checks the two against each other, and a mismatch
- * would misread buffers rather than fail.  Binding 0 is what the
+ * misreads buffers silently.  Binding 0 is what the
  * sdm_resident_*.comp ingest family writes.
  */
 

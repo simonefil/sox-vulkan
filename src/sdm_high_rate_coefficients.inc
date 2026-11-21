@@ -1,23 +1,4 @@
-/* Modulator coefficients for the DSD rates above DSD256, derived from the
- * stable DSD256 poles: the NTF zeros are extrapolated from DSD128 and DSD256
- * linearly in 1/OSR^2, and the state coefficients are then solved from the
- * stable pole polynomial.  sdm_alpha is 0.1 and clans_alpha 0.4.
- *
- * Each entry is an sdm_filter_t in declaration order: a, g, order, freq, name,
- * then trellis_order, trellis_num and trellis_lat.  Those three are the
- * filter's own trellis defaults, and zero means it has none of its own: the
- * effect then falls back to 13, 8 and 1024, and only searches at all if the
- * user asked for a trellis.  Every set here leaves them at zero, as does
- * every set in sdm.c.
- *
- * These values are checked-in design results; no generator runs as part of
- * the build.  Keep each a[] and g[] in increasing coefficient index, keep
- * order equal to the number of active a[] coefficients, and keep the rate
- * beside the pair it was solved for.  The two rate families deliberately
- * repeat the same public names: selection also matches freq, so `sdm-6' at
- * DSD512 and DSD1024 denotes two different designs rather than a duplicate.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -32,6 +13,25 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA. */
+
+/* Modulator coefficients for the DSD rates above DSD256, derived from the
+ * stable DSD256 poles: the NTF zeros are extrapolated from DSD128 and DSD256
+ * linearly in 1/OSR^2, and the state coefficients are then solved from the
+ * stable pole polynomial.  sdm_alpha is 0.1 and clans_alpha 0.4.
+ *
+ * Each entry is an sdm_filter_t in declaration order: a, g, order, freq, name,
+ * then trellis_order, trellis_num and trellis_lat.  Those three are the
+ * filter's own trellis defaults, and zero means it has none of its own: the
+ * effect then falls back to 13, 8 and 1024, and searches only if the user
+ * asked for a trellis.  Every set here leaves them at zero, as does every
+ * set in sdm.c.
+ *
+ * These values are checked-in design results; no generator runs as part of
+ * the build.  Keep each a[] and g[] in increasing coefficient index, keep
+ * order equal to the number of active a[] coefficients, and keep the rate
+ * beside the pair it was solved for.  The two rate families repeat the same
+ * public names and selection also matches freq, so `sdm-6' at DSD512 and at
+ * DSD1024 are two different designs. */
 
   /* DSD1024: CLANS and conventional SDM designs, orders 4 through 8. */
   {
@@ -255,8 +255,8 @@
     0, 0, 0
   },
 
-  /* DSD512: the corresponding independently solved order 4 through 8
-   * designs.  They are not scaled copies of the DSD1024 coefficients. */
+  /* DSD512: order 4 through 8 designs, solved independently of the DSD1024
+   * ones. */
   {
     {
       8.35924810311280e-01,

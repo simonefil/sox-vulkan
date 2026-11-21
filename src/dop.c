@@ -1,5 +1,4 @@
-/* DSD over PCM
- * Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
+/* Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -16,23 +15,22 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+/* DSD over PCM */
+
 #include "sox_i.h"
 
 typedef struct dop {
-  sox_uint32_t *buf;            /* bits being assembled, not samples */
+  sox_uint32_t *buf;            /* DoP bit patterns being assembled */
   unsigned marker;
   unsigned pos;
 } dop_t;
 
 #define DOP_MARKER 0x05
 
-/* A DoP word is a bit pattern that a 24-bit PCM file carries: the marker in the
- * top byte, sixteen DSD bits under it.  It was never a number, and it used to
- * be handed on as a sox_sample_t only because a sox_sample_t was thirty-two
- * bits of anything.  Now it has to be said out loud: take the pattern as the
- * signed integer a 32-bit PCM sample would have been, and convert.  The marker
- * 0xFA makes that integer negative, which is correct -- the top bit of a DoP
- * word is part of the marker, not a sign anybody chose. */
+/* A DoP word is a bit pattern carried by 24-bit PCM: the marker in the top
+ * byte, sixteen DSD bits under it.  It is converted as the signed integer a
+ * 32-bit PCM sample with that pattern would be.  The marker 0xFA makes that
+ * integer negative; the top bit of a DoP word belongs to the marker. */
 #define DOP_WORD_TO_SAMPLE(w) SOX_SIGNED_32BIT_TO_SAMPLE((sox_int32_t)(w),)
 
 static int dop_start(sox_effect_t *eff)

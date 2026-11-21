@@ -1,6 +1,4 @@
-/* DSDIFF file support
- *
- * Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
+/* Copyright (c) 2015 Mans Rullgard <mans@mansr.com>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -17,7 +15,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-/* File format specification available at
+/* DSDIFF file support
+ *
+ * File format specification available at
  * http://dsd-guide.com/sites/default/files/white-papers/DSDIFF_1.5_Spec.pdf
  */
 
@@ -36,9 +36,8 @@ static size_t dff_write_packed_words(sox_format_t *, const sox_sample_t *, size_
 static size_t dff_read_packed_words(sox_format_t *, sox_sample_t *, size_t);
 static uint8_t dff_reverse_byte(uint8_t);
 
-/* Words staged per read, so the packed path makes one buffered read per 256
- * words instead of one per word.  Four bytes per channel make a word, so the
- * staging buffer is this many times the frame size. */
+/* Words staged per buffered read on the packed path.  Four bytes per channel
+ * make a word, so the staging buffer is this many times the frame size. */
 #define DFF_READ_GROUPS 256
 
 #define ID(a, b, c, d) ((a) << 24 | (b) << 16 | (c) << 8 | (d))
@@ -203,19 +202,17 @@ static size_t dff_read(sox_format_t *ft, sox_sample_t *buf, size_t len)
 
 /* Whole 32-frame words, transposed into the layout the device kernels want.
  *
- * DSDIFF is the awkward one of the two DSD containers here.  It stores one
- * byte per channel per eight frames, interleaved, and its earliest bit is the
- * most significant, where the packed word convention is channel-major with the
- * earliest bit at bit zero.  Both differences are settled on the host, once,
- * over bytes rather than over bits: the byte reversal is a table-free swap and
- * the transpose moves a byte per four frames.  That is still some three orders
- * of magnitude less host work than expanding every bit into a sox_sample_t.
+ * DSDIFF stores one byte per channel per eight frames, interleaved, with the
+ * earliest bit most significant; the packed word convention is channel-major
+ * with the earliest bit at bit zero.  The host settles both differences over
+ * bytes: each byte is bit-reversed with a table-free swap and moved into its
+ * channel's word, so no bit is expanded into a sox_sample_t.
  *
- * The read is bounded by the sound data chunk rather than by end of file, so
- * the words can never run into whatever chunk follows it.  A position that is
- * not word-aligned -- which a seek can leave behind -- produces nothing, and
- * the caller falls back to dff_read; that reader advances a frame's worth of
- * bytes at a time, so alignment returns within three of its iterations. */
+ * The read is bounded by the sound data chunk, so the words never run into
+ * the chunk that follows it.  A position that is not word-aligned, as a seek
+ * can leave behind, produces nothing and the caller falls back to dff_read;
+ * that reader advances one byte per channel at a time, so alignment returns
+ * within three of its iterations. */
 static size_t dff_read_packed_words(sox_format_t *ft, sox_sample_t *buf, size_t len)
 {
 	struct dsdiff *dff = ft->priv;
@@ -265,8 +262,8 @@ static size_t dff_read_packed_words(sox_format_t *ft, sox_sample_t *buf, size_t 
 	}
 
 	/* As in dsf_read_packed_words: the runs were laid out for the count this
-	 * call set out to produce, so a short answer has to close the gaps
-	 * between them. */
+	 * call set out to produce, so a short read closes the gaps between
+	 * them. */
 	if (produced && produced < total_groups)
 		for (channel = 1; channel < channels; ++channel)
 			memmove(buf + channel * produced,

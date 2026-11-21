@@ -47,12 +47,20 @@ static size_t write_samples(
   return len; /* Return number of samples "written". */
 }
 
+static int startwrite(sox_format_t * ft)
+{
+  /* Packed DSD is discarded like any other sample. */
+  ft->write_packed_dsd = write_samples;
+  ft->write_packed_dsd_words = write_samples;
+  return SOX_SUCCESS;
+}
+
 LSX_FORMAT_HANDLER(nul)
 {
   static const char * const names[] = {"null", NULL};
   static sox_format_handler_t const handler = {SOX_LIB_VERSION_CODE,
     NULL, names, SOX_FILE_DEVICE | SOX_FILE_PHONY | SOX_FILE_NOSTDIO,
-    startread, read_samples,NULL,NULL, write_samples,NULL,NULL, NULL, NULL, 0
+    startread, read_samples,NULL,startwrite, write_samples,NULL,NULL, NULL, NULL, 0
   };
   return &handler;
 }

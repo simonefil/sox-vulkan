@@ -19,21 +19,16 @@
 
 /* The family that turns packed DSD straight into PCM, in one filter.
  *
- * The rate planner would decimate a DSD stream by a cascade of half-band
- * stages, each halving the rate.  On a device that is the wrong shape: the
- * cost of a direct-form stage scales with its *output* rate, so a single
- * response that decimates the whole way at once is both cheaper than the
- * cascade and shorter to reason about.  This family is that single stage, and
- * it reads the file's own bits rather than samples expanded on the host: a
- * DSD frame stays one bit until the moment it picks the sign of a
- * coefficient.
+ * A direct-form stage costs in proportion to its output rate, so on the
+ * device one response decimating the whole way is cheaper than the planner's
+ * cascade of half-band stages.  It reads the packed bits directly: a DSD
+ * frame stays one bit until it picks the sign of a coefficient.
  *
- * An invocation produces one output frame of one channel and reads the taps
- * beginning at its own decimated position, so neighbouring outputs overlap by
- * all but `decimation` frames.  Nothing is shared between invocations here:
- * the coefficient run is identical for every one of them and therefore
- * broadcast out of cache, and the packed words are read once per thirty-two
- * taps.
+ * An invocation produces one output frame of one channel from the taps at
+ * its decimated position; neighbouring outputs overlap by all but
+ * `decimation` frames.  The coefficient run is the same for every
+ * invocation, so it is broadcast from cache; packed words are read once per
+ * thirty-two taps.
  *
  * Bindings, in the order rate_dsd_vulkan.c writes them:
  *   0 coefficients   -- in: the response, one value per tap.
@@ -41,13 +36,13 @@
  *                       bit zero the earliest frame.
  *   2 output_samples -- out: interleaved output frames.
  *
- * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
- * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
- * normalize, reserved.  frame_offset is where output frame zero's window
- * starts within the uploaded words, which is what lets the host retain a tail
- * at word granularity while the stream's position stays exact to the frame;
- * lead_frames and valid_frames bound the frames the stream really has, the
- * rest being zero samples rather than bits.
+ * Push constants (the first 40 bytes of parameters_t): output_frames,
+ * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
+ * valid_frames, normalize, reserved.  frame_offset is where output frame
+ * zero's window starts within the uploaded words, so the host can retain a
+ * tail at word granularity while the position stays exact to the frame;
+ * lead_frames and valid_frames bound the frames the stream has, the rest
+ * being zero samples.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
  * and y one invocation per channel, hence both bounds tests.
@@ -97,20 +92,18 @@ void main()
   uint base = channel * parameters.words_per_channel;
   double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   double sum = 0.0;
-  /* The taps that land on a frame the stream really has.  Outside that range
-   * the frame is zero -- not a bit, a zero sample -- which is what the head
-   * and the tail of a stream are: the response's own delay at the start, and
-   * whatever it still holds after the input has ended.  Both are ranges, so
-   * they cost a clamp here rather than a test per tap. */
+  /* The taps that land on a frame the stream has.  Outside that range, at
+   * the head (the response's delay) and the tail (what it holds after the
+   * input ends), the frame is a zero sample; both are ranges, so a clamp
+   * replaces a test per tap. */
   uint tap = parameters.lead_frames > start ?
       min(parameters.lead_frames - start, parameters.taps) : 0u;
   uint last = parameters.valid_frames > start ?
       min(parameters.valid_frames - start, parameters.taps) : 0u;
   uint frame = start + tap;
 
-  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
-   * multiply degenerates to the coefficient's sign: the whole inner loop is
-   * an add or a subtract, and the input word never becomes a number. */
+  /* One word load per thirty-two taps.  A DSD frame is one bit, so the
+   * multiply reduces to an add or subtract of the coefficient. */
   while (tap < last) {
     uint word = packed_words[base + (frame >> 5u)];
     uint bit = frame & 31u;

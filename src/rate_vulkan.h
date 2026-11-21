@@ -29,9 +29,8 @@
  * input samples, filter the result to remove the images that creates, then
  * keep every down_factor'th sample.  The filtering is done by the partitioned
  * FIR backend, so this file is the interpolation, the decimation and the
- * bookkeeping around them -- which is most of the difficulty, since the stage
- * has to account for the filter's latency exactly and keep the decimation
- * phase continuous across blocks.
+ * bookkeeping around them: the stage accounts for the filter's latency
+ * exactly and keeps the decimation phase continuous across blocks.
  *
  * Latency is handled by discarding taps - 1 - post_peak output frames at the
  * start of the stream: that is where the filter's peak lands, so dropping
@@ -55,8 +54,7 @@ typedef struct lsx_rate_vulkan lsx_rate_vulkan_t;
  * down_factor are the resampling ratio, already in lowest terms.
  *
  * The coefficients are copied.  Returns NULL on failure, having reported why;
- * a ratio whose interpolated block does not divide evenly is rejected here
- * rather than silently rounded. */
+ * a ratio whose interpolated block does not divide evenly is rejected. */
 lsx_rate_vulkan_t *lsx_rate_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, size_t taps, size_t post_peak, uint32_t up_factor, uint32_t down_factor, uint32_t channels);
 
 /* As above with one response per channel, and the reference-profile forms
@@ -83,9 +81,8 @@ lsx_rate_vulkan_t *lsx_rate_vulkan_create_reference_dd_channels(
  * device, so anything still queued has finished on return. */
 void lsx_rate_vulkan_destroy(lsx_rate_vulkan_t *context);
 
-/* Input frames per call: the FIR block size divided by up_factor, since
- * interpolation is what fills the block.  Exact, not a maximum -- every entry
- * point taking host samples expects precisely this many. */
+/* Input frames per call: the FIR block size divided by up_factor.  Every
+ * entry point taking host samples expects exactly this many. */
 size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context);
 
 /* Process one block and wait.  *output points at *output_frames interleaved
@@ -137,7 +134,7 @@ int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context);
 /* Clips counted by the quantizing append, which is where a value outside
  * SoX's sample range is clamped.  Counted on the device, so the first form
  * returns what has been read back so far and the second waits for the
- * outstanding blocks first -- which is why the two exist. */
+ * outstanding blocks first. */
 uint32_t lsx_rate_vulkan_resident_stream_clips(lsx_rate_vulkan_t *context);
 uint32_t lsx_rate_vulkan_resident_stream_clips_completed(lsx_rate_vulkan_t *context);
 

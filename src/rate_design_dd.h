@@ -32,10 +32,9 @@ extern "C" {
  * unevaluated pair: high[i] is what fp64 would have held and low[i] the
  * residual, so high[i] + low[i] carries about 106 bits.  Both arrays hold
  * num_taps entries; low may be NULL, in which case only the high halves are
- * written and the result is the correctly rounded fp64 design.
- *
- * The arguments mean what they mean in lsx_make_lpf, and the two agree to
- * within one fp64 ulp: this is the same filter, not a different one. */
+ * written and the result is the correctly rounded fp64 design.  The
+ * arguments are those of lsx_make_lpf, and the two designs agree to within
+ * one fp64 ulp. */
 void lsx_make_lpf_dd(int num_taps, double Fc, double beta, double rho,
     double scale, sox_bool dc_norm, double * high, double * low);
 

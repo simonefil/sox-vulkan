@@ -638,7 +638,7 @@ is unchanged.
 | Conversion comes first | `vol`, `gain`, `trim` apply to the PCM, after `rate`. An effect in front of the conversion is an error, with or without a Vulkan flag. DSD-to-DSD chains are untouched. |
 | Band ceiling | 20 kHz at DSD64, 30 kHz at DSD128, 60 kHz at DSD256, 90 kHz above. Past it a DSD stream holds shaped noise. |
 | One DSD64 filter | The ceiling binds at every output rate: flat to 19.5 kHz, stopped at 20 kHz, from 44.1 kHz to 384 kHz. DSD64 decoded to 96 or 192 kHz is empty above 20 kHz. |
-| Stop-band depth | The requested quality, capped by the profile's own SNR. Only the `fast` cap binds, and only from `-v` up. |
+| Stop-band depth | The requested quality, capped by the profile's own SNR. Only the `fast` cap binds, and only from `-e` up. |
 | Buffer | `--buffer 524288` or larger. One dispatch per call, so the default costs almost everything the device gains: DSD512 to 44.1 kHz on `--vulkan-fast` runs at 7.2× at the default and 69.7× at `524288`, same M5 Pro. |
 
 DSD to PCM, stereo, 10-second input, to 44.1 kHz, `--buffer 524288`. M5 Pro:

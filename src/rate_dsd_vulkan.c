@@ -29,13 +29,12 @@
 #include "rate_dsd_fir_precise_f32_spv.inc"
 #include "rate_dsd_fir_reference_dd_spv.inc"
 
-/* Output frames per dispatch, which is also how much of the device one
- * dispatch fills: the grid is this many invocations by the channel count, so
- * at 4096 a stereo stream launched 8192 threads: 64 workgroups, fewer than
- * one per SM on a discrete GPU, with the host waiting after each. Measured
- * across both, 65536 is where the curve flattens: on M5 Pro it takes DSD64
- * from 17x to 31x and DSD256 from 63x to 100x, on an RTX 3080 DSD64 from 7.3x
- * to 19.7x, and 262144 adds nothing.
+/* Output frames per dispatch; the grid is this many invocations by the
+ * channel count. At 4096 a stereo stream is 8192 invocations, 64 workgroups:
+ * fewer than one per SM on a discrete GPU, with the host waiting after each.
+ * Throughput flattens at 65536: against 4096, M5 Pro goes from 17x to 31x at
+ * DSD64 and 63x to 100x at DSD256, an RTX 3080 from 7.3x to 19.7x at DSD64;
+ * 262144 adds nothing.
  *
  * The cost is the window one block reads, taps + (this - 1) * decimation
  * frames: about 4 MiB per channel at the deepest decimation this stage is
@@ -52,15 +51,12 @@
  * valid_frames bound the frames the stream really has within that window; a
  * tap outside them reads a zero sample, not a bit.
  *
- * scale_high and scale_low carry the factor between this stage's natural
- * output (a normalised sample, since the bits are +-1) and whatever
- * domain the build's samples live in. It travels as a pair so the reference
- * profile can apply it before collapsing: scaling a collapsed double rounds
- * twice, once into the double and once into the product, and this stage's
- * whole claim is that it rounds no more than the result demands. The three
- * other forms round far above this anyway and take the same factor on the
- * host. Only the reference shader declares the pair; a shader may cover a
- * prefix of the range and the others stop at 40 bytes. */
+ * scale_high and scale_low carry the factor from this stage's normalised
+ * output (the bits are +-1) to the build's sample domain. The reference
+ * profile applies the pair before collapsing, so it rounds once where a
+ * collapsed double would round twice; the other forms take the same factor
+ * on the host. Only the reference shader declares the pair; the others cover
+ * the first 40 bytes. */
 typedef struct {
   uint32_t output_frames;
   uint32_t decimation;
@@ -131,16 +127,14 @@ static lsx_vulkan_resident_format_t sample_format(lsx_rate_dsd_vulkan_t const *c
 /* The factor between what this stage computes and what the chain carries.
  *
  * The stage sums coefficients against bits of +-1, so its output is a
- * normalised sample by construction, whatever the device. Half of SoX's
- * builds carry samples that way and half carry them scaled to SOX_SAMPLE_MAX,
- * effects_i_dsp.c has both, and lsx_sample_values_are_normalized() says
- * which one this build took. On a scaled build the stage's output is about
- * 2^31 times too small and lsx_save_samples() rounds every sample of it to
- * zero: correct arithmetic, silent file. That is what a Windows build did
- * while macOS was fine.
+ * normalised sample by construction, whatever the device.
+ * lsx_sample_values_are_normalized() says whether this build carries samples
+ * that way or scaled to SOX_SAMPLE_MAX (effects_i_dsp.c has both). On a
+ * scaled build the unscaled output is about 2^31 times too small and
+ * lsx_save_samples() rounds every sample of it to zero, writing silence.
  *
- * The push constant named `normalize` cannot serve here: it divides, existing
- * for paths whose device data is already scaled. This has to multiply. */
+ * The push constant named `normalize` divides, for paths whose device data is
+ * already scaled; this factor multiplies. */
 static double output_scale(void)
 {
   return lsx_sample_values_are_normalized() ? 1. : (double)SOX_SAMPLE_MAX;

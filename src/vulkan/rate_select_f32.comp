@@ -23,9 +23,7 @@
  * family's rationale.  One float per sample and a plain multiply for the
  * normalisation.
  *
- * The fast profile lands here.  The family has no compensated
- * member because it does not accumulate -- see resident_kernel() in
- * rate_vulkan.c.
+ * resident_kernel() in rate_vulkan.c selects it for the fast profile.
  *
  * Bindings, in the order run_resident_selection() in rate_vulkan.c writes
  * them:
@@ -34,8 +32,8 @@
  *
  * Push constants (select_parameters_t, 24 bytes): output_frames,
  * first_input_frame, input_step, input_channel_stride, channels and normalize.
- * first_input_frame and input_step together carry the
- * decimation phase across block boundaries.
+ * first_input_frame and input_step together carry the decimation phase
+ * across block boundaries.
  *
  * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
  * y one invocation per channel, hence both bounds tests.

@@ -21,17 +21,15 @@
 #include "quadmath.h"
 #include "rate_design_dd.h"
 
-/* pi as an unevaluated pair: the fp64 value, and the residual that fp64
- * drops.  Written as a sum so that the pair is normalised by two_sum rather
- * than by hand. */
+/* pi as an unevaluated pair: the fp64 value and the residual fp64 drops,
+ * written as a sum so two_sum normalises it. */
 static lsx_dd_float const dd_pi =
     lsx_dd_float(3.141592653589793116e+00) +
     lsx_dd_float(1.224646799147353207e-16);
 
 /* The series of lsx_bessel_I_0, term for term, stopped by the same test: the
- * sum has stopped moving.  In fp64 that happens after some twenty terms; at
- * beta near forty and 106 bits of room it takes about ninety, so the bound
- * is generous rather than tight. */
+ * sum has stopped moving.  In fp64 that takes some twenty terms; at beta near
+ * forty with 106 bits about ninety, so the bound is generous. */
 static lsx_dd_float bessel_I_0_dd(lsx_dd_float x)
 {
   lsx_dd_float term(1.0), sum(1.0), x2 = x / lsx_dd_float(2.0);
@@ -59,8 +57,8 @@ extern "C" void lsx_make_lpf_dd(int num_taps, double Fc, double beta,
   lsx_dd_float const half_m = lsx_dd_float((double)m) / lsx_dd_float(2.0);
   lsx_dd_float const mult = dd_scale / bessel_I_0_dd(dd_beta);
   /* .5 * m + rho is exact in fp64 for every m and every rho the designer
-   * uses (.5, .63, .75), but the reciprocal is not, so the division is left
-   * for later rather than folded into a multiplier as the fp64 code does. */
+   * uses (.5, .63, .75), but its reciprocal is not, so this code divides
+   * where the fp64 code multiplies by the reciprocal. */
   lsx_dd_float const half_width = half_m + lsx_dd_float(rho);
 
   for (i = 0; i <= m / 2; ++i) {

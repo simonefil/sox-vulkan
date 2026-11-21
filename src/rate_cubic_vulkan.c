@@ -1,4 +1,4 @@
-/* FP64 Vulkan cubic stage for the SoX rate planner.
+/* Vulkan cubic stage for the SoX rate planner.
  *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
@@ -393,14 +393,12 @@ int lsx_rate_cubic_vulkan_process(
   /* Where the position lands after this batch: its whole part is the input
    * frames consumed, its fraction the phase the next call starts from. */
   end_position = context->phase_fraction + count * context->step;
-  /* The margin is uploaded as well: the interpolation reads past its last
-   * centre frame, so those samples must be on the device even though no
-   * output is produced from them.
+  /* Upload the margin too: the interpolation reads past its last centre
+   * frame.
    *
-   * Each profile stores its own element form on the way in, a pair with a
-   * zero low word for double-double, a split pair for the precise profile,
-   * or a plain value. The conversion is done here rather than in the shader
-   * so that the buffer's layout is fixed by the profile alone. */
+   * Samples are stored in the profile's element form: a pair with a zero low
+   * word for double-double, a split pair for precise, or a plain value.
+   * Converting on the host fixes the buffer layout by profile alone. */
   copied_frames = processable_frames + context->pre_post;
   sample_count = copied_frames * context->parameters.channels;
   if (context->reference_dd)

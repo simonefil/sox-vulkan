@@ -1,4 +1,4 @@
-/* FP64 Vulkan polyphase stage for the SoX rate planner.
+/* Vulkan polyphase stage for the SoX rate planner.
  *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
@@ -29,9 +29,10 @@
  * samples it would throw away: the prototype low-pass is split into
  * phase_count interleaved sub-filters, and each output frame is one
  * sub-filter applied to the input at one position.  Which sub-filter and
- * which position come from a phase counter that advances by phase_step and
- * wraps at phase_count, so the ratio is phase_count to phase_step and the
- * counter's wrap is what makes it exact over any length of stream.
+ * which position come from an integer counter that advances by phase_step:
+ * its quotient by phase_count is the input position and its remainder the
+ * sub-filter, so the ratio is phase_count to phase_step, exact over any
+ * length of stream.
  *
  * Compared with the FIR-based stage in rate_vulkan.c, this one does no
  * transform and keeps no history bank: it is the direct form, which wins for
@@ -47,9 +48,9 @@ typedef struct lsx_rate_polyphase_vulkan lsx_rate_polyphase_vulkan_t;
  * copied.  phase_step and phase_start are the counter's increment and its
  * initial value.  resident_preload_frames is how much input the resident path
  * should hold back before producing, so a consumer's first block is complete.
- * symmetric_presum asks the shader to exploit a symmetric response by adding
- * the mirrored sample pairs before multiplying, which halves the multiplies;
- * it is only valid for a response that really is symmetric. */
+ * symmetric_presum makes the shader add mirrored sample pairs before
+ * multiplying, halving the multiplies; valid only for a symmetric
+ * response. */
 lsx_rate_polyphase_vulkan_t *lsx_rate_polyphase_vulkan_create(lsx_vulkan_context_t *vulkan, double const *coefficients, uint32_t taps, uint32_t phase_count, uint32_t phase_step, uint32_t phase_start, uint32_t channels, uint32_t resident_preload_frames, sox_bool symmetric_presum);
 
 /* As above with the response given as double-double pairs.  The low halves

@@ -1,4 +1,4 @@
-/* FP64 Vulkan cubic stage for the SoX rate planner.
+/* Vulkan cubic stage for the SoX rate planner.
  *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
@@ -32,9 +32,9 @@
  * numbers cannot express, the bulk of the rate change having been done by the
  * filtered stages before it.
  *
- * The position and the step are 32.32 fixed point, not floating point, so
- * that the phase accumulates exactly however long the stream runs: a double
- * would drift, and the drift would be audible as a slow pitch error.
+ * The position and the step are 32.32 fixed point, so the phase accumulates
+ * exactly over any stream length; a double would drift into an audible slow
+ * pitch error.
  */
 
 typedef struct lsx_rate_cubic_vulkan lsx_rate_cubic_vulkan_t;

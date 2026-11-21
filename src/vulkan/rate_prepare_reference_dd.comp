@@ -18,11 +18,10 @@
 
 /* The reference profile's member of the prepare family; rate_prepare_f64.comp
  * carries the family's rationale.  Every sample is a double-double pair, so
- * the up_factor gain goes through multiply_dd_scalar rather than a plain
- * multiply: the factor is a small integer and therefore exact, but the
- * product's low word still has to be carried or the pair silently collapses
- * to its high word.  double_double.glsl states the rules that keep the
- * compiler from folding it away.
+ * the up_factor gain goes through multiply_dd_scalar: the factor is an exact
+ * small integer, but the product's low word must be carried to keep the
+ * pair.  double_double.glsl states the rules that keep the compiler from
+ * folding it away.
  *
  * Bindings, in the order record_resident_prepare() in rate_vulkan.c writes
  * them:

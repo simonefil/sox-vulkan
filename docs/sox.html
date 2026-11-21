@@ -2544,7 +2544,7 @@ Unix csh:
         effects.</p>
   </dd>
   <dt id="rate"><a class="permalink" href="#rate"><b>rate</b>
-    [<b>-q</b>|<b>-l</b>|<b>-m</b>|<b>-h</b>|<b>-v</b>|<b>-x</b>|<b>-z</b>]
+    [<b>-q</b>|<b>-l</b>|<b>-m</b>|<b>-g</b>|<b>-h</b>|<b>-e</b>|<b>-v</b>|<b>-u</b>|<b>-x</b>|<b>-z</b>]
     [<b>-E</b>] [override-options] <i>RATE</i>[<b>k</b>]</a></dt>
   <dd>Change the audio sampling rate (i.e. resample the audio) to any given
       <i>RATE</i> (even non-integer if this is supported by the output file
@@ -2579,6 +2579,13 @@ Unix csh:
         <td>audio playback</td>
       </tr>
       <tr>
+        <td style="text-align: center;"><b>-g</b></td>
+        <td style="text-align: center;">medium flat</td>
+        <td style="text-align: center;">95%</td>
+        <td style="text-align: center;">100</td>
+        <td>audio playback, flat pass-band</td>
+      </tr>
+      <tr>
         <td style="text-align: center;"><b>-h</b></td>
         <td style="text-align: center;">high</td>
         <td style="text-align: center;">95%</td>
@@ -2586,11 +2593,25 @@ Unix csh:
         <td>16-bit mastering (use with dither)</td>
       </tr>
       <tr>
+        <td style="text-align: center;"><b>-e</b></td>
+        <td style="text-align: center;">high plus</td>
+        <td style="text-align: center;">95%</td>
+        <td style="text-align: center;">150</td>
+        <td>between high and very high</td>
+      </tr>
+      <tr>
         <td style="text-align: center;"><b>-v</b></td>
         <td style="text-align: center;">very high</td>
         <td style="text-align: center;">95%</td>
         <td style="text-align: center;">175</td>
         <td>24-bit mastering</td>
+      </tr>
+      <tr>
+        <td style="text-align: center;"><b>-u</b></td>
+        <td style="text-align: center;">ultra</td>
+        <td style="text-align: center;">95%</td>
+        <td style="text-align: center;">200</td>
+        <td>between very high and extreme</td>
       </tr>
       <tr>
         <td style="text-align: center;"><b>-x</b></td>
@@ -2613,6 +2634,13 @@ Unix csh:
         of increasing amounts of time to process the audio. If no quality option
         is given, the quality level used is `high' (but see `Playing &amp;
         Recording Audio' above regarding playback).</p>
+    <p class="Pp">The `quick', `low' and `medium' levels allow up to
+        0.35&#x00A0;dB of roll-off at the top of the pass-band, which shortens
+        the filter; from `medium flat' up, the pass-band is flat to within
+        0.01&#x00A0;dB. Each level from `high' to `ultra' adds 4 bits (about
+        24&#x00A0;dB) of rejection to the one before. The levels from `quick' to
+        `ultra' can also be given by number with <b>-Q</b><i> num</i><b>,</b>
+        from 0 (`quick') to 7 (`ultra'), in the order of the table.</p>
     <p class="Pp">The `extreme' level is the deepest at which 64-bit
         floating-point arithmetic still follows the designed rejection. The
         `overkill' level is designed for the double-double arithmetic of
@@ -2674,16 +2702,65 @@ Unix csh:
       </tr>
       <tr>
         <td><b>-b&#x00A0;74-99.9</b></td>
-        <td>Any band-width %</td>
+        <td>Any band-width % (at the -3&#x00A0;dB point)</td>
+      </tr>
+      <tr>
+        <td><b>-B&#x00A0;53-99.88</b></td>
+        <td>Any band-width % at the 0&#x00A0;dB point, in place of -b</td>
+      </tr>
+      <tr>
+        <td><b>-A&#x00A0;85-100</b></td>
+        <td>Band-width % kept free of aliasing; implies -a</td>
       </tr>
       <tr>
         <td><b>-p&#x00A0;0-100</b></td>
         <td>Any phase response (0 = minimum, 25 = intermediate, 50 = linear, 100
           = maximum)</td>
       </tr>
+      <tr>
+        <td><b>-R&#x00A0;90-200</b></td>
+        <td>Rejection in dB, in place of the quality level</td>
+      </tr>
+      <tr>
+        <td><b>-d&#x00A0;15-46</b></td>
+        <td>Rejection as a bit depth, in place of the quality level</td>
+      </tr>
     </table>
     <p class="Pp">N.B. Override options cannot be used with the `quick' or `low'
-        quality algorithms.</p>
+        quality algorithms. Under a <b>--vulkan-*</b> option, <b>-R</b> and
+        <b>-d</b> are ignored with a warning, since the device runs the preset
+        levels.</p>
+    <p class="Pp">The following options tune the filter design at any quality
+        level:</p>
+    <table class="tbl">
+      <tr>
+        <td><b>-f</b></td>
+        <td>Use the band-width as the pass-band edge as it is, without the
+          adjustment that keeps the roll-off within 0.01&#x00A0;dB</td>
+      </tr>
+      <tr>
+        <td><b>-i&#x00A0;-1-2</b></td>
+        <td>Coefficient interpolation for irrational ratios: -1 automatic
+          (default), 0 none, 1 and 2 higher orders</td>
+      </tr>
+      <tr>
+        <td><b>-c&#x00A0;100+</b></td>
+        <td>Size in kbytes that the coefficient table tries to stay below
+          (default 400)</td>
+      </tr>
+      <tr>
+        <td><b>-n</b></td>
+        <td>Disable the optimisations for small integer ratios</td>
+      </tr>
+      <tr>
+        <td><b>-t</b></td>
+        <td>High-precision clock, for more accurate irrational ratios</td>
+      </tr>
+    </table>
+    <p class="Pp">Under a <b>--vulkan-*</b> option, a conversion that <b>-i</b>
+        or <b>-t</b> sends through coefficient interpolation or the
+        high-precision clock stops with an error, since the device runs
+      neither.</p>
     <p class="Pp">All resamplers use filters that can sometimes create `echo'
         (a.k.a. `ringing') artefacts with transient signals such as those that
         occur with `finger snaps' or other highly percussive sounds. Such

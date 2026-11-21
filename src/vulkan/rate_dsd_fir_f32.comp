@@ -1,4 +1,4 @@
-/* FP32 fused DSD decimation stage for Vulkan devices without shaderFloat64.
+/* FP32 fused DSD decimation stage for the fast profile.
  *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
@@ -26,9 +26,9 @@
  *   1 packed         -- in: DSD words, channel major, 32 frames per word.
  *   2 output_samples -- out: interleaved output frames.
  *
- * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
- * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
- * normalize, reserved.
+ * Push constants (the first 40 bytes of parameters_t): output_frames,
+ * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
+ * valid_frames, normalize, reserved.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
  * and y one invocation per channel, hence both bounds tests.
@@ -77,20 +77,18 @@ void main()
   uint base = channel * parameters.words_per_channel;
   float scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   float sum = 0.0;
-  /* The taps that land on a frame the stream really has.  Outside that range
-   * the frame is zero -- not a bit, a zero sample -- which is what the head
-   * and the tail of a stream are: the response's own delay at the start, and
-   * whatever it still holds after the input has ended.  Both are ranges, so
-   * they cost a clamp here rather than a test per tap. */
+  /* The taps that land on a frame the stream has.  Outside that range, at
+   * the head (the response's delay) and the tail (what it holds after the
+   * input ends), the frame is a zero sample; both are ranges, so a clamp
+   * replaces a test per tap. */
   uint tap = parameters.lead_frames > start ?
       min(parameters.lead_frames - start, parameters.taps) : 0u;
   uint last = parameters.valid_frames > start ?
       min(parameters.valid_frames - start, parameters.taps) : 0u;
   uint frame = start + tap;
 
-  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
-   * multiply degenerates to the coefficient's sign: the whole inner loop is
-   * an add or a subtract, and the input word never becomes a number. */
+  /* One word load per thirty-two taps.  A DSD frame is one bit, so the
+   * multiply reduces to an add or subtract of the coefficient. */
   while (tap < last) {
     uint word = packed_words[base + (frame >> 5u)];
     uint bit = frame & 31u;

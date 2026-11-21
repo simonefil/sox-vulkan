@@ -24,20 +24,18 @@
  * reason: every compensation term is algebraically zero, so each result lands
  * in a `precise` local and no primitive takes an out parameter.
  *
- * A hundred thousand taps is exactly where a single float gives out: the
- * accumulator would lose the low end of the response long before the sum was
- * complete, which is the whole reason this variant exists.  Negation of a
- * pair is exact in both words, so a DSD frame still costs one addition and no
- * multiply.
+ * Over a hundred thousand taps a single-float accumulator would lose the low
+ * end of the response, hence the pairs.  Negating a pair is exact in both
+ * words, so a DSD frame costs one addition and no multiply.
  *
  * Bindings, in the order rate_dsd_vulkan.c writes them:
  *   0 coefficients   -- in: the response, one pair per tap.
  *   1 packed         -- in: DSD words, channel major, 32 frames per word.
  *   2 output_samples -- out: interleaved output frames, pairs.
  *
- * Push constants (parameters_t, 40 bytes): output_frames, decimation, taps,
- * channels, words_per_channel, frame_offset, lead_frames, valid_frames,
- * normalize, reserved.
+ * Push constants (the first 40 bytes of parameters_t): output_frames,
+ * decimation, taps, channels, words_per_channel, frame_offset, lead_frames,
+ * valid_frames, normalize, reserved.
  *
  * Dispatch is two-dimensional, x over the output frames in workgroups of 128
  * and y one invocation per channel, hence both bounds tests.
@@ -111,21 +109,18 @@ void main()
   const uint start = parameters.frame_offset + output_frame * parameters.decimation;
   const uint base = channel * parameters.words_per_channel;
   precise vec2 sum = vec2(0.0);
-  /* The taps that land on a frame the stream really has.  Outside that range
-   * the frame is zero -- not a bit, a zero sample -- which is what the head
-   * and the tail of a stream are: the response's own delay at the start, and
-   * whatever it still holds after the input has ended.  Both are ranges, so
-   * they cost a clamp here rather than a test per tap. */
+  /* The taps that land on a frame the stream has.  Outside that range, at
+   * the head (the response's delay) and the tail (what it holds after the
+   * input ends), the frame is a zero sample; both are ranges, so a clamp
+   * replaces a test per tap. */
   const uint last = parameters.valid_frames > start ?
       min(parameters.valid_frames - start, parameters.taps) : 0u;
   uint tap = parameters.lead_frames > start ?
       min(parameters.lead_frames - start, parameters.taps) : 0u;
   uint frame = start + tap;
 
-  /* One word load per thirty-two taps.  A DSD frame is a single bit, so the
-   * multiply degenerates to the coefficient's sign: the whole inner loop is
-   * an addition of a pair or of its negation, and the input word never
-   * becomes a number. */
+  /* One word load per thirty-two taps.  A DSD frame is one bit, so the
+   * multiply reduces to adding the coefficient pair or its negation. */
   while (tap < last) {
     const uint word = packed_words[base + (frame >> 5u)];
     const uint bit = frame & 31u;

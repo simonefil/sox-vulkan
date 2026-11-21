@@ -27,7 +27,7 @@
  *   0 input_samples     -- in: the producer's resident block, read through
  *                          its own strides.  The descriptor is bound at the
  *                          buffer's offset, so indices here are relative to
- *                          the block, not the allocation.
+ *                          the block.
  *   1 prepared_samples  -- out: the FIR's prepared input, planar, two blocks
  *                          per channel.
  *   2 previous_samples  -- in/out: the last block's samples per channel; read
@@ -53,9 +53,8 @@
  * The up_factor gain restores the energy zero-stuffing removes, exactly as
  * the CPU path does.
  *
- * Plain FP64 throughout.  This is the family the resident kernel selector in
- * rate_vulkan.c picks for any profile but reference once the device reports
- * shaderFloat64.
+ * Plain FP64 throughout.  resident_kernel() in rate_vulkan.c selects it for
+ * the precise profile on a device with shaderFloat64.
  */
 
 #version 450

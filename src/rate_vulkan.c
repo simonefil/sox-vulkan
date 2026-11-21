@@ -156,9 +156,8 @@ struct lsx_rate_vulkan {
   uint32_t up_factor;
   uint32_t down_factor;
   uint32_t channels;
-  /* Position in the decimation cycle, carried across blocks: a block boundary
-   * is not in general a multiple of down_factor, so resetting it per block
-   * would shift the output phase every time. */
+  /* Position in the decimation cycle, carried across blocks, since a block
+   * boundary is not in general a multiple of down_factor. */
   uint32_t decimation_phase;
 
   sox_bool double_precision;
@@ -196,10 +195,9 @@ lsx_vulkan_resident_format_t lsx_rate_vulkan_resident_format(lsx_rate_vulkan_t c
   return resident_format(context);
 }
 
-/* Each resident kernel is compiled once per numerical family, and the select,
- * prepare and stream-append pipelines all choose among the families with the
- * same rule.  Naming the rule once is what keeps the three in step: three
- * copies of the test order would only have to agree by inspection. */
+/* Each resident kernel is compiled once per numerical family; the select,
+ * prepare and stream-append pipelines all choose the family with this one
+ * rule. */
 typedef enum {
   resident_kernel_reference_dd,
   resident_kernel_f64,
@@ -412,13 +410,10 @@ static int create_resident_prepare(lsx_rate_vulkan_t *context)
   return vk_result(vkAllocateCommandBuffers(context->vulkan->device, &command_info, context->prepare_command_buffers), "vkAllocateCommandBuffers rate prepare");
 }
 
-/* The one constructor the four public forms funnel into; coefficient_lows is
- * non-NULL only for the reference profile, and coefficient_channels is 1 for
- * a shared response.
- *
- * The FIR block must divide evenly by up_factor, or a block would hold a
- * fractional number of input frames and the interpolation phase would drift
- * from block to block.  It is rejected rather than worked around. */
+/* The constructor behind the four public forms; coefficient_lows is non-NULL
+ * only for the reference profile, and coefficient_channels is 1 for a shared
+ * response.  The FIR block must divide evenly by up_factor, or the
+ * interpolation phase would drift from block to block. */
 static lsx_rate_vulkan_t *create_rate(
     lsx_vulkan_context_t *vulkan,
     double const *const *coefficients,
@@ -446,11 +441,9 @@ static lsx_rate_vulkan_t *create_rate(
   context->reference_dd = context->double_precision && vulkan->profile == sox_vulkan_profile_reference;
   context->precise_fp32 = !context->double_precision && vulkan->profile == sox_vulkan_profile_precise;
   context->input_frames = block_frames / up_factor;
-  /* The skip is counted in output frames, so it carries post_peak exactly.
-   * Rounding it down to a multiple of up_factor -- which mirrored the input
-   * frame granularity of the CPU preload -- left the remainder unaccounted
-   * for on every filter whose peak is not a multiple of up_factor, that is on
-   * every phase other than linear. */
+  /* The skip is counted in output frames, so it carries post_peak exactly,
+   * including filters whose peak is not a multiple of up_factor (every phase
+   * other than linear). */
   context->skip_frames = taps - 1u - post_peak;
   context->up_factor = up_factor;
   context->down_factor = down_factor;
@@ -595,10 +588,10 @@ size_t lsx_rate_vulkan_input_frames(lsx_rate_vulkan_t const *context)
 /* Interpolate one block on the host: write each input frame into every
  * up_factor'th slot and leave the rest zero.
  *
- * The gain of up_factor is the compensation interpolation needs: inserting
- * zeros divides the signal's average power by that factor, and the low-pass
- * that follows does not put it back.  Applying it here rather than folding it
- * into the coefficients keeps the same prototype response usable at any ratio.
+ * The gain of up_factor is the compensation interpolation needs: with the
+ * zeros inserted, the low-pass that follows passes the baseband at
+ * 1/up_factor of its amplitude.  Applying it here keeps the same prototype
+ * response usable at any ratio.
  *
  * The whole block is zeroed first, since only one slot in up_factor is
  * written and the rest must not carry over from the previous block. */
@@ -651,15 +644,11 @@ int lsx_rate_vulkan_process(lsx_rate_vulkan_t *context, double const *input, dou
   return SOX_SUCCESS;
 }
 
-/* Record and queue the selection dispatch for one block.  Nothing is
- * submitted or waited on: the command buffer joins the pending batch.
- *
- * The descriptor set is rewritten each time because the input buffer differs
- * from block to block, which is also why each block in flight needs its own
- * set and command buffer -- rewriting one the device is still reading would
- * corrupt work already queued.  The input's offset must satisfy the device's
- * storage-buffer alignment, which is checked rather than assumed, since it
- * comes from another effect's description. */
+/* Record and queue the selection dispatch for one block; the command buffer
+ * joins the pending batch.  The input buffer differs per block, so the
+ * descriptor set is rewritten each time, and each block in flight has its
+ * own set and command buffer.  The input's offset comes from another
+ * effect, so its storage-buffer alignment is checked. */
 static int run_resident_selection(
     lsx_rate_vulkan_t *context,
     lsx_vulkan_resident_buffer_t const *input,
@@ -744,22 +733,19 @@ static int run_resident_selection(
 
 /* Decimate a filtered block on the device and describe the result.
  *
- * This is where the latency skip and the decimation phase are applied, both
- * being state that spans blocks.  first is the offset to the block's first
- * kept frame: with a phase of p already consumed, the next multiple of
- * down_factor is down_factor - p frames away.  The count that follows is how
- * many multiples fit in what is left, and the phase is then advanced by the
- * block's length modulo the factor, which is what carries it forward.
+ * Applies the latency skip and the decimation phase, both spanning blocks.
+ * first is the offset to the block's first kept frame: with a phase of p
+ * consumed, the next multiple of down_factor is down_factor - p frames away.
+ * The count is how many multiples fit in the rest, and the phase advances by
+ * the block's length modulo the factor.
  *
- * The phase is advanced on every path, the empty one included: a block that
- * yields nothing still consumed frames, and forgetting them would shift every
- * later block.  allow_empty says whether that is acceptable to the caller:
- * every caller that can recognise an empty result and simply not forward it
- * passes true, which is what lets a filter longer than one block prime.
+ * The phase advances on every path, the empty one included, since an empty
+ * block still consumed frames.  Callers that can skip forwarding an empty
+ * result pass allow_empty true, which lets a filter longer than one block
+ * prime.
  *
- * The published buffer is interleaved rather than planar, unlike the FIR's:
- * the selection shader writes it that way because the eventual consumer or
- * download wants interleaved frames. */
+ * The FIR's output is planar; the selection shader publishes it
+ * interleaved, the layout the eventual consumer or download wants. */
 static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *filtered, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, sox_bool allow_empty, lsx_vulkan_resident_buffer_t *resident)
 {
   size_t block_frames = lsx_fir_vulkan_block_frames_for(context->vulkan);
@@ -838,11 +824,10 @@ static int finish_resident_process(lsx_rate_vulkan_t *context, lsx_vulkan_reside
 /* Interpolate a resident input block straight into the FIR's prepared input
  * buffer, the device-side counterpart of prepare_stage_input.
  *
- * The input is checked against everything this stage assumes of it -- format,
- * domain, channel count, and exactly one block's worth of frames -- because
- * it comes from another effect and a mismatch would otherwise be read as
- * samples.  The previous buffer holds the overlap the FIR needs between
- * blocks, which the shader writes as it goes. */
+ * The input comes from another effect, so its format, domain, channel count
+ * and frame count (exactly one block) are checked.  The previous buffer
+ * holds the overlap the FIR needs between blocks, which the shader writes as
+ * it goes. */
 static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input)
 {
   VkCommandBuffer command_buffer;
@@ -909,9 +894,8 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate resident input prepare");
   /* Zero the overlap on the first block only, so the filter starts against
-   * silence rather than against uninitialised memory.  Done here, inside the
-   * first recorded block, rather than as a separate submission at creation:
-   * the buffer only exists once a resident input actually arrives. */
+   * silence.  Done inside the first recorded block, since the buffer exists
+   * only once a resident input arrives. */
   if (!context->prepare_initialized) {
     vkCmdFillBuffer(command_buffer, context->resident_previous.buffer, 0, context->resident_previous.size, 0);
     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &clear_barrier, 0, NULL, 0, NULL);
@@ -931,15 +915,12 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
 }
 
 /* Build the resident stream: two buffers, the append pipeline and the clip
- * counters.  Created lazily, since only a chain whose producer has a
- * different block size needs any of it.
+ * counters.  Created lazily, for a producer with a different block size.
  *
- * The capacity is one whole block plus one call's worth of input, so that an
- * append can always be accepted in full even when the stream already holds
- * nearly a block: without the slack the caller would have to split its block,
- * which is the very thing the stream exists to avoid.  The clip counters are
- * host-visible, one per block in flight, so a count can be read back without
- * waiting for blocks that have not run. */
+ * The capacity is one block plus one call's worth of input, so an append is
+ * always accepted whole even when the stream holds nearly a block.  The clip
+ * counters are host-visible, one per block in flight, so a count can be read
+ * without waiting for blocks that have not run. */
 static int create_resident_stream(lsx_rate_vulkan_t *context)
 {
   resident_kernel_blob_t const *kernel = &stream_append_kernels[resident_kernel(context)];
@@ -1003,12 +984,10 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
 /* Append a resident block to the stream, either as a straight buffer copy or
  * through the append shader.
  *
- * The copy is taken only when nothing has to be changed on the way: no
- * quantisation, and an input already laid out exactly as the stream expects.
- * Otherwise the shader runs, gathering by the input's own strides and, if
- * asked, rounding each sample to SoX's integer grid and counting what it had
- * to clamp.  Everything about the input is checked first, since it comes from
- * another effect and the stream is read as raw samples afterwards. */
+ * The copy is used when there is no quantisation and the input is laid out
+ * as the stream expects.  Otherwise the shader gathers by the input's
+ * strides and, if asked, rounds each sample to SoX's integer grid and counts
+ * clamps.  The input comes from another effect and is checked first. */
 static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, sox_bool quantize_sox_sample)
 {
   VkCommandBuffer command;
@@ -1152,8 +1131,7 @@ size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context)
     return 0;
   /*
    * The stream is allocated by the first append, so before that the room
-   * is the capacity it will be given.  Reporting zero here would stop the
-   * append that creates it.
+   * is the capacity it will be given; zero would block the first append.
    */
   if (!context->resident_stream[0].buffer)
     return lsx_fir_vulkan_block_frames_for(context->vulkan) + context->input_frames;
@@ -1175,15 +1153,12 @@ int lsx_rate_vulkan_append_resident_stream_quantized(lsx_rate_vulkan_t *context,
 /* Consume one block from the stream: describe its head as a resident input,
  * run it through prepare, the FIR and select, then retain whatever is left.
  *
- * Not yet holding a block is success with *produced false, since that is
- * simply the caller's cue to append more rather than an error.
+ * Not yet holding a block is success with *produced false: the caller
+ * appends more.
  *
- * The leftover is copied to the other buffer rather than moved down within
- * this one, and the two are then swapped.  The block just consumed is still
- * being read by work that has only been queued, so a copy inside one buffer
- * would overwrite it while the device is using it; alternating buffers makes
- * the copy read one and write the other.  A stream that empties exactly needs
- * no copy at all, and so does not swap. */
+ * The leftover is copied to the other buffer and the two are swapped, since
+ * queued work is still reading the consumed block.  A stream that empties
+ * exactly needs no copy and does not swap. */
 int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate_t rate, uint64_t frame_offset, lsx_vulkan_resident_state_t state, sox_bool normalize, lsx_vulkan_resident_buffer_t *resident, sox_bool *produced)
 {
   lsx_vulkan_resident_buffer_t input;
@@ -1303,10 +1278,9 @@ uint32_t lsx_rate_vulkan_resident_batch_depth(lsx_rate_vulkan_t const *context)
   return context ? lsx_vulkan_resident_batch_depth(context->vulkan) : LSX_VULKAN_RESIDENT_BATCH_DEPTH;
 }
 
-/* Zero-fill the rest of the current block at end of stream, so the tail is
- * pushed through the filter rather than left in the buffer.  The occupancy is
- * then a whole block, which is what makes the next process call produce.  A
- * stream already holding a block needs nothing and says so. */
+/* Zero-fill the rest of the current block at end of stream, so the tail goes
+ * through the filter and the next process call produces.  A stream already
+ * holding a block needs nothing and says so. */
 int lsx_rate_vulkan_pad_resident_stream(lsx_rate_vulkan_t *context)
 {
   VkCommandBuffer command;
@@ -1348,8 +1322,8 @@ int lsx_rate_vulkan_process_resident(lsx_rate_vulkan_t *context, double const *i
     lsx_fail("resident Vulkan rate FIR failed");
     return SOX_EOF;
   }
-  /* An empty block is legitimate here too: when the filter's latency exceeds
-   * a whole block -- which it does past about 32k taps -- the first calls are
-   * pure priming and have nothing to hand over yet. */
+  /* An empty block is valid here too: when the filter's latency exceeds a
+   * block (past about 32k taps at the default block size), the first calls
+   * only prime the filter. */
   return finish_resident_process(context, &filtered, rate, frame_offset, state, normalize, sox_true, resident);
 }

@@ -33,8 +33,9 @@
  *                         block's position arrives as input_base_element
  *                         instead, since a stream append may start anywhere.
  *   1 stream_samples   -- out: the stream buffer, interleaved.
- *   2 clipped_samples  -- in/out: one counter per stage, incremented
- *                         atomically when quantisation has to clamp.
+ *   2 clipped_samples  -- in/out: one counter per slot of the descriptor
+ *                         ring, incremented atomically when quantisation
+ *                         has to clamp.
  *
  * Push constants (stream_append_parameters_t, 32 bytes):
  *   input_base_element    element offset of the block within binding 0.
@@ -46,7 +47,8 @@
  *   channels              channels, and the interleaved stream's frame
  *                         stride.
  *   quantize_sox_sample   round each sample to SoX's integer grid.
- *   clip_index            which counter in binding 2 this stage owns.
+ *   clip_index            which counter in binding 2 this append owns: its
+ *                         descriptor slot.
  *
  * Dispatch is two-dimensional: x covers frames rounded up to whole workgroups
  * of 128, y is one invocation per channel, hence both bounds tests.  Each
@@ -95,8 +97,8 @@ void main()
   uint output_index = (parameters.output_first_frame + frame) * parameters.channels + channel;
   double value = input_samples[input_index];
   /* roundEven is SoX's rounding rule for the integer sample grid; the clamp
-   * saturates rather than wrapping, and the counter records that it had to,
-   * so the effect can report clipping exactly as the CPU path does. */
+   * saturates and the counter records each clamp, so the effect can report
+   * clipping exactly as the CPU path does. */
   if (parameters.quantize_sox_sample != 0u) {
     value = roundEven(value);
     if (value < -2147483648.0 || value > 2147483647.0)

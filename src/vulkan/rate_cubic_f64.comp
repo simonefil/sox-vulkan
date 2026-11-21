@@ -38,12 +38,11 @@
  *                             an arbitrarily long stream.
  *   channels                  channels, and the interleaved frame stride.
  *
- * Position is accumulated in fixed point, not in floating point: an output
- * frame's position is phase_fraction + output_frame * step, and computing it
- * that way makes each frame independent of the ones before it while staying
- * bit-exact however long the stream runs.  umulExtended gives the 64-bit
- * product of the fractional part, and the carry out of the fractional sum
- * adds into the integer part.
+ * Position is accumulated in fixed point: an output frame's position is
+ * phase_fraction + output_frame * step, so each frame is independent of the
+ * ones before it and bit-exact however long the stream runs.  umulExtended
+ * gives the 64-bit product of the fractional part, and the carry out of the
+ * fractional sum adds into the integer part.
  *
  * The +1 on input_frame is the one frame of history the cubic needs before
  * its window; the host reserves that and the two after it as pre_post, so the

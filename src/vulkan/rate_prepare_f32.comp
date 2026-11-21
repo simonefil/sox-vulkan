@@ -19,13 +19,9 @@
  */
 
 /* The FP32 member of the prepare family; rate_prepare_f64.comp carries the
- * family's rationale, and this differs from it only in element type.  One
- * float per sample, no compensation anywhere: a profile that chooses this has
- * already accepted FP32 rounding through the whole chain.
- *
- * The fast profile lands here.  The family has no compensated
- * member because it does not accumulate -- see resident_kernel() in
- * rate_vulkan.c.
+ * family's rationale, and this differs from it only in element type: one
+ * float per sample, no compensation.  resident_kernel() in rate_vulkan.c
+ * selects it for the fast profile.
  *
  * Bindings, in the order record_resident_prepare() in rate_vulkan.c writes
  * them:

@@ -69,9 +69,8 @@ void lsx_rate_dsd_vulkan_destroy(lsx_rate_dsd_vulkan_t *context);
 size_t lsx_rate_dsd_vulkan_block_frames(void);
 uint32_t lsx_rate_dsd_vulkan_taps(lsx_rate_dsd_vulkan_t const *context);
 
-/* Input words per channel the stage can take in one call, which is the window
- * of the largest block it will produce.  A caller sizes its own staging from
- * this rather than deriving it from taps and decimation itself. */
+/* Input words per channel the stage can take in one call: the window of the
+ * largest block it produces.  Callers size their staging from this. */
 size_t lsx_rate_dsd_vulkan_window_words(lsx_rate_dsd_vulkan_t const *context);
 
 /* Words of silence the caller must place in front of the stream, which is

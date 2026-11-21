@@ -18,18 +18,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-/* rate_polyphase_f64.comp with an FP32 output, and the reason it exists is
- * the mismatch in the name: the accumulation is FP64 but the resident buffer
- * it writes is FP32.
+/* rate_polyphase_f64.comp with FP64 accumulation and an FP32 resident
+ * output.  The host selects it when an FP64 stage feeds a consumer that
+ * wants normalized FP32 samples; the FP64 shader's output is typed double.
  *
- * The host selects this when the stage is FP64 internally and the consumer
- * wants normalized FP32 samples, which is a narrowing the plain FP64 shader
- * cannot do -- its output binding is typed double.
- *
- * The normalize push constant follows the same rule as rate_select_*.comp:
- * the host sets it only when the consumer wants normalized output and the
- * build's sample representation is not already normalized.  The conditional
- * scale therefore avoids applying SOX_SAMPLE_SCALE twice on such builds.
+ * As in rate_select_*.comp, the host sets normalize only when the consumer
+ * wants normalized output and the build's samples are not already
+ * normalized, so SOX_SAMPLE_SCALE is never applied twice.
  *
  * Bindings, in the order rate_polyphase_vulkan.c writes them:
  *   0 coefficients    -- in: the response, tap major, phase minor, FP64.
@@ -88,11 +83,11 @@ void main()
   double sum = 0.0;
 
   /* The symmetric form: a linear-phase response has coefficient[tap] equal to
-   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
-   * before the one multiply, halving them.  The host only sets this for a
-   * response that really is symmetric, and it also requires phase_count == 1
-   * and an odd tap count, which is why the coefficient index has no phase
-   * term.  The zero test skips the exact zeros of a half-band response. */
+   * coefficient[taps - 1 - tap], so the mirrored input pair is added before
+   * one multiply, halving the multiplies.  The host sets it only for a
+   * symmetric response with phase_count == 1 and an odd tap count, hence the
+   * bare tap index with no phase term.  The zero test skips the exact zeros
+   * of a half-band response. */
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
 

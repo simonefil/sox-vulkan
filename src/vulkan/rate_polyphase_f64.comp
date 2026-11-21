@@ -31,7 +31,7 @@
  *
  * Push constants (parameters_t, 32 bytes):
  *   output_frames     frames to produce, worked out by the host.
- *   phase_count       phases in the response; the counter wraps at it.
+ *   phase_count       phases in the response; the counter's divisor.
  *   phase_step        counter increment per output frame.
  *   phase_start       counter value this batch begins at, so it continues
  *                     across calls.
@@ -97,16 +97,12 @@ void main()
   double scale = parameters.normalize != 0u ? SOX_SAMPLE_SCALE : 1.0;
   double sum = 0.0;
   /* The symmetric form: a linear-phase response has coefficient[tap] equal to
-   * coefficient[taps - 1 - tap], so the mirrored input pair can be added
-   * before the one multiply, halving them.  The host only sets this for a
-   * response that really is symmetric, and it also requires phase_count == 1
-   * and an odd tap count -- which is why the coefficient index here is the
-   * bare tap, with no phase term.
-   *
-   * The zero test skips the alternate taps of a half-band response, which are
-   * exactly zero by construction.  It is a real branch, not a rounding
-   * shortcut, and it is worth taking because it removes about half of what is
-   * left. */
+   * coefficient[taps - 1 - tap], so the mirrored input pair is added before
+   * one multiply, halving the multiplies.  The host sets it only for a
+   * symmetric response with phase_count == 1 and an odd tap count, hence the
+   * bare tap index with no phase term.  The zero test skips the alternate
+   * taps of a half-band response, exactly zero by construction, removing
+   * about half of what is left. */
   if (parameters.symmetric_presum != 0u) {
     uint center = parameters.taps / 2u;
 

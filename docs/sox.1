@@ -2878,7 +2878,7 @@ and
 .B tempo
 effects.
 .TP
-\fBrate\fR [\fB\-q\fR\^|\^\fB\-l\fR\^|\^\fB\-m\fR\^|\^\fB\-h\fR\^|\^\fB\-v\fR\^|\^\fB\-x\fR\^|\^\fB\-z\fR] [\fB\-E\fR] [override-options] \fIRATE\fR[\fBk\fR]
+\fBrate\fR [\fB\-q\fR\^|\^\fB\-l\fR\^|\^\fB\-m\fR\^|\^\fB\-g\fR\^|\^\fB\-h\fR\^|\^\fB\-e\fR\^|\^\fB\-v\fR\^|\^\fB\-u\fR\^|\^\fB\-x\fR\^|\^\fB\-z\fR] [\fB\-E\fR] [override-options] \fIRATE\fR[\fBk\fR]
 Change the audio sampling rate (i.e. resample the audio) to any given
 .I RATE
 (even non-integer if this is supported by the output file format)
@@ -2913,14 +2913,32 @@ T}
 .na
 audio playback
 T}
+\-g	T{
+.na
+medium flat
+T}	95%	100	T{
+.na
+audio playback, flat pass-band
+T}
 \-h	high	95%	125	T{
 .na
 16-bit mastering (use with dither)
+T}
+\-e	T{
+.na
+high plus
+T}	95%	150	T{
+.na
+between high and very high
 T}
 \-v	T{
 .na
 very high
 T}	95%	175	24-bit mastering
+\-u	ultra	95%	200	T{
+.na
+between very high and extreme
+T}
 \-x	extreme	95%	275	T{
 .na
 floating-point mastering
@@ -2940,6 +2958,14 @@ is the level of noise rejection.  Increasing levels of resampling
 quality come at the expense of increasing amounts of time to process the
 audio.  If no quality option is given, the quality level used is `high'
 (but see `Playing & Recording Audio' above regarding playback).
+.SP
+The `quick', `low' and `medium' levels allow up to 0\*d35\ dB of roll-off
+at the top of the pass-band, which shortens the filter; from `medium flat'
+up, the pass-band is flat to within 0\*d01\ dB.  Each level from `high'
+to `ultra' adds 4 bits (about 24\ dB) of rejection to the one before.
+The levels from `quick' to `ultra' can also be given by number with
+.BI \-Q " num"\fR,
+from 0 (`quick') to 7 (`ultra'), in the order of the table.
 .SP
 The `extreme' level is the deepest at which 64-bit floating-point
 arithmetic still follows the designed rejection.  The `overkill' level is
@@ -3007,16 +3033,74 @@ lB lw52.
 \-M/\-I/\-L	Phase response = minimum/intermediate/linear
 \-s	Steep filter (band-width = 99%)
 \-a	Allow aliasing/imaging above the pass-band
-\-b\ 74\-99\*d9	Any band-width %
+\-b\ 74\-99\*d9	Any band-width % (at the \-3\ dB point)
+\-B\ 53\-99\*d88	T{
+.na
+Any band-width % at the 0\ dB point, in place of \-b
+T}
+\-A\ 85\-100	T{
+.na
+Band-width % kept free of aliasing; implies \-a
+T}
 \-p\ 0\-100	T{
 .na
 Any phase response (0 = minimum, 25 = intermediate, 50 = linear, 100 = maximum)
+T}
+\-R\ 90\-200	T{
+.na
+Rejection in dB, in place of the quality level
+T}
+\-d\ 15\-46	T{
+.na
+Rejection as a bit depth, in place of the quality level
 T}
 .TE
 .DT
 .SP
 N.B.  Override options cannot be used with the `quick' or `low'
 quality algorithms.
+Under a
+.B \-\-vulkan\-*
+option,
+.B \-R
+and
+.B \-d
+are ignored with a warning, since the device runs the preset levels.
+.SP
+The following options tune the filter design at any quality level:
+.TS
+center;
+lB lw52.
+\-f	T{
+.na
+Use the band-width as the pass-band edge as it is, without the adjustment
+that keeps the roll-off within 0\*d01\ dB
+T}
+\-i\ \-1\-2	T{
+.na
+Coefficient interpolation for irrational ratios: \-1 automatic (default),
+0 none, 1 and 2 higher orders
+T}
+\-c\ 100+	T{
+.na
+Size in kbytes that the coefficient table tries to stay below (default 400)
+T}
+\-n	Disable the optimisations for small integer ratios
+\-t	T{
+.na
+High-precision clock, for more accurate irrational ratios
+T}
+.TE
+.DT
+.SP
+Under a
+.B \-\-vulkan\-*
+option, a conversion that
+.B \-i
+or
+.B \-t
+sends through coefficient interpolation or the high-precision clock stops
+with an error, since the device runs neither.
 .SP
 All resamplers use filters that can sometimes create `echo' (a.k.a.
 `ringing') artefacts with transient signals such as those that occur

@@ -1,25 +1,5 @@
 /* Double-single cubic interpolation for the precise profile.
  *
- * The precise profile's member of the cubic family; rate_cubic_f64.comp
- * carries the family's rationale.  The arithmetic is the same compensated
- * float-float evaluation used by the compensated path, but the pairs are the
- * interface rather than an internal detail: samples arrive as pairs from the
- * stage before and leave as pairs for the stage after, so nothing is narrowed
- * at either end and the low word survives the whole chain.
- *
- * Bindings, in the order rate_cubic_vulkan.c writes them:
- *   0 input_samples   -- in: interleaved input frames, double-single pairs.
- *   1 output_samples  -- out: interleaved output frames, pairs.
- *
- * Push constants (parameters_t, 20 bytes): output_frames, step_integer,
- * step_fraction, phase_fraction and channels.  The step and phase
- * are 32.32 and 0.32 fixed point.  The frame strides count vec2 elements.
- *
- * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
- * y one invocation per channel, hence both bounds tests.  The +1 on
- * input_frame is the history the cubic window needs, reserved by the host as
- * pre_post along with the two frames after it.
- *
  * (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -35,6 +15,27 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* The precise profile's member of the cubic family; rate_cubic_f64.comp
+ * carries the family's rationale.  The arithmetic is a compensated
+ * float-float evaluation, and the pairs are also the interface: samples
+ * arrive as pairs from the stage before and leave as pairs for the stage
+ * after, so nothing is narrowed at either end and the low word survives the
+ * whole chain.
+ *
+ * Bindings, in the order rate_cubic_vulkan.c writes them:
+ *   0 input_samples   -- in: interleaved input frames, double-single pairs.
+ *   1 output_samples  -- out: interleaved output frames, pairs.
+ *
+ * Push constants (parameters_t, 20 bytes): output_frames, step_integer,
+ * step_fraction, phase_fraction and channels.  The step and phase
+ * are 32.32 and 0.32 fixed point.  The frame strides count vec2 elements.
+ *
+ * Dispatch is two-dimensional, x over output_frames in workgroups of 128 and
+ * y one invocation per channel, hence both bounds tests.  The +1 on
+ * input_frame is the history the cubic window needs, reserved by the host as
+ * pre_post along with the two frames after it.
  */
 
 #version 450
@@ -136,8 +137,8 @@ void main()
   a = subtract_ds(a, sample_0);
   a = subtract_ds(a, multiply_ds(b, vec2(4.0, 0.0)));
   /* 1/6 as a double-single pair: the high word is the nearest float and the
-   * low word the remainder.  Written out rather than computed, since dividing
-   * by 6 here would round to the high word and undo the point. */
+   * low word the remainder.  Written as constants: dividing by 6 here would
+   * round to the high word. */
   a = multiply_ds(a, vec2(0.1666666716337204, -4.967053879312289e-9));
   const vec2 c = subtract_ds(subtract_ds(subtract_ds(sample_1, sample_0), a), b);
   const vec2 output_value = add_ds(multiply_ds(add_ds(multiply_ds(add_ds(multiply_ds(a, x), b), x), c), x), sample_0);

@@ -1,16 +1,4 @@
-/* In-process cache of compiled VkFFT kernel binaries.
- *
- * VkFFT generates its own GLSL and compiles it with glslang every time a
- * context is created, which measured 1.487 s out of 1.517 s of startup on an
- * RTX 3080 -- 98% -- and is paid sixteen times for eight chained effects.
- * saveApplicationToString / loadApplicationFromString exist precisely for
- * this: one context compiles, the rest load the SPIR-V it produced.
- *
- * Deliberately free of SoX headers, because the double-double instantiation
- * in vulkan_fft_dd.cpp has to reach it from C++ without pulling sox_i.h into
- * a translation unit that redefines the host scalar type.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -27,6 +15,17 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Cache of compiled VkFFT kernel binaries, in process and on disk.
+ *
+ * VkFFT generates its own GLSL and compiles it with glslang every time a
+ * context is created, which measured 1.487 s out of 1.517 s of startup on an
+ * RTX 3080 (98%).  With saveApplicationToString / loadApplicationFromString
+ * one context compiles and the rest load the SPIR-V it produced.
+ *
+ * This header includes no SoX headers, because the double-double
+ * instantiation in vulkan_fft_dd.cpp reaches it from C++ without pulling
+ * sox_i.h into a translation unit that redefines the host scalar type. */
+
 #ifndef LSX_VULKAN_FFT_CACHE_H
 #define LSX_VULKAN_FFT_CACHE_H
 
@@ -38,22 +37,20 @@ extern "C" {
 #endif
 
 /*
- * Everything a VkFFT plan depends on, and nothing else.  Measured on the
- * target machine: the number of taps does not enter (8,192 / 131,072 /
- * 1,048,576 taps all compiled to the same 120 ms per context) and neither do
- * the coefficients, which are data uploaded into buffers rather than compiled
- * into kernels.  The channel count does, because VkFFT emits numberBatches as
- * a literal in the generated GLSL.  Entries are therefore (profile) x
- * (channel count), at most 32 for four profiles and SoX's eight channels.
+ * Everything a VkFFT plan depends on, and nothing else.  The coefficients do
+ * not enter: they are data uploaded into buffers, and measured on the target
+ * machine 8,192, 131,072 and 1,048,576 taps all compiled to the same 120 ms
+ * per context.  The channel count does, because VkFFT emits numberBatches as
+ * a literal in the generated GLSL.
  *
  * The buffer size is in the key because VkFFT derives its descriptor
  * ranges, and with them specialization constants that reach the generated
  * code, from it.  In practice it follows from the transform, so keying on it
- * costs no extra entries and removes the question.
+ * costs no extra entries.
  *
- * pipelineCacheUUID is deliberately absent: it identifies driver pipeline
- * binaries, whereas the blob here is SPIR-V and independent of the driver.
- * Including it would discard the cache on every driver update for nothing.
+ * pipelineCacheUUID is not in the key: it identifies driver pipeline
+ * binaries, and the blob here is driver-independent SPIR-V, so the cache
+ * survives a driver update.
  */
 typedef struct {
   uint64_t buffer_size;
@@ -64,21 +61,19 @@ typedef struct {
   uint32_t batches;
   uint8_t double_precision;
   uint8_t double_double_precision;
-  uint8_t real_to_complex;
-  uint8_t normalize_inverse;
   uint8_t use_lut;
 } lsx_vulkan_fft_cache_key_t;
 
 /* The cache is always active.  Its on-disk location follows the platform:
  * %LOCALAPPDATA%\sox\vkfft-cache, ~/Library/Caches/sox/vkfft-cache, or
- * $XDG_CACHE_HOME/sox/vkfft-cache. */
-int lsx_vulkan_fft_cache_enabled(void);
+ * $XDG_CACHE_HOME/sox/vkfft-cache (~/.cache/sox/vkfft-cache when
+ * XDG_CACHE_HOME is unset or empty). */
 
 /* Borrowed pointer into the cache, valid until lsx_vulkan_fft_cache_clear();
  * NULL on a miss.  The caller hands it straight to loadApplicationString,
  * which only reads from it.  A miss consults the on-disk cache before
  * reporting one, and a file found there is kept in memory too. */
-void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size);
+void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key);
 
 /* Takes a private copy: VkFFT frees saveApplicationString in deleteVkFFT. */
 void lsx_vulkan_fft_cache_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, uint64_t size);

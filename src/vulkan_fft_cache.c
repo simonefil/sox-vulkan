@@ -1,7 +1,4 @@
-/* Cache of compiled VkFFT kernel binaries, in-process and on disk.
- * See the header.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +14,9 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Cache of compiled VkFFT kernel binaries, in-process and on disk.
+ * See the header. */
 
 #include "sox_i.h"
 #include "vulkan_fft_cache.h"
@@ -55,7 +55,7 @@ static unsigned misses;
 static unsigned disk_hits;
 static unsigned disk_writes;
 
-/* Compared field by field rather than with memcmp, which would read padding
+/* Compared field by field, because memcmp would read padding
  * bytes that a partially assigned key leaves indeterminate. */
 static int key_equal(lsx_vulkan_fft_cache_key_t const *left, lsx_vulkan_fft_cache_key_t const *right)
 {
@@ -67,39 +67,26 @@ static int key_equal(lsx_vulkan_fft_cache_key_t const *left, lsx_vulkan_fft_cach
       left->batches == right->batches &&
       left->double_precision == right->double_precision &&
       left->double_double_precision == right->double_double_precision &&
-      left->real_to_complex == right->real_to_complex &&
-      left->normalize_inverse == right->normalize_inverse &&
       left->use_lut == right->use_lut;
-}
-
-int lsx_vulkan_fft_cache_enabled(void)
-{
-  return 1;
 }
 
 /* ---------------------------------------------------------------- on disk */
 
 /* The in-process cache alone still pays a full compile once per invocation,
- * and the shipped product is a sox binary run once per file: that first
- * compile is the whole of what the user waits for.  The same blob therefore
- * goes to a file keyed on the same fields, so that the second invocation on
- * a machine starts with no compilation at all.
+ * and sox runs once per file.  The same blob therefore goes to a file keyed
+ * on the same fields, so that the second invocation on a machine starts with
+ * no compilation at all.
  *
  * The file is self-describing and fully verified on read -- format magic,
  * sox version, every key field, blob length and a hash of the blob -- so a
- * stale, truncated or foreign file reads as a miss rather than as kernels.
- * Nothing here can make a run incorrect; the worst case is a slow start. */
+ * stale, truncated or foreign file reads as a miss, and the worst case is a
+ * slow start. */
 
 #define CACHE_FILE_MAGIC 0x564b4643u /* "VKFC" */
-#define CACHE_FILE_FORMAT 1u
+#define CACHE_FILE_FORMAT 2u
 
-static int disk_enabled(void)
-{
-  return 1;
-}
-
-/* FNV-1a over the whole blob.  Only has to catch a truncated or corrupted
- * file, so a non-cryptographic hash is enough; the key check above is what
+/* FNV-1a over the whole blob.  It only has to catch a truncated or corrupted
+ * file, so a non-cryptographic hash is enough; the key check is what
  * establishes that the file is the right one. */
 static uint64_t blob_hash(void const *blob, uint64_t size)
 {
@@ -115,11 +102,9 @@ static uint64_t blob_hash(void const *blob, uint64_t size)
 }
 
 /* Integers go to and from the file byte by byte, least significant first,
- * rather than by writing the object: the file may be read by a build with a
- * different byte order or alignment, and the header is what decides whether
- * the rest is trusted.  Write errors are not checked here -- disk_store
- * tests the stream once at the end, and a file that failed is discarded
- * whole. */
+ * so a build with a different byte order or alignment reads the same values.
+ * Write errors are checked once at the end by disk_store, which discards a
+ * failed file whole. */
 static void put_u32(FILE *file, uint32_t value)
 {
   unsigned char bytes[4];
@@ -168,7 +153,7 @@ static int get_u64(FILE *file, uint64_t *value)
 
 /* Assembles path/component, creating each directory as it goes.  Returns
  * zero if any level could not be created, which disables the disk cache for
- * this run rather than failing the effect. */
+ * this run; the effect itself carries on. */
 static int append_directory(char *path, size_t size, char const *component)
 {
   size_t used = strlen(path);
@@ -184,7 +169,8 @@ static int append_directory(char *path, size_t size, char const *component)
 }
 
 /* %LOCALAPPDATA%\sox\vkfft-cache, ~/Library/Caches/sox/vkfft-cache, or
- * $XDG_CACHE_HOME/sox/vkfft-cache. */
+ * $XDG_CACHE_HOME/sox/vkfft-cache, falling back to
+ * ~/.cache/sox/vkfft-cache. */
 static char const *cache_directory(void)
 {
   static char path[1024];
@@ -227,13 +213,11 @@ static char const *cache_directory(void)
   return path[0] ? path : NULL;
 }
 
-/* The sox version is verified from the file header rather than named here,
- * so that a new version overwrites the stale file instead of leaving it
- * behind to accumulate. */
 /* Build the file name for a key.  Every key field appears in it, the booleans
  * packed into one hexadecimal byte, so that distinct plans cannot collide on
- * one file; the key is written into the file as well and checked on read, so
- * the name is a lookup shortcut rather than the thing relied upon. */
+ * one file; the key is written into the file as well and checked on read.
+ * The sox version is verified from the file header and is not in the name,
+ * so a new version overwrites the stale file. */
 static int entry_path(lsx_vulkan_fft_cache_key_t const *key, char *path, size_t size)
 {
   char const *directory = cache_directory();
@@ -244,9 +228,7 @@ static int entry_path(lsx_vulkan_fft_cache_key_t const *key, char *path, size_t 
     return 0;
   flags = (unsigned)key->double_precision |
       ((unsigned)key->double_double_precision << 1) |
-      ((unsigned)key->real_to_complex << 2) |
-      ((unsigned)key->normalize_inverse << 3) |
-      ((unsigned)key->use_lut << 4);
+      ((unsigned)key->use_lut << 2);
   written = snprintf(
       path, size, "%s%c%08x-%08x-%08x-%u-%u-%llx-%02x.vkfft",
       directory, CACHE_PATH_SEPARATOR, key->vendor_id, key->device_id,
@@ -265,25 +247,23 @@ static void write_key(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
   put_u32(file, key->batches);
   put_u32(file, key->double_precision);
   put_u32(file, key->double_double_precision);
-  put_u32(file, key->real_to_complex);
-  put_u32(file, key->normalize_inverse);
   put_u32(file, key->use_lut);
 }
 
-/* Read a key back and compare it with the one wanted.  Rebuilt into a struct
- * and compared field by field rather than checked as it is read, so that the
- * file and the memory cache agree on what equality means.  The booleans were
- * written as words and are narrowed back here. */
+/* Read a key back and compare it with the one wanted.  It is rebuilt into a
+ * struct and compared with key_equal, so that the file and the memory cache
+ * agree on what equality means.  The booleans were written as words and are
+ * narrowed back here. */
 static int read_key_matches(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
 {
   lsx_vulkan_fft_cache_key_t stored;
-  uint32_t fields[10];
+  uint32_t fields[8];
   uint64_t buffer_size;
   size_t index;
 
   if (!get_u64(file, &buffer_size))
     return 0;
-  for (index = 0; index < 10; ++index)
+  for (index = 0; index < 8; ++index)
     if (!get_u32(file, &fields[index]))
       return 0;
   memset(&stored, 0, sizeof(stored));
@@ -295,17 +275,14 @@ static int read_key_matches(FILE *file, lsx_vulkan_fft_cache_key_t const *key)
   stored.batches = fields[4];
   stored.double_precision = (uint8_t)fields[5];
   stored.double_double_precision = (uint8_t)fields[6];
-  stored.real_to_complex = (uint8_t)fields[7];
-  stored.normalize_inverse = (uint8_t)fields[8];
-  stored.use_lut = (uint8_t)fields[9];
+  stored.use_lut = (uint8_t)fields[7];
   return key_equal(&stored, key);
 }
 
 /* The SoX version is part of what a file must match.  The key describes the
- * plan but not the code that generated it, so a build with a different VkFFT
- * or different generation options would otherwise load kernels that are no
- * longer what this build would produce.  Tying entries to the version means
- * an upgrade simply misses and recompiles. */
+ * plan but not the code that generated it, so tying entries to the version
+ * keeps a build with different generation options from loading another
+ * build's kernels: an upgrade misses and recompiles. */
 static int version_matches(FILE *file)
 {
   char const *version = sox_version();
@@ -321,10 +298,9 @@ static int version_matches(FILE *file)
 }
 
 /* Read one cache file, returning a newly allocated blob the caller owns, or
- * NULL for a miss.  Everything is verified before the blob is trusted -- and
- * in that order, cheapest first, so a foreign or stale file is rejected
- * without reading its body.  There is no error path distinct from a miss: a
- * bad file just means compiling. */
+ * NULL for a miss.  Everything is verified before the blob is trusted,
+ * cheapest first, so a foreign or stale file is rejected without reading its
+ * body.  A bad file is a miss and means compiling. */
 static void *disk_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
 {
   char path[1024];
@@ -348,8 +324,8 @@ static void *disk_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
     fclose(file);
     return NULL;
   }
-  /* A blob big enough to exhaust memory is a corrupt length field, not a
-   * plan: the largest entry measured is a little over 300 KB. */
+  /* A length above 64 MB is treated as corrupt: the largest entry measured
+   * is a little over 300 KB. */
   if (stored_size > 64u * 1024u * 1024u) {
     fclose(file);
     return NULL;
@@ -410,9 +386,8 @@ static void disk_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, 
 
 /* ------------------------------------------------------------- in process */
 
-/* Take ownership of blob and add it to the in-process list.  A plain linked
- * list with linear search: the header explains why there are at most a few
- * dozen entries, which is far too few for anything cleverer to pay. */
+/* Take ownership of blob and add it to the in-process list, a plain linked
+ * list searched linearly. */
 static void memory_store(lsx_vulkan_fft_cache_key_t const *key, void *blob, uint64_t size)
 {
   cache_entry_t *entry = lsx_calloc(1, sizeof(*entry));
@@ -424,30 +399,26 @@ static void memory_store(lsx_vulkan_fft_cache_key_t const *key, void *blob, uint
   entries = entry;
 }
 
-void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
+void const *lsx_vulkan_fft_cache_lookup(lsx_vulkan_fft_cache_key_t const *key)
 {
   cache_entry_t *entry;
   void *blob;
   uint64_t blob_size = 0;
 
-  if (!key || !lsx_vulkan_fft_cache_enabled())
+  if (!key)
     return NULL;
   for (entry = entries; entry; entry = entry->next)
     if (key_equal(&entry->key, key)) {
       ++hits;
-      if (size)
-        *size = entry->size;
       return entry->blob;
     }
   /* Memory first, disk second: within one run the same plan is asked for once
    * per effect, and only the first of those should touch the filesystem.  A
    * file that is found is kept in memory too, so the rest hit there. */
-  blob = disk_enabled() ? disk_lookup(key, &blob_size) : NULL;
+  blob = disk_lookup(key, &blob_size);
   if (blob) {
     ++disk_hits;
     memory_store(key, blob, blob_size);
-    if (size)
-      *size = blob_size;
     return blob;
   }
   ++misses;
@@ -458,14 +429,13 @@ void lsx_vulkan_fft_cache_store(lsx_vulkan_fft_cache_key_t const *key, void cons
 {
   void *copy;
 
-  if (!key || !blob || !size || !lsx_vulkan_fft_cache_enabled())
+  if (!key || !blob || !size)
     return;
   /* VkFFT frees saveApplicationString in deleteVkFFT. */
   copy = lsx_malloc((size_t)size);
   memcpy(copy, blob, (size_t)size);
   memory_store(key, copy, size);
-  if (disk_enabled())
-    disk_store(key, blob, size);
+  disk_store(key, blob, size);
 }
 
 /* Free every in-process entry and report what the cache did.  The counters
@@ -493,7 +463,6 @@ void lsx_vulkan_fft_cache_clear(void)
 
     /* misses are compiles: what the cache exists to avoid, and the number a
      * cold run and a warm one differ by. */
-    lsx_diagnostics_setf("cache.vkfft.enabled", "%d", lsx_vulkan_fft_cache_enabled() ? 1 : 0);
     lsx_diagnostics_setf("cache.vkfft.hits", "%u", hits);
     lsx_diagnostics_setf("cache.vkfft.disk_hits", "%u", disk_hits);
     lsx_diagnostics_setf("cache.vkfft.misses", "%u", misses);

@@ -1,24 +1,4 @@
-/* Double-double primitives shared by every reference-profile shader.
- *
- * These were duplicated per shader and drifted: one copy guarded its
- * compensation terms with precise, another relied on fma(), and the guarded
- * copy still leaked because precise does not propagate backwards into the out
- * parameters of a callee.  Every step here is an error-free transformation
- * whose compensation term is algebraically zero, so a compiler free to
- * reassociate folds it away and silently reduces each pair to its high word.
- * Two rules keep that from happening again, and both are checkable on the
- * generated SPIR-V:
- *
- *   - every floating-point result lands in a precise local before it is used,
- *     including values passed as arguments to another function;
- *   - no primitive takes an out parameter, because those cannot be protected.
- *
- * The check is that every OpFAdd, OpFSub and OpFMul in the compiled shader
- * carries NoContraction; only OpFNegate may lack it, being exact.
- *
- * The including shader must already have requested float64.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -34,6 +14,23 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Double-double primitives shared by the reference-profile shaders.
+ *
+ * Every step here is an error-free transformation whose compensation term is
+ * algebraically zero, so a compiler free to reassociate folds it away and
+ * silently reduces each pair to its high word.  Two rules prevent that, and
+ * both are checkable on the generated SPIR-V:
+ *
+ *   - every floating-point result lands in a precise local before it is used,
+ *     including values passed as arguments to another function;
+ *   - no primitive takes an out parameter, because precise does not propagate
+ *     backwards into the out parameters of a callee.
+ *
+ * The check is that every OpFAdd, OpFSub and OpFMul in the compiled shader
+ * carries NoContraction; only OpFNegate may lack it, being exact.
+ *
+ * The including shader must already have requested float64. */
 
 #ifndef DOUBLE_DOUBLE_GLSL
 #define DOUBLE_DOUBLE_GLSL
@@ -58,10 +55,9 @@ dvec2 normalize_dd(double high, double low)
   return two_sum(high, low);
 }
 
-/* The accurate addition rather than the sloppy one: the low words get their
- * own error-free sum instead of being folded in with a bare chain of adds.
- * Reference exists to spend time on exactly this kind of second-order term,
- * and the partition accumulation adds up to sixteen of these in a row. */
+/* The accurate double-double addition: the low words get their own
+ * error-free sum as well as the high words.  The partition accumulation
+ * adds up to sixteen of these in a row. */
 dvec2 add_dd(dvec2 first, dvec2 second)
 {
   const dvec2 high = two_sum(first.x, second.x);
@@ -78,10 +74,10 @@ dvec2 subtract_dd(dvec2 first, dvec2 second)
   return add_dd(first, -second);
 }
 
-/* Dekker splitting rather than fma(): GLSL only guarantees that fma() is a
- * single rounding when its result reaches a precise variable, and an fma()
- * the driver does not actually fuse degenerates to a*b - a*b, which returns
- * exactly zero and takes the whole low word with it. */
+/* Dekker splitting: GLSL only guarantees that fma() is a single rounding when
+ * its result reaches a precise variable, and an fma() the driver does not
+ * actually fuse degenerates to a*b - a*b, which returns exactly zero and
+ * takes the whole low word with it. */
 dvec2 split_dd(double value)
 {
   precise double scaled = value * 134217729.0;

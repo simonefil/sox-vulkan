@@ -1,9 +1,4 @@
-/* Double-double VkFFT instantiation, implemented in vulkan_fft_dd.cpp.
- *
- * Kept behind a plain C interface so that the C++ translation unit holding
- * the wider host scalar type stays isolated from the rest of SoX.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,6 +15,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Double-double VkFFT instantiation, implemented in vulkan_fft_dd.cpp.
+ *
+ * Kept behind a plain C interface so that the C++ translation unit holding
+ * the wider host scalar type stays isolated from the rest of SoX. */
+
 #ifndef LSX_VULKAN_FFT_DD_H
 #define LSX_VULKAN_FFT_DD_H
 
@@ -32,22 +32,21 @@ extern "C" {
 #endif
 
 /* Build a double-double plan, returning an opaque handle or NULL on failure,
- * in which case *result_code holds VkFFT's own result value -- reported by
- * number rather than mapped, since the SoX logging functions are on the C
- * side.  The handles are passed by address because that is how VkFFT takes
- * them; every one of them, and the buffer, must outlive the plan.
+ * in which case *result_code holds VkFFT's own result value, for the C side
+ * to report, since the SoX logging functions live there.  The handles are
+ * passed by address because that is how VkFFT takes them; every one of
+ * them, and the buffer, must outlive the plan.
  *
- * The caller is expected to have initialised glslang already, this file
- * asserting to VkFFT that it has.
+ * The caller must have initialised glslang already: this file tells VkFFT
+ * that it has (isCompilerInitialized).
  *
  * key is built by the caller so that both VkFFT instantiations agree on what
- * a plan depends on; it may be null to force a compile. */
+ * a plan depends on. */
 void *lsx_vulkan_fft_dd_create(
     VkDevice *device, VkPhysicalDevice *physical_device,
     VkQueue *queue, VkCommandPool *command_pool,
     VkBuffer *buffer, uint64_t buffer_size,
     uint32_t length, uint32_t batches,
-    int real_to_complex, int normalize_inverse,
     VkFence *fence, lsx_vulkan_fft_cache_key_t const *key,
     int *result_code);
 

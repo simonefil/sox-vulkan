@@ -1,20 +1,4 @@
-/* Double-double stand-in for the quadmath FP128 type used by VkFFT.
- *
- * VkFFT reaches its double-double precision only when its host scalar type
- * carries more than the 53 bits of a double: it computes each twiddle once
- * with pfcos()/pfsin() and then merely splits the result into a hi/lo pair.
- * With a plain double that split recovers nothing, so the transform is
- * limited to FP64 twiddle accuracy no matter how precise the device
- * arithmetic is. Some compilers expose a native __float128 type without the
- * quadmath library and headers that VkFFT also needs, while MSVC has no
- * 128-bit floating type at all. This header supplies the same interface from
- * two doubles in both cases, which is what VkFFT ultimately stores anyway.
- *
- * Only the six entry points VkFFT actually uses are provided. This header is
- * placed on the include path of the double-double translation unit alone, so
- * no other VkFFT instantiation is affected.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,6 +14,22 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Double-double stand-in for the quadmath FP128 type used by VkFFT.
+ *
+ * VkFFT reaches its double-double precision only when its host scalar type
+ * carries more than the 53 bits of a double: it computes each twiddle once
+ * with pfcos()/pfsin() and then splits the result into a hi/lo pair. With a
+ * plain double that split recovers nothing, so the transform is limited to
+ * FP64 twiddle accuracy however precise the device arithmetic is. Some
+ * compilers expose a native __float128 type without the quadmath library and
+ * headers that VkFFT also needs, while MSVC has no 128-bit floating type at
+ * all. This header supplies the same interface from two doubles in both
+ * cases, which is what VkFFT ultimately stores anyway.
+ *
+ * Only the six entry points VkFFT uses are provided. This header is placed
+ * on the include path of vulkan_fft_dd.cpp and rate_design_dd.cpp alone, so
+ * no other VkFFT instantiation is affected. */
 
 #ifndef LSX_VULKAN_DD_QUADMATH_H
 #define LSX_VULKAN_DD_QUADMATH_H
@@ -80,9 +80,9 @@ struct lsx_dd_float {
   lsx_dd_float(double value) : hi(value), lo(0.0) {}
   lsx_dd_float(double high, double low) : hi(high), lo(low) {}
 
-  /* Explicit on purpose: an implicit one would let a double-double
-   * expression decay to double silently, and would make every mixed
-   * arithmetic expression ambiguous against the builtin operators. */
+  /* Explicit, because an implicit one would let a double-double expression
+   * decay to double silently, and would make every mixed arithmetic
+   * expression ambiguous against the builtin operators. */
   explicit operator double() const { return hi; }
   explicit operator long double() const
   {
@@ -138,8 +138,8 @@ static inline lsx_dd_float operator*(lsx_dd_float a, lsx_dd_float b)
 /* Long division by quotient extraction.  q1 removes the FP64-sized leading
  * part, q2 removes the leading part of its double-double residual, and q3 is
  * the final correction retained by the pair.  VkFFT calls this only with
- * finite, non-zero sizing and angle constants; matching libquadmath's NaN or
- * divide-by-zero signalling is intentionally outside this narrow shim. */
+ * finite, non-zero sizing and angle constants, so libquadmath's NaN and
+ * divide-by-zero signalling are not reproduced. */
 static inline lsx_dd_float operator/(lsx_dd_float a, lsx_dd_float b)
 {
   double q1 = a.hi / b.hi;
@@ -232,9 +232,8 @@ static inline double ceilq(lsx_dd_float a)
 /* One Newton correction around the hardware square root.  If x is the FP64
  * approximation, (a - x*x)/(2*x) restores the residual carried by the low
  * word without iterating in ordinary precision.  VkFFT requests square roots
- * only of non-negative transform constants; zero and any invalid negative
- * input therefore collapse to zero instead of emulating libquadmath errno,
- * exceptions or NaN payloads that its caller never observes. */
+ * only of non-negative transform constants, so zero and any negative input
+ * return zero, with no libquadmath errno, exceptions or NaN payloads. */
 static inline lsx_dd_float sqrtq(lsx_dd_float a)
 {
   double inverse;

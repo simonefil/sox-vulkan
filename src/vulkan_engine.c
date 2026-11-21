@@ -1,6 +1,4 @@
-/* Shared Vulkan execution core for SoX effects.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,6 +14,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+/* Shared Vulkan execution core for SoX effects. */
 
 #include "sox_i.h"
 #include "vulkan_engine.h"
@@ -56,9 +56,9 @@ static char const *lsx_vulkan_numerical_family_name(lsx_vulkan_numerical_family_
   return "unknown";
 }
 
-/* A monotonic clock, used only to time context creation for the -V3 report.
- * Returns 0 if the platform clock is unavailable, which shows up as a startup
- * time of zero rather than as a failure. */
+/* A monotonic clock, used to time context creation, fence waits and the host
+ * de-interleave for the -V3 report. Returns 0 if the platform clock is
+ * unavailable, which shows up as zero times. */
 static double monotonic_seconds(void)
 {
 #ifdef _WIN32
@@ -177,8 +177,8 @@ int lsx_vulkan_buffer_create(
       "vkBindBufferMemory") != SOX_SUCCESS)
     return SOX_EOF;
   /* Host-visible memory is mapped once here and stays mapped for the life of
-   * the buffer. Vulkan permits that, and it keeps the upload and download
-   * paths from paying for a map and unmap on every block. */
+   * the buffer, so the upload and download paths do not pay for a map and
+   * unmap on every block. */
   if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
       lsx_vulkan_result(vkMapMemory(
       context->device, buffer->memory, 0, size, 0,
@@ -212,10 +212,10 @@ VkDeviceSize lsx_vulkan_resident_element_size(lsx_vulkan_resident_format_t forma
   return 0;
 }
 
-/* The extent is computed from the last element the strides can reach, not
- * from a count times a stride: with a planar layout the two strides describe
- * a region far larger than the number of samples in it, and sizing by count
- * would let a copy or a barrier stop short of the data. Every step is
+/* The extent runs to the last element the strides can reach: with a planar
+ * layout the two strides describe a region far larger than the number of
+ * samples in it, and sizing by count would let a copy or a barrier stop
+ * short of the data. Every step is
  * guarded against overflow, since the values come from a caller's description
  * and a wrapped size would pass the bounds check that follows. */
 VkDeviceSize lsx_vulkan_resident_buffer_size(lsx_vulkan_resident_buffer_t const *resident)
@@ -267,10 +267,8 @@ int lsx_vulkan_resident_buffer_validate(lsx_vulkan_resident_buffer_t const *resi
     return SOX_EOF;
   }
   /* Format, domain and packing have to agree in both directions: a packed
-   * word is 32 DSD frames and nothing else, and any other format is one PCM
-   * frame per element. Checked as a pair so that neither a PCM buffer
-   * claiming DSD nor a DSD buffer claiming one frame per element can reach a
-   * shader, where the mismatch would silently misread every sample. */
+   * word is 32 DSD frames, and any other format is one PCM frame per element.
+   * A mismatch reaching a shader would silently misread every sample. */
   if (resident->format == lsx_vulkan_resident_format_dsd_u32 &&
       (resident->frames_per_element != 32u || resident->domain != lsx_vulkan_resident_domain_dsd)) {
     lsx_fail("invalid packed DSD resident buffer");
@@ -333,10 +331,8 @@ static int create_resident_download(lsx_vulkan_context_t *context, VkDeviceSize 
 
 double lsx_vulkan_collapse_pair(double high, double low)
 {
-  /* Every f64x2 collapse in the engine comes through here, which makes this
-   * the one place the pair can be captured before half of it is thrown away.
-   * The capture is a write to a file and never touches the return value: the
-   * audio is the same whether the diagnostics are on or off. */
+  /* The capture is a write to a file and never touches the return value, so
+   * the audio is the same whether the diagnostics are on or off. */
   if (lsx_diagnostics_on && lsx_diagnostics_tap_armed())
     lsx_diagnostics_capture_dd(high, low);
   return high + low;
@@ -417,12 +413,10 @@ int lsx_vulkan_download_resident_pcm(
       context->resident_download_fence,
       lsx_vulkan_wait_resident_output) != SOX_SUCCESS)
     return SOX_EOF;
-  /* De-interleave on the host rather than in a shader: the copy is over the
-   * whole region, strides included, so this walks it with the source strides
-   * and writes plain interleaved output. The paired formats collapse here,
-   * which is the last point at which both halves exist: f32x2 by plain
-   * addition, f64x2 through the shared collapse, which is where the pair can
-   * still be captured whole. */
+  /* The copy covers the whole region, strides included, so the host walks it
+   * with the source strides and writes plain interleaved output. The paired
+   * formats collapse here: f32x2 by plain addition, f64x2 through
+   * lsx_vulkan_collapse_pair, which can still capture the pair whole. */
   element_size = lsx_vulkan_resident_element_size(resident->format);
   deinterleave_started = monotonic_seconds();
   for (frame = 0; frame < resident->valid_elements; ++frame)
@@ -535,7 +529,7 @@ int lsx_vulkan_submit_and_wait(lsx_vulkan_context_t *context, VkCommandBuffer co
   if (submit(context, command_buffers, command_buffer_count, fence) != SOX_SUCCESS)
     return SOX_EOF;
   /* Cleared only once the batch is on the queue, so a failed submit leaves
-   * the pending work to be retried rather than dropping it. */
+   * the pending work to be retried. */
   context->pending_command_buffer_count = 0;
   ++context->host_wait_count;
   if ((unsigned)reason < lsx_vulkan_wait_reason_count)
@@ -553,13 +547,11 @@ uint32_t lsx_vulkan_resident_batch_depth(lsx_vulkan_context_t const *context)
   return context && context->resident_batch_depth ? context->resident_batch_depth : LSX_VULKAN_RESIDENT_BATCH_DEPTH;
 }
 
-/* The depth is currently the same for every device and every chain shape; the
- * duration and work estimates are computed and reported but do not yet feed
- * back into the choice. They are here because the report is what a
- * calibration run reads: the model can only be fitted once the work each
- * configuration actually represents is on record beside its timings. The
- * device name is matched so that a measurement taken on the reference machine
- * says so, rather than being mistaken for a value that generalises. */
+/* The depth is the same for every device and every chain shape; the duration
+ * and work estimates are only reported. The report is what a calibration run
+ * reads, so the work each configuration represents is on record beside its
+ * timings. The device name is matched so that a measurement taken on the
+ * reference machine is labelled as calibrated. */
 int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox_rate_t input_rate, sox_rate_t output_rate, uint32_t channels, uint64_t input_samples, lsx_vulkan_resident_topology_t topology)
 {
   double duration = input_rate > 0 && channels && input_samples && input_samples != SOX_UNKNOWN_LEN ? (double)(input_samples / channels) / input_rate : 0;
@@ -582,12 +574,12 @@ int lsx_vulkan_configure_resident_batch_depth(lsx_vulkan_context_t *context, sox
 }
 
 /* Pick the physical device and compute queue to run on, and note whether a
- * graphics queue exists for capture tools. Scored rather than taking the
- * first match: a discrete GPU beats an integrated one by a wide margin for
- * this work, and within a device a compute-only queue family is preferred
- * because it does not contend with the display. The vendor term only breaks
- * ties between otherwise equal devices, that being the vendor the numerical
- * profiles were qualified on. */
+ * graphics queue exists for capture tools. Each compute queue family is
+ * scored: a discrete GPU (1000) beats an integrated one by a wide margin for
+ * this work; among devices of the same type an NVIDIA one (100), the vendor
+ * the numerical profiles were qualified on, wins; and within that a
+ * compute-only queue family (10) is preferred because it does not contend
+ * with the display. On equal scores the first enumerated wins. */
 static int choose_device(lsx_vulkan_context_t *context)
 {
   VkPhysicalDevice *devices;
@@ -670,14 +662,11 @@ static int choose_device(lsx_vulkan_context_t *context)
   return SOX_SUCCESS;
 }
 
-/* The device as it actually is, which is half of what makes one tester's
- * report comparable with another's. Everything here is read back from
- * Vulkan rather than from an external tool, so it describes the device this
- * run used and not the one the machine happens to have.
+/* The device this run used, read back from Vulkan, which is half of what
+ * makes one tester's report comparable with another's.
  *
- * Validation is reported as not observed rather than as clean: sox installs
- * no debug messenger, so a layer's findings go to stderr and nothing here
- * has seen them. "No errors" and "nobody looked" are different facts. */
+ * Validation is reported as not observed: sox installs no debug messenger,
+ * so a layer's findings go to stderr and nothing here has seen them. */
 static void write_device_diagnostics(lsx_vulkan_context_t const *context)
 {
   VkPhysicalDeviceProperties const *properties = &context->properties;
@@ -722,15 +711,14 @@ static void write_device_diagnostics(lsx_vulkan_context_t const *context)
  * pipeline cache, plus whatever optional instrumentation is available.
  *
  * Every extension is probed before being asked for, so a device lacking any
- * of them still works with that feature switched off. Two are load-bearing
- * rather than diagnostic: portability enumeration, without which a
- * MoltenVK-style implementation is not listed at all, and the portability
- * subset device extension, which such an implementation requires be enabled.
+ * of them still works with that feature switched off. Two are required for
+ * operation: portability enumeration, without which a MoltenVK-style
+ * implementation is not listed at all, and the portability subset device
+ * extension, which such an implementation requires be enabled.
  *
  * The profile is settled here and then fixed, because the shaders, buffer
  * formats and precision an effect selects all follow from it. The reference
- * profile fails outright without hardware double precision: emulating it
- * would produce numbers that are not what the profile promises. */
+ * profile requires hardware double precision and fails without it. */
 static lsx_vulkan_context_t *create_context(void)
 {
   VkApplicationInfo app = {
@@ -837,8 +825,8 @@ static lsx_vulkan_context_t *create_context(void)
   enabled_features.shaderFloat64 = available_features.shaderFloat64;
   context->shader_float64 = available_features.shaderFloat64 ? sox_true : sox_false;
   context->profile = sox_globals.vulkan_profile;
-  /* The two high-precision profiles use native doubles where the device has
-   * them; fast stays in single precision by design. */
+  /* The precise and reference profiles use native doubles where the device
+   * has them; fast uses single precision. */
   context->use_float64 =
       context->shader_float64 &&
       (context->profile == sox_vulkan_profile_precise ||
@@ -901,9 +889,9 @@ error: free(instance_extensions);
  * the effects globals and is shared by the rest of the chain.
  *
  * A later effect finding a different profile than the context was built with
- * is refused rather than accommodated: the two effects would have chosen
- * incompatible shaders and buffer formats, and the resident buffers they
- * exchange would not describe the same numbers. */
+ * is refused: the two effects would have chosen incompatible shaders and
+ * buffer formats, and the resident buffers they exchange would not describe
+ * the same numbers. */
 lsx_vulkan_context_t *lsx_vulkan_context_get(sox_effects_globals_t *effects_globals)
 {
   if (!effects_globals) {
@@ -933,8 +921,8 @@ void lsx_vulkan_context_destroy(void *opaque_context)
    * everything below waits on this first. */
   if (context->device)
     vkDeviceWaitIdle(context->device);
-  /* The compiled VkFFT kernels outlive the individual FFT contexts on
-   * purpose, so they are released with the device that they were keyed on. */
+  /* The compiled VkFFT kernels outlive the individual FFT contexts, so they
+   * are released with the device that they were keyed on. */
   lsx_vulkan_fft_cache_clear();
   if (context->device && context->resident_download_fence)
     vkDestroyFence(context->device, context->resident_download_fence, NULL);

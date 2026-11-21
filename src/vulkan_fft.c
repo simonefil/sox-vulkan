@@ -1,6 +1,4 @@
-/* Shared VkFFT executor for Vulkan SoX effects.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +15,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Shared VkFFT executor for Vulkan SoX effects. */
+
 #include "sox_i.h"
 #include "vulkan_fft.h"
 #include "vulkan_fft_cache.h"
@@ -30,8 +30,8 @@
 struct lsx_vulkan_fft {
   lsx_vulkan_context_t *vulkan;  /* Not owned. */
   VkFFTApplication application;  /* Used unless double_double is set. */
-  /* VkFFT takes the address of this rather than the value, so it has to
-   * live as long as the plan does. */
+  /* VkFFT keeps the address of this, so it has to live as long as the plan
+   * does. */
   uint64_t buffer_size;
   sox_bool initialized;          /* application needs deleteVkFFT. */
   sox_bool compiler_acquired;    /* This plan holds a reference on glslang. */
@@ -66,8 +66,7 @@ static void cache_key_init(
     lsx_vulkan_fft_cache_key_t *key, lsx_vulkan_context_t const *vulkan,
     uint64_t buffer_size, uint32_t length, uint32_t batches,
     sox_bool double_precision,
-    sox_bool double_double_precision, sox_bool use_lut,
-    sox_bool real_to_complex, sox_bool normalize_inverse)
+    sox_bool double_double_precision, sox_bool use_lut)
 {
   memset(key, 0, sizeof(*key));
   key->buffer_size = buffer_size;
@@ -78,17 +77,13 @@ static void cache_key_init(
   key->batches = batches;
   key->double_precision = double_precision ? 1u : 0u;
   key->double_double_precision = double_double_precision ? 1u : 0u;
-  key->real_to_complex = real_to_complex ? 1u : 0u;
-  key->normalize_inverse = normalize_inverse ? 1u : 0u;
   key->use_lut = use_lut ? 1u : 0u;
 }
 
 lsx_vulkan_fft_t *lsx_vulkan_fft_create(
     lsx_vulkan_context_t *vulkan, lsx_vulkan_buffer_t *buffer,
     uint32_t length, uint32_t batches, sox_bool double_precision,
-    sox_bool double_double_precision,
-    sox_bool real_to_complex, sox_bool normalize_inverse,
-    VkFence *fence)
+    sox_bool double_double_precision, VkFence *fence)
 {
   lsx_vulkan_fft_t *context;
   VkFFTConfiguration configuration = VKFFT_ZERO_INIT;
@@ -112,12 +107,11 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
     /* The double-double instantiation always uses the LUT. */
     cache_key_init(
         &key, vulkan, context->buffer_size, length, batches, sox_false,
-        sox_true, sox_true, real_to_complex, normalize_inverse);
+        sox_true, sox_true);
     context->double_double = lsx_vulkan_fft_dd_create(
         &vulkan->device, &vulkan->physical_device, &vulkan->queue,
         &vulkan->command_pool, &buffer->buffer, context->buffer_size,
-        length, batches, real_to_complex ? 1 : 0,
-        normalize_inverse ? 1 : 0, fence, &key, &dd_result);
+        length, batches, fence, &key, &dd_result);
     if (!context->double_double) {
       lsx_fail("double-double initializeVkFFT failed with result %d", dd_result);
       goto error;
@@ -133,8 +127,8 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
    * computes them, being accurate enough either way.  The choice reaches the
    * generated kernels, so it is part of the cache key. */
   configuration.useLUT = !double_precision ? 1 : 0;
-  configuration.performR2C = real_to_complex ? 1u : 0u;
-  configuration.normalize = normalize_inverse ? 1u : 0u;
+  configuration.performR2C = 1u;
+  configuration.normalize = 1u;
   configuration.device = &vulkan->device;
   configuration.physicalDevice = &vulkan->physical_device;
   configuration.queue = &vulkan->queue;
@@ -148,20 +142,17 @@ lsx_vulkan_fft_t *lsx_vulkan_fft_create(
   configuration.isCompilerInitialized = 1;
   cache_key_init(
       &key, vulkan, context->buffer_size, length, batches,
-      double_precision, sox_false, configuration.useLUT != 0,
-      real_to_complex, normalize_inverse);
-  cached = lsx_vulkan_fft_cache_lookup(&key, NULL);
+      double_precision, sox_false, configuration.useLUT != 0);
+  cached = lsx_vulkan_fft_cache_lookup(&key);
   if (cached) {
     configuration.loadApplicationFromString = 1;
     configuration.loadApplicationString = (void *)(uintptr_t)cached;
-  } else if (lsx_vulkan_fft_cache_enabled())
+  } else
     configuration.saveApplicationToString = 1;
   result = initializeVkFFT(&context->application, configuration);
   if (result != VKFFT_SUCCESS && cached) {
-    /* A blob that VkFFT refuses is not worth failing over: drop back to
-     * compiling.  Cannot happen while the cache lives in the process, but
-     * the same path serves the on-disk cache, where a stale or truncated
-     * file has to degrade into a slow start rather than an error.  VkFFT
+    /* A blob that VkFFT refuses falls back to compiling, so a stale or
+     * truncated on-disk entry costs a slow start and nothing else.  VkFFT
      * requires a zeroed application struct, and rejects a reused one. */
     lsx_warn("cached VkFFT kernels rejected with result %d, recompiling", (int)result);
     memset(&context->application, 0, sizeof(context->application));

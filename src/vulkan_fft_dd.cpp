@@ -1,17 +1,4 @@
-/* Double-double instantiation of the VkFFT executor.
- *
- * VkFFT reaches true double-double precision only when its host scalar type
- * holds more than 53 bits, which on MSVC requires the shim in vulkan_dd/.
- * That shim changes pfLD for the whole translation unit, so it must not be
- * visible to the FP32 and FP64 profiles: every VkFFT entry point is static
- * inline, hence internal to its translation unit, and this file is a second,
- * independent instantiation used only by the reference profile. The plain C
- * executor in vulkan_fft.c is left untouched.
- *
- * Only Vulkan and VkFFT are included here; the SoX headers stay on the C
- * side, so this file needs no C++ compatibility from them.
- *
- * (c) Simone Filippini <info@simonefilippini.it> 2026
+/* (c) Simone Filippini <info@simonefilippini.it> 2026
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -28,6 +15,20 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/* Double-double instantiation of the VkFFT executor.
+ *
+ * VkFFT reaches true double-double precision only when its host scalar type
+ * holds more than 53 bits, which the shim in vulkan_dd/ provides; the build
+ * puts it on this file's include path on every platform.  That shim changes
+ * pfLD for the whole translation unit, so it must not be visible to the FP32
+ * and FP64 profiles: every VkFFT entry point is static inline, hence internal
+ * to its translation unit, and this file is a second, independent
+ * instantiation used only by the reference profile.  vulkan_fft.c holds the
+ * FP32 and FP64 one.
+ *
+ * Only Vulkan and VkFFT are included here; the SoX headers stay on the C
+ * side, so this file needs no C++ compatibility from them. */
+
 #include "vulkan_fft_dd.h"
 
 #include <glslang/Include/glslang_c_interface.h>
@@ -39,20 +40,17 @@
 
 /* VkFFT emits its double-double arithmetic as generated GLSL and never marks
  * any of it precise: the whole library contains no occurrence of the keyword.
- * Every compensation term in its butterflies is therefore algebraically zero
- * and free to be folded, which is exactly the defect that was found in our own
- * shaders -- and it is fatal here, because a folded compensation term leaves
- * the low word of every transformed value at exactly zero. Measured on an
- * RTX 3080: the forward transform returned pairs whose low half was zero on
- * every bin, so the double-double route was carrying a second word that never
- * held anything.
+ * Every compensation term in its butterflies is algebraically zero and free
+ * to be folded, and a folded compensation term leaves the low word of every
+ * transformed value at exactly zero (measured on an RTX 3080: zero on every
+ * bin of the forward transform).
  *
- * Rather than edit VkFFT, its call to vkCreateShaderModule is redirected here
- * and the SPIR-V it produced is decorated with NoContraction on every
- * arithmetic result, which is what precise would have generated in the first
- * place. The redirection is a macro, so it reaches only the code textually
- * included below -- this translation unit is the double-double instantiation
- * alone, and the FP32 and FP64 executors in vulkan_fft.c are untouched.
+ * VkFFT's call to vkCreateShaderModule is therefore redirected here, and the
+ * SPIR-V it produced is decorated with NoContraction on every arithmetic
+ * result, which is what precise would have generated. The redirection is a
+ * macro, so it reaches only the code textually included below: this
+ * translation unit is the double-double instantiation alone, and the FP32 and
+ * FP64 executors in vulkan_fft.c are unaffected.
  */
 namespace {
 
@@ -99,8 +97,8 @@ bool starts_types(uint32_t opcode)
  *
  * Anything that does not parse -- wrong magic, a zero-length instruction, a
  * length running past the end, no type section -- returns the module
- * unchanged rather than a partly rewritten one.  The result is then whatever
- * VkFFT produced, which still works; only the extra precision is lost. */
+ * unchanged.  The result is then whatever VkFFT produced, which still works;
+ * only the extra precision is lost. */
 std::vector<uint32_t> decorate_no_contraction(uint32_t const *words, size_t word_count)
 {
   std::vector<uint32_t> result(words, words + word_count);
@@ -174,9 +172,8 @@ VkResult create_decorated_shader_module(
 
 namespace {
 
-/* Allocated with calloc and released with free, so every member starts zeroed.
- * Default member initialisers would be dead code here: the constructor is
- * never run. */
+/* Allocated with calloc and released with free, so every member starts zeroed
+ * and no constructor runs. */
 struct dd_fft {
   VkFFTApplication application;
   uint64_t buffer_size;
@@ -190,13 +187,12 @@ extern "C" void *lsx_vulkan_fft_dd_create(
     VkQueue *queue, VkCommandPool *command_pool,
     VkBuffer *buffer, uint64_t buffer_size,
     uint32_t length, uint32_t batches,
-    int real_to_complex, int normalize_inverse,
     VkFence *fence, lsx_vulkan_fft_cache_key_t const *key,
     int *result_code)
 {
   VkFFTConfiguration configuration = VKFFT_ZERO_INIT;
   dd_fft *context;
-  void const *cached = key ? lsx_vulkan_fft_cache_lookup(key, NULL) : NULL;
+  void const *cached = lsx_vulkan_fft_cache_lookup(key);
   VkFFTResult result;
 
   if (result_code)
@@ -211,8 +207,8 @@ extern "C" void *lsx_vulkan_fft_dd_create(
   configuration.doublePrecision = 0u;
   configuration.quadDoubleDoublePrecision = 1u;
   configuration.useLUT = 1;
-  configuration.performR2C = real_to_complex ? 1u : 0u;
-  configuration.normalize = normalize_inverse ? 1u : 0u;
+  configuration.performR2C = 1u;
+  configuration.normalize = 1u;
   configuration.device = device;
   configuration.physicalDevice = physical_device;
   configuration.queue = queue;
@@ -221,15 +217,14 @@ extern "C" void *lsx_vulkan_fft_dd_create(
   configuration.buffer = buffer;
   configuration.bufferSize = &context->buffer_size;
   configuration.isCompilerInitialized = 1;
-  /* The cached blob is VkFFT's own SPIR-V, and on load it goes back through
-   * the same vkCreateShaderModule that is redirected above, so the
-   * NoContraction decoration is reapplied to it exactly as if it had just
-   * been compiled.  What is cached is codegen plus glslang, not the
-   * decoration, and the reference profile's arithmetic is unaffected. */
+  /* The cached blob is VkFFT's own undecorated SPIR-V, and on load it goes
+   * back through the same vkCreateShaderModule that is redirected above, so
+   * the NoContraction decoration is reapplied to it exactly as if it had just
+   * been compiled. */
   if (cached) {
     configuration.loadApplicationFromString = 1;
     configuration.loadApplicationString = const_cast<void *>(cached);
-  } else if (key && lsx_vulkan_fft_cache_enabled())
+  } else
     configuration.saveApplicationToString = 1;
   result = initializeVkFFT(&context->application, configuration);
   if (result != VKFFT_SUCCESS && cached) {

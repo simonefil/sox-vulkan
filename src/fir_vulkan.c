@@ -418,8 +418,7 @@ int lsx_fir_vulkan_fuse_reference_coefficients(
     goto cleanup;
   fft = lsx_vulkan_fft_create(
       vulkan, &scratch.working, fft_size, 1u,
-      sox_true, sox_true, sox_true, sox_true,
-      &scratch.fence);
+      sox_true, sox_true, &scratch.fence);
   if (!fft)
     goto cleanup;
   memset(bindings, 0, sizeof(bindings));
@@ -747,7 +746,6 @@ static int initialize_fft(lsx_fir_vulkan_t *context)
       context->double_precision,
       context->vulkan->profile ==
       sox_vulkan_profile_reference,
-      sox_true, sox_true,
       &context->fence);
   return context->fft ? SOX_SUCCESS : SOX_EOF;
 }

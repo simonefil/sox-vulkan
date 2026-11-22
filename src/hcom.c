@@ -166,13 +166,18 @@ static int startread(sox_format_t * ft)
                        p->dictionary[i].dict_rightson);
                 if (!dictvalid(i, dictsize, p->dictionary[i].dict_leftson,
                                p->dictionary[i].dict_rightson)) {
+                        free(p->dictionary);
+                        p->dictionary = NULL;
                         lsx_fail_errno(ft, SOX_EHDR, "Invalid dictionary");
                         return SOX_EOF;
                 }
         }
         rc = lsx_skipbytes(ft, (size_t) 1); /* skip pad byte */
-        if (rc)
+        if (rc) {
+            free(p->dictionary);
+            p->dictionary = NULL;
             return rc;
+        }
 
         /* Initialized the decompression engine */
         p->checksum = checksum;
@@ -254,6 +259,8 @@ static int stopread(sox_format_t * ft)
 {
         register priv_t *p = (priv_t *) ft->priv;
 
+        free(p->dictionary);
+        p->dictionary = NULL;
         if (p->huffcount != 0)
         {
                 lsx_fail_errno(ft,SOX_EFMT,"not all HCOM data read");
@@ -264,8 +271,6 @@ static int stopread(sox_format_t * ft)
                 lsx_fail_errno(ft,SOX_EFMT,"checksum error in HCOM data");
                 return (SOX_EOF);
         }
-        free(p->dictionary);
-        p->dictionary = NULL;
         return (SOX_SUCCESS);
 }
 

@@ -107,8 +107,9 @@ static void decoder_metadata(FLAC__StreamDecoder const * decoder UNUSED,
   }
   else if (metadata->type == FLAC__METADATA_TYPE_VORBIS_COMMENT)
     for (i = 0; i < metadata->data.vorbis_comment.num_comments; ++i)
-      sox_append_comment(&codec->ft->oob.comments,
-          (char const *)metadata->data.vorbis_comment.comments[i].entry);
+      if (metadata->data.vorbis_comment.comments[i].entry)
+        sox_append_comment(&codec->ft->oob.comments,
+            (char const *)metadata->data.vorbis_comment.comments[i].entry);
 }
 
 static void decoder_error(FLAC__StreamDecoder const * decoder UNUSED,

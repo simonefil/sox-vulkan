@@ -33,7 +33,7 @@ typedef struct {
   double    last, sigma_x, sigma_x2, avg_sigma_x2, min_sigma_x2, max_sigma_x2;
   double    min, max, mult, min_run, min_runs, max_run, max_runs;
   off_t     num_samples, tc_samples, min_count, max_count;
-  uint32_t  mask;
+  uint32_t  maskLo, maskHi;
 } priv_t;
 
 static int getopts(sox_effect_t * effp, int argc, char **argv)
@@ -68,7 +68,7 @@ static int start(sox_effect_t * effp)
   p->min = p->min_sigma_x2 = 2;
   p->max = -p->min;
   p->num_samples = 0;
-  p->mask = 0;
+  p->maskLo = p->maskHi = 0;
   return SOX_SUCCESS;
 }
 
@@ -111,7 +111,11 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf,
         p->min_sigma_x2 = p->avg_sigma_x2;
     }
     p->last = d;
-    p->mask |= (uint32_t)STATS_SAMPLE_BITS(*ibuf);
+    {
+      int32_t bits = STATS_SAMPLE_BITS(*ibuf);
+      p->maskLo |= (uint32_t)bits;
+      p->maskHi |= (uint32_t)(bits < 0? ~bits : bits);
+    }
   }
   return SOX_SUCCESS;
 }
@@ -129,17 +133,17 @@ static int drain(sox_effect_t * effp, sox_sample_t * obuf, size_t * olen)
   return SOX_SUCCESS;
 }
 
-static unsigned bit_depth(uint32_t mask, double min, double max, unsigned * x)
+/* Positive values count one zero bit as the sign bit; for negative values
+ * the all-one MSBs are not counted, except for the sign bit. */
+static unsigned bit_depth(uint32_t maskLo, uint32_t maskHi, unsigned * b2_ptr)
 {
-  unsigned result = 32;
+  unsigned b1, b2;
 
-  for (; result && !(mask & 1); --result, mask >>= 1);
-  if (x)
-    *x = result;
-  min = -fmax(fabs(min), fabs(max));
-  mask = (uint32_t)STATS_SAMPLE_BITS(min) << 1;
-  for (; result && (mask & 0x80000000u); --result, mask <<= 1);
-  return result;
+  for (b2 = 32; b2 && !(maskLo & 1); --b2, maskLo >>= 1);
+  for (b1 = b2; (int32_t)(maskHi <<= 1) > 0; --b1);
+  if (b2_ptr)
+    *b2_ptr = b2;
+  return b1;
 }
 
 static void output(priv_t const * p, double x)
@@ -170,7 +174,7 @@ static int stop(sox_effect_t * effp)
   if (!effp->flow) {
     double min_runs = 0, max_count = 0, min = 2, max = -2, max_sigma_x = 0, sigma_x = 0, sigma_x2 = 0, min_sigma_x2 = 2, max_sigma_x2 = 0, avg_peak = 0;
     off_t num_samples = 0, min_count = 0, max_runs = 0;
-    uint32_t mask = 0;
+    uint32_t maskLo = 0, maskHi = 0;
     unsigned b1, b2, i, n = effp->flows > 1 ? effp->flows : 0;
 
     for (i = 0; i < effp->flows; ++i) {
@@ -184,7 +188,8 @@ static int stop(sox_effect_t * effp)
       sigma_x += q->sigma_x;
       sigma_x2 += q->sigma_x2;
       num_samples += q->num_samples;
-      mask |= q->mask;
+      maskLo |= q->maskLo;
+      maskHi |= q->maskHi;
       if (fabs(q->sigma_x) > fabs(max_sigma_x))
         max_sigma_x = q->sigma_x;
       min_count += q->min_count;
@@ -279,11 +284,11 @@ static int stop(sox_effect_t * effp)
       fprintf(stderr, " %9s", lsx_sigfigs3((double)(q->min_count + q->max_count)));
     }
 
-    b1 = bit_depth(mask, min, max, &b2);
+    b1 = bit_depth(maskLo, maskHi, &b2);
     fprintf(stderr, "\nBit-depth      %2u/%-2u", b1, b2);
     for (i = 0; i < n; ++i) {
       priv_t * q = (priv_t *)(effp - effp->flow + i)->priv;
-      b1 = bit_depth(q->mask, q->min, q->max, &b2);
+      b1 = bit_depth(q->maskLo, q->maskHi, &b2);
       fprintf(stderr, "     %2u/%-2u", b1, b2);
     }
 

@@ -917,9 +917,9 @@ static int record_resident_prepare(lsx_rate_vulkan_t *context, lsx_vulkan_reside
  * lazily, for a producer with a different block size.
  *
  * The capacity is one block plus one call's worth of input.  An earlier
- * stage of this effect sizes its blocks by the room left and appends them
- * whole; another effect's block can be larger, and
- * lsx_rate_vulkan_take_resident_stream() takes it in parts. */
+ * polyphase stage of this effect sizes its blocks by the room left and
+ * appends them whole; another effect's block, or the fused DSD stage's, can
+ * be larger, and lsx_rate_vulkan_take_resident_stream() takes it in parts. */
 static int create_resident_stream(lsx_rate_vulkan_t *context)
 {
   resident_kernel_blob_t const *kernel = &stream_append_kernels[resident_kernel(context)];
@@ -984,7 +984,8 @@ static int create_resident_stream(lsx_rate_vulkan_t *context)
  *
  * The copy is used when the input is laid out as the stream expects.
  * Otherwise the shader gathers by the input's strides into the interleaved
- * stream.  The input comes from another effect and is checked first. */
+ * stream.  The input comes from another effect or from the DSD stage of the
+ * same one, and is checked first. */
 static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, size_t first, size_t frames)
 {
   VkCommandBuffer command;
@@ -1059,7 +1060,12 @@ static int append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_residen
     /* Fast path: the producer already has the stream's element type and
      * interleaving, so a transfer preserves every bit and needs no
      * descriptor. */
-    vkCmdPipelineBarrier(command, input->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &source_barrier, 0, NULL);
+    /* The stream's range was last written by an earlier append or retain
+     * and read by the stage's prepare, all possibly in the same batch. */
+    stream_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barriers[0] = source_barrier;
+    barriers[1] = stream_barrier;
+    vkCmdPipelineBarrier(command, input->producer_stage | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 2u, barriers, 0, NULL);
     vkCmdCopyBuffer(command, input->buffer->buffer, context->resident_stream[context->resident_stream_index].buffer, 1, &copy);
   } else {
     /* Gather path: bind the producer whole because its slice begins at an
@@ -1128,12 +1134,13 @@ int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulka
   return input ? append_resident_stream(context, input, 0, input->valid_elements) : SOX_EOF;
 }
 
-/* Take as much of another effect's block as the stream has room for.
+/* Take as much of a producer's block as the stream has room for.
  *
- * The producer's block can be larger than the stream, so it is taken in
- * parts, as a classic flow takes what fits of its input: each call appends
- * the next part, and *input_consumed turns true with the last.  Until then
- * the caller presents the same block again, which is checked. */
+ * The block, another effect's or the fused DSD stage's, can be larger than
+ * the stream, so it is taken in parts, as a classic flow takes what fits of
+ * its input: each call appends the next part, and *input_consumed turns true
+ * with the last.  Until then the caller presents the same block again, which
+ * is checked. */
 int lsx_rate_vulkan_take_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input, size_t *taken_frames, sox_bool *input_consumed)
 {
   size_t frames;
@@ -1187,7 +1194,7 @@ int lsx_rate_vulkan_process_resident_stream(lsx_rate_vulkan_t *context, sox_rate
   lsx_vulkan_resident_buffer_t input;
   VkCommandBuffer command;
   VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
-  VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT};
+  VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT};
   VkBufferCopy retain;
   size_t remaining;
   VkDeviceSize frame_size;

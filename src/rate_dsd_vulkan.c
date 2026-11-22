@@ -522,7 +522,7 @@ static int record_block(
   VkMemoryBarrier host_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
   VkCommandBuffer command_buffer = context->command_buffers[bank];
   VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
-  VkMemoryBarrier input_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
+  VkMemoryBarrier input_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
   VkMemoryBarrier output_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
 
   context->parameters.output_frames = count;
@@ -530,7 +530,10 @@ static int record_block(
       vk_result(vkBeginCommandBuffer(command_buffer, &begin), "vkBeginCommandBuffer rate dsd") != SOX_SUCCESS)
     return SOX_EOF;
   lsx_vulkan_label_begin(context->vulkan, command_buffer, "Rate fused DSD");
-  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &input_barrier, 0, NULL, 0, NULL);
+  /* Besides the host's words, this orders the dispatch after whatever read
+   * the previous block: every bank writes the same output buffer, and a
+   * resident consumer reads it by a copy or a shader queued in between. */
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &input_barrier, 0, NULL, 0, NULL);
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline_layout, 0, 1, &context->descriptor_sets[bank], 0, NULL);
   vkCmdPushConstants(command_buffer, context->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(context->parameters), &context->parameters);

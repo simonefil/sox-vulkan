@@ -650,6 +650,7 @@ int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t
   VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
   VkMemoryBarrier input_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
   VkMemoryBarrier output_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
+  VkMemoryBarrier window_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT};
   VkBufferMemoryBarrier source_barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, NULL, 0, VK_ACCESS_TRANSFER_READ_BIT, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
   VkDescriptorBufferInfo buffer_info[RATE_POLYPHASE_BINDINGS];
   VkWriteDescriptorSet writes[RATE_POLYPHASE_BINDINGS];
@@ -753,7 +754,11 @@ int lsx_rate_polyphase_vulkan_process_resident_input(lsx_rate_polyphase_vulkan_t
       vkCmdFillBuffer(command_buffer, current->buffer, 0, (VkDeviceSize)context->resident_occupancy_frames * frame_size, 0);
     context->resident_initialized = sox_true;
   }
-  vkCmdPipelineBarrier(command_buffer, input->producer_stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &source_barrier, 0, NULL);
+  /* Besides the producer's block, this orders the append and the retain
+   * after the copies and the dispatch of blocks queued before it: the two
+   * window buffers alternate, so each one was last written by a copy and
+   * read by a dispatch that no submission boundary need separate. */
+  vkCmdPipelineBarrier(command_buffer, input->producer_stage | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &window_barrier, 1, &source_barrier, 0, NULL);
   vkCmdCopyBuffer(command_buffer, input->buffer->buffer, current->buffer, 1, &append);
   vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &input_barrier, 0, NULL, 0, NULL);
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context->pipeline);

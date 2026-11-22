@@ -110,7 +110,8 @@ size_t lsx_rate_vulkan_resident_stream_room(lsx_rate_vulkan_t const *context);
  * device, so it must remain valid until the next submission. */
 int lsx_rate_vulkan_append_resident_stream(lsx_rate_vulkan_t *context, lsx_vulkan_resident_buffer_t const *input);
 
-/* Take another effect's block, as much as the stream has room for.
+/* Take a block that need not fit, another effect's or the fused DSD stage's,
+ * as much as the stream has room for.
  * *taken_frames is what this call appended; *input_consumed is true once the
  * last part is in, and until then the caller presents the same block again.
  * holds_part is true while a block is only partly taken. */

@@ -95,7 +95,12 @@ int lsx_rate_dsd_vulkan_process(
     size_t available_words, sox_bool flush, double const **output,
     size_t *output_frames, size_t *consumed_words);
 
-/* The same, publishing the result as a resident buffer instead of waiting. */
+/* The same, publishing the result as a resident buffer instead of waiting.
+ *
+ * The buffer is the stage's one output, so the next call overwrites it: the
+ * caller has its consumer's read queued first.  Each call writes its words
+ * into the next of lsx_vulkan_resident_batch_depth() input banks, so no more
+ * calls than that may be queued between two submissions. */
 int lsx_rate_dsd_vulkan_process_resident(
     lsx_rate_dsd_vulkan_t *context, uint32_t const *const *words,
     size_t available_words, sox_bool flush, size_t *output_frames,

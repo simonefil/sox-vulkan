@@ -96,6 +96,10 @@ static int start(sox_effect_t * effp)
   priv_t * p = (priv_t *) effp->priv;
 
   p->delay_buf_len = p->delay_ms * .001 * effp->in_signal.rate + .5;
+  if (p->delay_buf_len < 1) {
+    lsx_fail("The delay must be at least one sample");
+    return SOX_EOF;
+  }
   p->delay_buf = lsx_calloc(p->delay_buf_len, sizeof(*p->delay_buf));
 
   p->mod_buf_len = effp->in_signal.rate / p->mod_speed + .5;

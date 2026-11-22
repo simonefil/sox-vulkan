@@ -353,6 +353,11 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf,
             v->block_remaining = 0;
             return done;
           }
+          if (uc == 0) {
+            lsx_fail_errno(ft, SOX_EINVAL, "invalid rate value");
+            v->block_remaining = 0;
+            return done;
+          }
           *buf = SOX_UNSIGNED_8BIT_TO_SAMPLE(uc,);
           lsx_adpcm_init(&v->adpcm, 6 - v->size, SOX_SAMPLE_TO_SIGNED_16BIT(*buf, ft->clips));
           ++buf;

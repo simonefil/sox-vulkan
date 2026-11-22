@@ -252,7 +252,7 @@ verify_sha256() {
 
 # Common configure flags for static libraries
 get_common_flags() {
-    echo "--prefix=${STATIC_LIBS_DIR} --disable-shared --enable-static"
+    echo "--prefix=${STATIC_LIBS_DIR} --disable-shared --enable-static --with-pic"
 }
 
 verify_static_dependencies() {
@@ -1416,6 +1416,7 @@ main() {
     cmake "${SCRIPT_DIR}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DSOX_REQUIRE_STATIC_DEPENDENCIES=ON \
         -DCMAKE_PREFIX_PATH="${STATIC_LIBS_DIR}" \
         -DSTATIC_LIBS_DIR="${STATIC_LIBS_DIR}" \

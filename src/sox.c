@@ -168,6 +168,7 @@ typedef struct {
   sox_bool no_glob;
 
   sox_format_t * ft;  /* libSoX file descriptor */
+  sox_bool read_finished;
   rg_mode replay_gain_mode;
 } file_t;
 
@@ -266,9 +267,25 @@ static void write_diagnostics(void)
   lsx_diagnostics_close(success ? SOX_SUCCESS : SOX_EOF);
 }
 
-static void cleanup(void)
+static int cleanup(void)
 {
   size_t i;
+  int result = 0;
+
+  /* Close the inputs first: a producer that failed makes the output as
+   * incomplete as any other failure, and it is removed too. */
+  for (i = 0; i < input_count; i++) {
+    if (files[i]->ft) {
+      sox_bool pipe_failed = sox_false;
+      lsx_close(files[i]->ft, files[i]->read_finished, &pipe_failed);
+      files[i]->ft = NULL;
+      if (pipe_failed) {
+        lsx_fail("error closing input `%s'", files[i]->filename);
+        success = 0;
+        result = 2;
+      }
+    }
+  }
 
   /* Finalising the actual output belongs to the end-to-end pipeline time.
    * Preserve its diagnostics first, close it, and only then freeze the timer
@@ -300,11 +317,7 @@ static void cleanup(void)
     if (env_opts && *env_opts)
       lsx_report("used "SOX_OPTS"=%s", env_opts);
   }
-  /* Close the input and output files before exiting. */
   for (i = 0; i < input_count; i++) {
-    if (files[i]->ft) {
-      sox_close(files[i]->ft);
-    }
     free(files[i]->codec_options);
     free(files[i]->channel_layout);
     free(files[i]->filename);
@@ -337,6 +350,7 @@ static void cleanup(void)
   sox_quit();
 
   cleanup_called = 1;
+  return result;
 }
 
 /* Cleanup atexit() function, hence always called. */
@@ -636,10 +650,13 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
 
   if (is_serial(combine_method)) {
     while (sox_true) {
-      if (!user_skip)
+      if (!user_skip) {
         olen = combiner_signal.packing ?
             sox_read_wide_packed(files[current_input]->ft, obuf, *osamp) :
             sox_read_wide(files[current_input]->ft, obuf, *osamp);
+        if (!olen)
+          files[current_input]->read_finished = sox_true;
+      }
       if (olen == 0) {   /* If EOF, go to the next input file. */
         if (++current_input < input_count) {
           if (combine_method == sox_sequence && !can_segue(current_input))
@@ -658,6 +675,8 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t * obuf, size_t * osam
     sox_sample_t * p = obuf;
     for (i = 0; i < input_count; ++i) {
       z->ilen[i] = sox_read_wide(files[i]->ft, z->ibuf[i], *osamp);
+      if (!z->ilen[i])
+        files[i]->read_finished = sox_true;
       balance_input(z->ibuf[i], z->ilen[i], files[i]);
       olen = max(olen, z->ilen[i]);
     }
@@ -3149,7 +3168,7 @@ int main(int argc, char **argv)
 {
   size_t i;
   char mybase[6];
-  int err;
+  int err, result;
   sox_bool output_failed = sox_false; /* an output closed before the last failed */
 
   gettimeofday(&load_timeofday, NULL);
@@ -3363,7 +3382,7 @@ int main(int argc, char **argv)
    * partial output file. */
   success = !output_failed && (err == SOX_SUCCESS || err == SOX_EOF);
 
-  cleanup();
+  result = cleanup();
 
-  return err != SOX_SUCCESS || !success;
+  return result? result : err != SOX_SUCCESS || !success;
 }

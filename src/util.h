@@ -255,4 +255,5 @@ extern int lsx_sscanf(const char *str, const char *format, ...);
 #define sscanf lsx_sscanf
 
 extern FILE *lsx_popen(char **argv, char type, int filename_index);
-extern int lsx_pclose(FILE *stream);
+extern int lsx_pclose(FILE *stream, sox_bool cancel);
+int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed);

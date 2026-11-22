@@ -695,13 +695,15 @@ static sox_bool is_url(char const * text) /* detects only wget-supported URLs */
       strncasecmp(text, "ftp:"  , (size_t)4));
 }
 
-static int xfclose(FILE * file, lsx_io_type io_type)
+static int xfclose(FILE * file, lsx_io_type io_type, sox_bool cancel)
 {
-  return
 #ifdef HAVE_POPEN
-    io_type != lsx_io_file? lsx_pclose(file) :
+  return io_type != lsx_io_file? lsx_pclose(file, cancel) : fclose(file);
+#else
+  (void) io_type;
+  (void) cancel;
+  return fclose(file);
 #endif
-    fclose(file);
 }
 
 static void incr_pipe_size(FILE *f)
@@ -980,7 +982,7 @@ static sox_format_t * open_read(
     }
     ft->handler = *handler;
     if (ft->handler.flags & SOX_FILE_NOSTDIO) {
-      xfclose(ft->fp, ft->io_type);
+      xfclose(ft->fp, ft->io_type, sox_true);
       ft->fp = NULL;
     }
   }
@@ -1039,7 +1041,7 @@ static sox_format_t * open_read(
 
 error:
   if (ft->fp && ft->fp != stdin)
-    xfclose(ft->fp, ft->io_type);
+    xfclose(ft->fp, ft->io_type, sox_true);
   free(ft->priv);
   free(ft->filename);
   free(ft->filetype);
@@ -1462,7 +1464,7 @@ static sox_format_t * open_write(
 
 error:
   if (ft->fp && ft->fp != stdout)
-    xfclose(ft->fp, ft->io_type);
+    xfclose(ft->fp, ft->io_type, sox_false);
   if (ft->priv && (ft->handler.flags & SOX_FILE_CONTAINER))
     lsx_container_cancel_write(ft);
   free(ft->priv);
@@ -1624,10 +1626,15 @@ size_t sox_read_packed_dsd_words(sox_format_t *ft, sox_sample_t *buf, size_t len
   return actual;
 }
 
-int sox_close(sox_format_t * ft)
+int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed)
 {
   int result = SOX_SUCCESS;
+  sox_bool pipe_input = ft->mode == 'r' &&
+      (ft->io_type == lsx_io_pipe || ft->io_type == lsx_io_url);
+  sox_bool read_error = pipe_input && ft->fp &&
+      (ft->sox_errno != SOX_SUCCESS || ferror(ft->fp));
 
+  if (pipe_failed) *pipe_failed = sox_false;
   if (ft->mode == 'r')
     result = ft->handler.stopread? (*ft->handler.stopread)(ft) : SOX_SUCCESS;
   else {
@@ -1657,9 +1664,23 @@ int sox_close(sox_format_t * ft)
     }
     sox_globals.stdout_in_use_by = NULL;
   } else if (ft->fp) {
-    if (xfclose(ft->fp, ft->io_type) && ft->mode == 'w' && ft->io_type == lsx_io_file && result == SOX_SUCCESS) {
+    /* A decoder may reach logical EOF without reaching stream EOF. An
+     * earlier close (e.g. trim or soxi) abandons the producer's input. */
+    sox_bool cancel;
+    int close_result;
+    /* Format stop handlers may report errors unrelated to the pipe child. */
+    if (pipe_input && ferror(ft->fp)) read_error = sox_true;
+    cancel = pipe_input && !read_error && !read_finished &&
+        !(ft->signal.length && ft->olength >= ft->signal.length) &&
+        !feof(ft->fp);
+    close_result = xfclose(ft->fp, ft->io_type, cancel);
+    if (close_result && ft->mode == 'w' && ft->io_type == lsx_io_file && result == SOX_SUCCESS) {
       lsx_fail("error writing `%s': %s", ft->filename, strerror(errno));
       result = SOX_EOF;
+    }
+    if (pipe_input && (read_error || close_result != SOX_SUCCESS)) {
+      result = SOX_EOF;
+      if (pipe_failed) *pipe_failed = sox_true;
     }
   }
 
@@ -1671,6 +1692,11 @@ int sox_close(sox_format_t * ft)
 
   free(ft);
   return result;
+}
+
+int sox_close(sox_format_t * ft)
+{
+  return lsx_close(ft, sox_false, NULL);
 }
 
 int sox_seek(sox_format_t * ft, sox_uint64_t offset, int whence)
@@ -1802,7 +1828,7 @@ int sox_parse_playlist(sox_playlist_callback_t callback, void * p, char const * 
       lsx_fail("error reading playlist file `%s': %s", listname, strerror(errno));
       result = SOX_EOF;
     }
-    if (xfclose(file, io_type) && io_type == lsx_io_url) {
+    if (xfclose(file, io_type, !feof(file)) && io_type == lsx_io_url) {
       lsx_fail("error reading playlist file URL `%s'", listname);
       result = SOX_EOF;
     }

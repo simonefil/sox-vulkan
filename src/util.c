@@ -526,13 +526,14 @@ UNUSED
 #endif
 }
 
-/* Close a pipe created by lsx_popen(), or a libc popen() stream. */
-int lsx_pclose(FILE * stream)
+/* Close a pipe created by lsx_popen(), or a libc popen() stream.
+ * A caller that intentionally stopped reading can discard child status. */
+int lsx_pclose(FILE * stream, sox_bool cancel)
 {
 #if HAVE_PIPE && HAVE_FORK
   child_pipe ** link, * child = NULL;
   pid_t pid;
-  int status = 0, close_error = 0, waited;
+  int status = 0, close_error = 0, waited = 0;
 
   for (link = &child_pipes; *link; link = &(*link)->next) {
     if ((*link)->stream == stream) {
@@ -545,21 +546,35 @@ int lsx_pclose(FILE * stream)
   if (child) {
     pid = child->pid;
     free(child);
+    if (cancel) {
+      /* A stream abandoned by its consumer must not delay shutdown. */
+      do {
+        waited = waitpid(pid, &status, WNOHANG);
+      } while (waited == -1 && errno == EINTR);
+      if (!waited)
+        (void)kill(pid, SIGKILL);
+    }
     if (fclose(stream) != 0)
       close_error = errno;
-    do {
-      waited = waitpid(pid, &status, 0);
-    } while (waited == -1 && errno == EINTR);
+    if (!waited) {
+      do {
+        waited = waitpid(pid, &status, 0);
+      } while (waited == -1 && errno == EINTR);
+    }
     if (waited == -1 || close_error) {
       if (close_error) errno = close_error;
       return -1;
     }
-    return status;
+    return cancel ? 0 : status;
   }
 #endif
 #ifdef HAVE_POPEN
-  return pclose(stream);
+  {
+    int status = pclose(stream);
+    return cancel && status != -1 ? 0 : status;
+  }
 #else
+  (void) cancel;
   return fclose(stream);
 #endif
 }

@@ -55,16 +55,8 @@
 #  include <unistd.h>
 #endif
 
-#define PIPE_AUTO_DETECT_SIZE 256 /* Only as much as we can rewind a pipe */
+#define PIPE_AUTO_DETECT_SIZE 256 /* Kept in memory to be replayed */
 #define AUTO_DETECT_SIZE 4096     /* For seekable file, so no restriction */
-
-/* rewind_pipe below reaches into the C library's FILE to put back the bytes
- * auto-detection consumed.  The UCRT of Visual Studio 2015 and later keeps
- * nothing that can be reached that way, so on it detection is replayed from a
- * buffer instead; see auto_detect_format and lsx_readbuf. */
-#if defined(_MSC_VER) && _MSC_VER >= 1900
-  #define NO_REWIND_PIPE
-#endif
 
 /* Whether a four-byte ftyp brand names an MP4 or QuickTime file that can
  * carry audio.  M4A and M4B are only Apple's labels for one; files written
@@ -243,17 +235,15 @@ static char const * auto_detect_format(sox_format_t * ft, char const * ext)
 {
   char data[AUTO_DETECT_SIZE];
   size_t len = lsx_readbuf(ft, data, ft->seekable? sizeof(data) : PIPE_AUTO_DETECT_SIZE);
-#ifdef NO_REWIND_PIPE
-  /* Where the pipe cannot be rewound, keep what was consumed so lsx_readbuf
-   * can hand it back to the handler before reading any further.  Ownership
-   * passes to ft, which frees it when the file is closed. */
+  /* A pipe cannot be rewound, so keep what was consumed for lsx_readbuf to
+   * hand back to the handler before reading any further.  Ownership passes
+   * to ft, which frees it when the file is closed. */
   if (!ft->seekable && len) {
     assert(!ft->read_replay_buffer);
     ft->read_replay_buffer = lsx_memdup(data, len);
     ft->read_replay_size = len;
     ft->read_replay_pos = 0;
   }
-#endif
   #define CHECK(type, p2, l2, d2, p1, l1, d1) if (len >= p1 + l1 && \
       !memcmp(data + p1, d1, (size_t)l1) && !memcmp(data + p2, d2, (size_t)l2)) return #type;
   CHECK(voc   , 0, 0, ""     , 0, 20, "Creative Voice File\x1a")
@@ -800,32 +790,6 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
   return fopen(identifier, mode);
 }
 
-/* Hack to rewind pipes (a small amount).
- * Works by resetting the FILE buffer pointer */
-static void UNUSED rewind_pipe(FILE * fp)
-{
-/* _FSTDIO is for Torek stdio (i.e. most BSD-derived libc's)
- * In theory, _FSTDIO alone also covers _NEWLIB_VERSION and __APPLE__ */
-#if defined _FSTDIO || defined _NEWLIB_VERSION || defined __APPLE__
-  fp->_p -= PIPE_AUTO_DETECT_SIZE;
-  fp->_r += PIPE_AUTO_DETECT_SIZE;
-#elif defined __GLIBC__
-  fp->_IO_read_ptr = fp->_IO_read_base;
-#elif defined _MSC_VER && _MSC_VER >= 1900
-  (void)fp;
-#elif defined _MSC_VER || defined _WIN32 || defined _WIN64 || \
-      defined _ISO_STDIO_ISO_H || defined __sgi
-  fp->_ptr = fp->_base;
-#else
-  /* To fix this #error, either simply remove the #error line and live without
-   * file-type detection with pipes, or add support for your compiler in the
-   * lines above.  Test with cat monkey.wav | ./sox --info - */
-  #error FIX NEEDED HERE
-  #define NO_REWIND_PIPE
-  (void)fp;
-#endif
-}
-
 /* What a handler can write.  A container leaves that to the codec named
  * after the colon in its type, or to its default codec, and without either
  * can write nothing. */
@@ -946,16 +910,11 @@ static sox_format_t * open_read(
       filetype = auto_detect_format(ft, lsx_find_file_extension(path));
       lsx_rewind(ft);
     }
-    /* A pipe is detected on too, the bytes read being put back either by
-     * rewinding the stdio buffer or, where that is impossible, by the replay
-     * buffer auto_detect_format filled.  Either way the position returns to
-     * the start of the stream, so tell_off does too. */
-    else if (!(ft->handler.flags & SOX_FILE_NOSTDIO) &&
-        input_bufsiz >= PIPE_AUTO_DETECT_SIZE) {
+    /* A pipe is detected on too, the bytes read being put back by the
+     * replay buffer auto_detect_format filled.  The position returns to the
+     * start of the stream, so tell_off does too. */
+    else if (!(ft->handler.flags & SOX_FILE_NOSTDIO)) {
       filetype = auto_detect_format(ft, lsx_find_file_extension(path));
-#ifndef NO_REWIND_PIPE
-      rewind_pipe(ft->fp);
-#endif
       ft->tell_off = 0;
     }
 

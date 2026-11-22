@@ -977,16 +977,16 @@ static int startread(sox_format_t *ft)
         break;
 #endif
 
-    }
-
-    if (!wav->numSamples) {
+    default:
         if (ft->encoding.bits_per_sample == 0) {
             lsx_fail_errno(ft, SOX_EHDR, "WAV file bits per sample is zero");
             return SOX_EOF;
         }
+    }
+
+    if (!wav->numSamples)
         wav->numSamples = div_bits(qwDataLength, ft->encoding.bits_per_sample)
             / ft->signal.channels;
-    }
 
     if (wav->ignoreSize)
         ft->signal.length = SOX_UNSPEC;

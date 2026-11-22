@@ -770,7 +770,7 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
     FILE * f = NULL;
 #ifdef HAVE_POPEN
     char * command_argv[] = {
-      "wget", "--no-check-certificate", "-q", "-O-", NULL, NULL
+      "wget", "-q", "-O-", NULL, NULL
     };
 #ifdef _WIN32
     /* The popen fallback quotes the URL for cmd.exe.  A raw double quote,
@@ -782,8 +782,8 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
       return NULL;
     }
 #endif
-    command_argv[4] = (char *)identifier;
-    f = lsx_popen(command_argv, 'r', 4);
+    command_argv[3] = (char *)identifier;
+    f = lsx_popen(command_argv, 'r', 3);
     if (f == NULL) {
       lsx_fail("cannot execute URL downloader `%s'", command_argv[0]);
       return f;

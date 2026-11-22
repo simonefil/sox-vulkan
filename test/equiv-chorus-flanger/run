@@ -37,7 +37,7 @@ wave=s
 # If there is no linear chorus interpolation, we can't test this.
 $sox sweep.wav chorus.wav \
      chorus -$interp $gain_in $gain_out $delay $decay $speed $depth -$wave \
-     trim 0 $length 2> /dev/null || exit 254
+     trim 0 $length 2> /dev/null || { rm -f $generated_files; exit 254; }
 
 # flanger delay depth regen width speed wave phase interp
 if [ "$gain_in" = "0" ]

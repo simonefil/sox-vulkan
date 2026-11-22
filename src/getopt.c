@@ -284,21 +284,19 @@ lsx_getopt(
             { /* Option requires a value */
                 state->curpos = NULL;
                 state->ind++;
-                state->arg = state->argv[state->ind];
-                state->ind++;
-                if (state->ind <= state->argc)
-                { /* A value was present, so we're good. */
+                if (state->ind < state->argc) {
+                    /* A value was present, so we're good. */
+                    state->arg = state->argv[state->ind];
+                    state->ind++;
                     return state->opt;
                 }
-                else
-                {  /* Missing required value. */
-                    if (oerr)
-                    {
-                        lsx_warn("option `%c' requires an argument",
-                            state->opt);
-                    }
-                    return state->shortopts[0] == ':' ? ':' : '?';
+                /* Missing required value. */
+                if (oerr)
+                {
+                    lsx_warn("option `%c' requires an argument",
+                        state->opt);
                 }
+                return state->shortopts[0] == ':' ? ':' : '?';
             }
             else
             { /* Option without a value. */

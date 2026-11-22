@@ -276,10 +276,9 @@ static int sox_stat_stop(sox_effect_t * effp)
   fprintf(stderr, "Maximum amplitude: %12.6f\n", stat->max);
   fprintf(stderr, "Minimum amplitude: %12.6f\n", stat->min);
   fprintf(stderr, "Midline amplitude: %12.6f\n", stat->mid);
-  fprintf(stderr, "Mean    norm:      %12.6f\n", stat->asum/ct);
-  fprintf(stderr, "Mean    amplitude: %12.6f\n", stat->sum1/ct);
-  fprintf(stderr, "RMS     amplitude: %12.6f\n", sqrt(stat->sum2/ct));
-
+  fprintf(stderr, "Mean    norm:      %12.6f\n", ct == 0 ? 0.0f : stat->asum/ct);
+  fprintf(stderr, "Mean    amplitude: %12.6f\n", ct == 0 ? 0.0f : stat->sum1/ct);
+  fprintf(stderr, "RMS     amplitude: %12.6f\n", ct == 0 ? 0.0f : sqrt(stat->sum2/ct));
   fprintf(stderr, "Maximum delta:     %12.6f\n", stat->dmax);
   fprintf(stderr, "Minimum delta:     %12.6f\n", stat->dmin);
   fprintf(stderr, "Mean    delta:     %12.6f\n", stat->dsum1/(ct-1));

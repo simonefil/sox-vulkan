@@ -2,6 +2,11 @@
 
 # Test whether WAV files with 4GB or more of data have a junk value
 # in the data length field, issue.
+#
+# Neither field can hold 4GB or more, so the fork saturates both the
+# RIFF and the data length to 0xffffffff, the value FFmpeg and madplay
+# write for an unknown length and that readers take as "up to the end".
+# sox_ng writes its own 0x7ffff000 in the data field instead.
 
 rm -f 4GB.wav
 
@@ -26,17 +31,19 @@ esac
 fi
 # Check the DATA length field: a 32-bit word at offset 40-43
 #datalength="$(od -t x4 -j40 -N4 4GB.wav |head -1 | awk '{print $2}')"
-datalength () {
-  od -t x1 -j40 -N4 4GB.wav | head -1 | sed 's/^[0-9]*//' | {
+# Little-endian 32-bit field at byte offset $1
+field () {
+  od -t x1 -j$1 -N4 4GB.wav | head -1 | sed 's/^[0-9]*//' | {
     read x0 x1 x2 x3  # Least significant to most significant
     echo "$x3$x2$x1$x0" | tr A-F a-f
   }
 }
-datalength=`datalength`
+rifflength=`field 4`
+datalength=`field 40`
 
-case "$datalength" in
-7ffff000) status=0;;
-*) status=2;;
+case "$rifflength $datalength" in
+"ffffffff ffffffff") status=0;;
+*) echo "RIFF length $rifflength, data length $datalength"; status=2;;
 esac
 
 rm -f 4GB.wav

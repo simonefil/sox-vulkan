@@ -336,9 +336,9 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf,
     for (; v->block_remaining && (done < len); v->block_remaining--, done++)
       *buf++ = 0;       /* Fill in silence */
   } else {      /* not silence; read len samples of audio from the file */
-    size_t per = max(1, 9 / v->size);
+    size_t per;
 
-    for (; (done + per <= len); done += per) {
+    for (;;) {
       if (v->block_remaining == 0) {    /* IF no more in this block, get another */
         while (v->block_remaining == 0) {       /* until have either EOF or a block with data */
           rc = getblock(ft);
@@ -349,26 +349,46 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf,
           break;
       }
 
+      if (v->size == 0) {
+        lsx_fail_errno(ft, SOX_EFMT, "VOC input: zero file size");
+        break;
+      }
+
+      if (v->size <= 4 && !v->adpcm.setup.sign) {
+        SOX_SAMPLE_LOCALS;
+        if (done == len)
+          break;
+        if (lsx_readb(ft, &uc) == SOX_EOF) {
+          lsx_warn("VOC input: short file");
+          v->block_remaining = 0;
+          return done;
+        }
+        if (uc == 0) {
+          lsx_fail_errno(ft, SOX_EINVAL, "invalid rate value");
+          v->block_remaining = 0;
+          return done;
+        }
+        *buf = SOX_UNSIGNED_8BIT_TO_SAMPLE(uc,);
+        lsx_adpcm_init(&v->adpcm, 6 - v->size, SOX_SAMPLE_TO_SIGNED_16BIT(*buf, ft->clips));
+        ++buf;
+        --v->block_remaining;
+        ++done;
+        if (done == len)
+          break;
+        if (v->block_remaining == 0)
+          continue;
+      }
+
+      /* getblock() can change the encoding and therefore the number of
+       * samples produced from one input byte.  Calculate the required
+       * output space only after it has selected the current block.
+       */
+      per = max(1, 9 / v->size);
+      if (per > len - done)
+        break;
+
       /* Read the data in the file */
       if (v->size <= 4) {
-        if (!v->adpcm.setup.sign) {
-          SOX_SAMPLE_LOCALS;
-          if (lsx_readb(ft, &uc) == SOX_EOF) {
-            lsx_warn("VOC input: short file");
-            v->block_remaining = 0;
-            return done;
-          }
-          if (uc == 0) {
-            lsx_fail_errno(ft, SOX_EINVAL, "invalid rate value");
-            v->block_remaining = 0;
-            return done;
-          }
-          *buf = SOX_UNSIGNED_8BIT_TO_SAMPLE(uc,);
-          lsx_adpcm_init(&v->adpcm, 6 - v->size, SOX_SAMPLE_TO_SIGNED_16BIT(*buf, ft->clips));
-          ++buf;
-          --v->block_remaining;
-          ++done;
-        }
         if (lsx_readb(ft, &uc) == SOX_EOF) {
           lsx_warn("VOC input: short file");
           v->block_remaining = 0;
@@ -441,6 +461,7 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf,
         }
       /* decrement count of processed bytes */
       v->block_remaining--;
+      done += per;
     }
   }
   v->total_size += done;

@@ -327,6 +327,11 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf,
   if (v->block_remaining == 0)  /* if no more data, return 0, i.e., done */
     return 0;
 
+  if (v->size == 0) {
+    lsx_fail_errno(ft, SOX_EFMT, "VOC input: zero file size");
+    return 0;
+  }
+
   if (v->silent) {
     for (; v->block_remaining && (done < len); v->block_remaining--, done++)
       *buf++ = 0;       /* Fill in silence */

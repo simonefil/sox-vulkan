@@ -1,0 +1,21 @@
+#! /bin/sh
+
+# Template for "run" scripts
+echo "Don't run this!" 1>&2; exit 1
+
+# 14.4.2
+
+# sox_ng-14.5.0
+
+# Debian
+
+# 42b355
+
+rm -f core
+
+${sox:-sox} 
+status=$?
+
+rm -f core
+
+exit $status

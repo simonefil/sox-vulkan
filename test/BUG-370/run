@@ -1,0 +1,29 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/370
+# We found a FPE in SoX 14.4.3git (src/aiff.c:622:58 in lsx_aiffstartwrite)
+
+# 14.4.2
+# sox FAIL sox: Input files must have the same sample-rate
+
+# Debian
+# sox FAIL formats: can't open input file `poc_file': implausibly large number of channels
+
+# 42b355 with or without address sanitizer:
+#sox FAIL formats: can't open input file `poc_file': implausibly large number of channels
+
+# sox_ng-14.5.0
+
+rm -f core core.*
+
+${sox:-sox} --single-threaded poc_file -t aiff /dev/null
+status=$?
+
+rm -f core core.*
+
+case $status in
+0) status=255;;
+2) status=0;;
+esac
+
+exit $status

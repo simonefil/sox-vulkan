@@ -1,0 +1,18 @@
+#! /bin/sh
+
+# Issue #256 in sox-14.4.2 and sox_ng up to and including 14.6.0
+
+rm -f input.flac output.flac errs
+
+${sox:-sox} -n input.flac synth 10 sine 17.5/14080 exp
+${sox:-sox} -G input.flac -b 16 output.flac 2> errs
+
+status=0
+if grep -q dither errs
+then
+  status=2
+fi
+
+rm -f input.flac output.flac errs
+
+exit $status

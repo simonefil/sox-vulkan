@@ -1,0 +1,2 @@
+This test is disabled by renaming "run" ro "run.sh" because it's the only test
+that requires audio hardware that may not be present.

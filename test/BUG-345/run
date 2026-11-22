@@ -1,0 +1,40 @@
+#! /bin/sh
+
+# sox should preserve all aiff headers 
+# https://sourceforge.net/p/sox/bugs/345
+
+# It looks like Sox only preserves some of the headers in Aiff file.
+# Headers like INST are stripped. There are quite a few headers
+# that get written from Logic Pro's auto sampler and
+# I would like to keep those when manipulating these files.
+
+# Jan Stary writes:
+# Looking at src/aiff.c, sox does recognize and read and write
+# INST, MARK, COMT and other aiff chunks.
+# It ignores INST if MARK isn't also present.
+
+# Note: the only test file with MARK and INST is A-law encoded
+# and only sox_ng 14.6.* can read those.
+
+# Needs AIFC A-law and u-law support from sox_ng (292c3430, 8f0b8bcd), not yet in this fork
+exit 254
+
+rm -f out.aifc
+
+(grep -q MARK alaw.aifc && grep -q INST alaw.aifc) || {
+   echo "The test file alaw.aifc does not contain INST and MARK" 1>&2
+   exit 254   # VOID
+}
+
+${sox:-sox} alaw.aifc out.aifc
+
+grep -q MARK out.aifc && grep -q INST out.aifc
+status=$?
+
+case $status in
+1) status=2;;
+esac
+
+rm -f out.aifc
+
+exit $status

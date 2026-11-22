@@ -1,0 +1,26 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/369
+# We found a FPE in SoX 14.4.3git（src/voc.c:334:18 in read_samples)
+
+# 14.4.2
+# sox WARN voc: VOC input: short file
+# Exits 0 and creates a 3132-sample file
+
+# Debian
+# Exits 0 and creates a file of 4 samples
+
+# 42b355
+# Floating point exception (core dumped)
+
+# sox_ng-14.5.0
+# Exits 0 and creates a file of 4 samples
+
+rm -f core core.*
+
+${sox:-sox} --single-threaded poc_file -t aiff /dev/null
+status=$?
+
+rm -f out.wav core
+
+exit $status

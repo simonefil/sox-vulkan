@@ -1,0 +1,19 @@
+#! /bin/sh
+
+# Test writing of AIFC ULAW encoding
+
+# Needs AIFC u-law writing from sox_ng (8f0b8bcd), not yet in this fork
+exit 254
+
+rm -f core core.* out.aifc ulaw.raw out.raw
+
+${sox:-sox} -D ulaw.aifc -e u-law out.aifc
+status=$?
+
+${sox:-sox} -D ulaw.aifc -t raw -e signed -b 16 ulaw.raw || status=2
+${sox:-sox} -D out.aifc  -t raw -e signed -b 16 out.raw || status=2
+cmp ulaw.raw out.raw || status=2
+
+rm -f core core.* out.aifc ulaw.raw out.raw
+
+exit $status

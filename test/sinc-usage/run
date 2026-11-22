@@ -1,0 +1,64 @@
+#! /bin/sh
+
+# Test handling of arguments to the sinc effect
+
+# Needs the sinc argument syntax of sox_ng (0f34e86a), not yet in this fork
+exit 254
+
+rm -f core core.*
+
+status=0
+
+# These should work
+${sox:-sox} -n -n synth 1 sinc 440 || status=$?
+${sox:-sox} -n -n synth 1 sinc -440 || status=$?
+${sox:-sox} -n -n synth 1 sinc -9.0 || status=$?
+${sox:-sox} -n -n synth 1 sinc 430-450 || status=$?
+${sox:-sox} -n -n synth 1 sinc 450-430 || status=$?
+${sox:-sox} -n -n synth 1 sinc -t .044k 3k-4k || status=$?
+# Classic SoX has always taken single digits as an invalid option
+${sox:-sox} -n -n synth 1 sinc -9 || status=$?
+
+# These should be invalid... and exit 1, not dump core!
+
+# Trailing - on frequency range
+${sox:-sox} -n -n synth 1 sinc 440-
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# -a and -b
+${sox:-sox} -n -n synth 1 sinc -a 100 -b 1 3k-4k
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# -t and -n before
+${sox:-sox} -n -n synth 1 sinc -t 100 -n 100 3k-4k
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# -t and -n after
+${sox:-sox} -n -n synth 1 sinc 3k-4k -t 100 -n 100
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# Missing parameter
+${sox:-sox} -n -n synth 1 sinc -n
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# Invalid parameter
+${sox:-sox} -n -n synth 1 sinc -t 0.5
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# Trailing garbage on -t argument
+${sox:-sox} -n -n synth 1 sinc -t 440Hz 3k-4k
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# No frequency range
+${sox:-sox} -n -n synth 1 sinc
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+# Trailing garbage on frequency ranges
+${sox:-sox} -n -n synth 1 sinc 3000Hz-4k
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+${sox:-sox} -n -n synth 1 sinc 300-400Hz
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+rm -f core core.*
+
+exit $status

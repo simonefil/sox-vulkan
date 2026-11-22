@@ -1,0 +1,36 @@
+#! /bin/sh
+
+# Heap overflow in hcom.c
+# https://sourceforge.net/p/sox/bugs/350
+
+# There is a heap overflow in hcom.c:161. Function startread.
+# With crafted hcom file, the vuln is exploitable.
+# Trigger command: ./src/.libs/sox bug2 -n noiseprof /dev/null
+
+# 14.4.2
+# Segmentation fault (core dumped)
+
+# sox_ng-14.5.0
+# sox FAIL formats: can't open input file `bug2': Implausible dictionary size in HCOM header
+# and exits 2
+
+# Debian
+# sox FAIL formats: can't open input file `bug2': Implausible dictionary size in HCOM header
+# and exits 2
+
+# 42b355 and sox.sf.net master
+# Segmentation fault (core dumped)
+
+rm -f core core.*
+
+${sox:-sox} bug2 -n	# The noiseprof is not necessary
+status=$?
+
+rm -f core core.*
+
+case $status in
+0) status=2;;
+2) status=0;;
+esac
+
+exit $status

@@ -1,0 +1,36 @@
+#! /bin/sh
+
+# See if chorus can get delay line wraparound wrong, issue #854
+#
+# Old versions of SoX and sox_ng may not have -l and -q or may
+# not accept a delay of < 20ms, so if the command fails, say VOID.
+
+rm -f none.wav line.wav quad.wav
+
+status=0
+
+${sox:-sox} -D demoWave.wav none.wav chorus 1.0 0.4  7.99999 1.0 83.3333 4 -t || exit 254
+cmp -s none.wav none-OK.wav || {
+  echo 'chorus with no interpolation failed' 1>&2
+  status=2
+}
+
+# These didn't get glitches but check them anyway
+
+${sox:-sox} -D demoWave.wav line.wav chorus -l 1.0 0.4  7.99999 1.0 83.3333 4 -t && {
+cmp -s line.wav line-OK.wav || {
+  echo 'chorus with linear interpolation failed' 1>&2
+  status=2
+}
+}
+
+${sox:-sox} -D demoWave.wav quad.wav chorus -q 1.0 0.4  7.99999 1.0 83.3333 4 -t && {
+cmp -s quad.wav quad-OK.wav || {
+  echo 'chorus with quadratic interpolation failed' 1>&2
+  status=2
+}
+}
+
+rm -f none.wav line.wav quad.wav
+
+exit $status

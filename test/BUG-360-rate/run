@@ -1,0 +1,32 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/360
+
+# 14.4.2
+# sox: rate.c:303: rate_init: Assertion `factor > 0' failed.
+# Aborted (core dumped)
+
+# sox_ng-14.5.0
+# sox FAIL formats: can't open input file `poc_assert_rate_init': implausibly large number of channels
+
+# Debian
+# sox FAIL formats: can't open input file `poc_assert_rate_init': implausibly large number of channels
+
+# 42b355 and sox.sf.net HEAD 2025-02-14
+# sox: rate.c:303: void rate_init(rate_t *, rate_shared_t *, double, double, double, double, double, rolloff_t, sox_bool, sox_bool, int, int, sox_bool): Assertion `factor > 0' failed.
+# Aborted (core dumped)
+
+rm -f core core.*
+
+${sox:-sox} poc_assert_rate_init -t aiff /dev/null
+
+status=$?
+
+rm -f core core.*
+
+case $status in
+2) status=0;;
+0) status=255;;
+esac
+
+exit $status

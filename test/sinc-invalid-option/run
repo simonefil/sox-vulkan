@@ -1,0 +1,18 @@
+#! /bin/sh
+
+# Test handling of an invalid option to the sinc effect
+
+# This is separate from the sinc-usage tests as classic SoX passes those
+# but fails this.
+
+rm -f core core.*
+
+status=0
+
+# Invalid option
+${sox:-sox} -n -n synth 1 sinc -j 3k-4k
+s=$?; case $s in 0) status=2;; 1) ;; *) status=$s;; esac
+
+rm -f core core.*
+
+exit $status

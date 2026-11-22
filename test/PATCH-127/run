@@ -1,0 +1,23 @@
+#! /bin/sh
+
+# Template for "run" scripts
+
+# 14.4.2
+
+# Debian
+
+# 42b355
+
+rm -f core core.* out.*
+
+${sox:-sox} crash-fpe-voc out.wav
+status=$?
+
+if [ ! -f out.wav ]
+then
+    status=1
+fi
+
+rm -f core core.* out.*
+
+exit $status

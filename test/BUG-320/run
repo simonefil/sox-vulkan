@@ -1,0 +1,26 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/320: Integer Overflow in xmalloc.h
+
+# 14.4.2
+
+# sox_ng-14.5.0
+
+# Debian
+
+# 42b355
+
+rm -f core core.*
+
+${sox:-sox} xmalloc_31_integer_overflow.mp3 -t aiff /dev/null channels 1 rate 16k fade 3 norm
+
+status=$?
+
+rm -f core core.*
+
+case $status in
+0) status=255;;
+2) status=0;;
+esac
+
+exit $status

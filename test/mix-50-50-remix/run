@@ -1,0 +1,21 @@
+#! /bin/sh
+
+# Check 50:50 mix is a no-op for remix
+
+set -e
+
+rm -f sweep.wav sweep2.wav out.wav
+
+status=0
+
+${sox:-sox} -D -n -b 16 -e signed sweep.wav synth 10 sine 27.5/14080 \
+                                  fade l 0 36.91 36.91 trim 0 10
+# Merge it with itself to make a stereo file
+${sox:-sox} -D -M sweep.wav sweep.wav sweep2.wav
+${sox:-sox} -D sweep2.wav out.wav remix -
+
+cmp -s sweep.wav out.wav || status=2
+
+rm sweep.wav sweep2.wav out.wav
+
+exit $status

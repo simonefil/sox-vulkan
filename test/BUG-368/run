@@ -1,0 +1,30 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/369
+# We found a FPE in SoX 14.4.3git（src/voc.c:334:18 in read_samples)
+
+# 14.4.2
+# Segmentation fault (core dumped)
+
+# Debian
+# sox FAIL formats: can't open input file `poc_file': Implausible dictionary size in HCOM header
+
+# 42b355
+# Segmentation fault (core dumped)
+
+# sox_ng-14.5.0
+sox_ng FAIL formats: can't open input file `poc_file': Implausible dictionary size in HCOM header
+
+rm -f core core.*
+
+${sox:-sox} --single-threaded poc_file -t aiff /dev/null
+status=$?
+
+rm -f core core.*
+
+case $status in
+0) status=255;;
+2) status=0;;
+esac
+
+exit $status

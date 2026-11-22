@@ -1,0 +1,23 @@
+#! /bin/sh
+
+# div zero in voc.c
+# https://sourceforge.net/p/sox/bugs/351
+
+# 14.4.2
+# sox WARN voc: VOC input: short file
+# and exits 0
+
+# Debian and sox_ng-14.5.0
+# Exits 0
+
+# 42b355
+# Floating point exception (core dumped)
+
+rm -f core core.*
+
+${sox:-sox} bug3 -n noiseprof /dev/null
+status=$?
+
+rm -f core core.*
+
+exit $status

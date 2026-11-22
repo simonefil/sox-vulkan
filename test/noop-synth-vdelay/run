@@ -1,0 +1,22 @@
+#! /bin/sh
+
+# Check vdelay with 100% input is a no-op
+
+set -e
+
+# See if this sox has "synth vdelay"
+${sox:-sox} --help-effect synth | grep -q fixed || exit 254
+
+rm -f sweep.wav out.wav
+
+status=0
+
+${sox:-sox} -D -n -b 16 -e signed sweep.wav synth 10 sine 27.5/14080
+# vdelay's defaults are 0,0,0.5, the no-op we require.
+# synth vdelay doesn't drain yet but may one day so trim it too.
+${sox:-sox} -D sweep.wav out.wav synth sine vdelay 10,10,0 trim 0 10
+cmp -s sweep.wav out.wav || status=2
+
+rm sweep.wav out.wav
+
+exit $status

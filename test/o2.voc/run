@@ -1,0 +1,20 @@
+#! /bin/sh
+
+# o2.voc send SoX into an infinite loop
+# https://codeberg.org/sox_ng/sox_ng/issues/324
+
+# 14.4.2
+
+# Debian
+
+# 42b355
+
+rm -f out.wav
+
+ulimit -t 10
+${sox:-sox} o2.voc out.wav
+status=$?
+
+rm -f out.wav
+
+exit $status

@@ -1,0 +1,15 @@
+#! /bin/sh
+
+# Test reading of AIFC ALAW encoding
+
+# Needs AIFC A-law support from sox_ng (292c3430), not yet in this fork
+exit 254
+
+rm -f core core.* out.wav
+
+${sox:-sox} alaw.aifc out.wav
+status=$?
+
+rm -f core core.* out.wav
+
+exit $status

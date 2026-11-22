@@ -1,0 +1,32 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/360
+
+# 14.4.2
+# Floating point exception (core dumped)
+
+# sox_ng-14.5.0
+# sox FAIL formats: can't open input file `poc_fpe_lsx_aiffstartwrite': implausibly large number of channels
+# and exits 2
+
+# Debian
+# sox FAIL formats: can't open input file `poc_fpe_lsx_aiffstartwrite': implausibly large number of channels
+# and exits 2
+
+# 42b355 and sox.sf.net HEAD 2025-02-14
+# Floating point exception (core dumped)
+
+rm -f core core.*
+
+${sox:-sox} poc_fpe_lsx_aiffstartwrite -t aiff /dev/null
+
+status=$?
+
+rm -f core core.*
+
+case $status in
+2) status=0;;
+0) status=255;;
+esac
+
+exit $status

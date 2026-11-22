@@ -1,0 +1,30 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/358
+# Segmentation fault when creating a spectrogram with 3kHz limit 
+
+# 14.4.2
+# sox WARN rate: rate clipped 1 samples; decrease volume?
+# sox WARN dither: dither clipped 1 samples; decrease volume?
+# and exits 0
+
+# Debian
+# sox WARN rate: rate clipped 1 samples; decrease volume?
+# sox WARN dither: dither clipped 1 samples; decrease volume?
+# and exits 0
+
+# 42b355
+# /home/martin/SoX/sox-code-42b355/src/.libs/sox WARN rate: rate clipped 1 samples; decrease volume?
+# Segmentation fault (core dumped)
+
+# Check whether sox was compiled with the spectrogram effect
+${sox:-sox} 2>&1 | grep -q '^EFFECTS:.*spectrogram' || exit 254
+
+rm -f core core.* spectrogram.png
+
+${sox:-sox} int8-linear-pcm.au -n rate 3k spectrogram
+status=$?
+
+rm -f core core.* spectrogram.png
+
+exit $status

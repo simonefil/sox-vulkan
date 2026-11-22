@@ -892,6 +892,10 @@ endif()
 
 add_subdirectory(src)
 
+# Regression suite: ctest from the build directory runs test/check.sh
+enable_testing()
+add_subdirectory(test)
+
 # Determine platform name for summary
 if(IS_LINUX)
     set(PLATFORM_NAME "Linux")

@@ -1,0 +1,30 @@
+#! /bin/sh
+
+# sox.sf.net bug 334: Segmentation fault in rate.c:504:30
+# https://sourceforge.net/p/sox/bugs/334
+# with test file attached
+
+# 14.4.2
+# Segmentation fault (core dumped)
+
+# Debian
+# Segmentation fault (core dumped)
+
+# 42b355
+# sox WARN rate: input and output rates too close, skipping resampling
+# sox WARN rate: input and output rates too close, skipping resampling
+# and exits 0
+
+# Check that flac format is included
+${sox:-sox} 2>&1 | grep -q '^AUDIO FILE FORMATS.*flac' || exit 254
+# and writable
+${sox:-sox} --help-format flac 2>&1 | grep -q '^Writes:$' || exit 254
+
+rm -f core core.* out.*
+
+${sox:-sox} SEGV-rate_close-rate-504 out.flac remix - norm -3 highpass 22 gain -3 rate 48k norm -3 dither
+status=$?
+
+rm -f core core.* out.*
+
+exit $status

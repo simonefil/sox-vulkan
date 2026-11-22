@@ -1,0 +1,27 @@
+#! /bin/sh
+
+# wavpack-errors
+
+# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=881145
+# "null pointer dereference while running play"
+# Version: 14.4.1-5+b2
+# Running 'play poc bass +3' with the attached file raises
+# null pointer dereference which may allow a remote attack
+# to cause a denial-of-service attack.
+# I expected the program to terminate without segfault, but the program crashes
+#
+# Debian's 14.4.2 still has Eric Wong's patch for this, "wavpack check errors".
+
+rm -f core core.* out.*
+
+${sox:-sox} poc out.wav bass +3
+status=$?
+
+rm -f core core.* out.*
+
+case "$status" in
+0) status=255;;
+2) status=0;;
+esac
+
+exit $status

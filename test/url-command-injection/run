@@ -1,0 +1,21 @@
+#! /bin/sh
+
+# Check that command injection via shell special characters in URLs
+# does not happen
+
+rm -f sox-ng-url-injection-triggered
+
+${sox:-sox} url-command-injection.m3u -n
+status=$?
+
+# Should get runtime failure of zero-length file
+case $status in
+2) status=0;;
+esac
+
+test -f sox-ng-url-injection-triggered && {
+  status=1
+  rm sox-ng-url-injection-triggered
+}
+
+exit $status

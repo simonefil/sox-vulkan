@@ -1,0 +1,174 @@
+#!/bin/sh
+
+# A downloader may fail after valid audio; deliberate early stops must not
+# mistake its broken pipe for an input failure.
+
+set -eu
+sox=${sox:-../../src/sox_ng}
+source_file=../../src/monkey.wav
+work=$(mktemp -d "${TMPDIR:-/tmp}/sox-url-status.XXXXXXXX") || exit 2
+trap 'rm -rf "$work"' 0
+trap 'exit 2' 1 2 3 15
+
+cat > "$work/wget" <<'DOWNLOADER'
+#!/bin/sh
+if test "$1" = --version; then
+  echo 'wget test command'
+  exit 0
+fi
+case "${SOX_TEST_MODE:-full}" in
+  full) cat "$SOX_TEST_INPUT" || exit 7 ;;
+  partial)
+    dd if="$SOX_TEST_INPUT" bs=256 count=1 2>/dev/null || exit 7 ;;
+  pause)
+    dd if="$SOX_TEST_INPUT" bs=8192 count=1 2>/dev/null || exit 7
+    sleep 5
+    cat "$SOX_TEST_INPUT" || exit 7 ;;
+esac
+exit "${SOX_TEST_EXIT:-0}"
+DOWNLOADER
+chmod +x "$work/wget"
+ln -s wget "$work/wget2"
+ln -s wget "$work/curl"
+PATH="$work:$PATH"
+export PATH
+SOX_TEST_INPUT=$(cd "$(dirname "$source_file")" && pwd)/$(basename "$source_file")
+SOX_TEST_MODE=full
+SOX_TEST_EXIT=0
+export SOX_TEST_INPUT SOX_TEST_MODE SOX_TEST_EXIT
+
+# A complete valid transfer succeeds.
+"$sox" -V1 -t wav http://example.invalid/test.wav "$work/ok.wav" 2> "$work/ok.err" || {
+  cat "$work/ok.err" >&2; exit 2;
+}
+test -s "$work/ok.wav"
+
+# A downloader that emits a complete WAV but exits 9 must still fail and
+# remove the output; this is the original upstream defect.
+SOX_TEST_EXIT=9
+if "$sox" -V1 -t wav http://example.invalid/test.wav "$work/failed.wav" 2> "$work/failed.err"; then
+  echo 'Download failure was reported as success' >&2; exit 2
+fi
+test ! -e "$work/failed.wav" || {
+  echo 'Failed download left a successful-looking output' >&2; exit 2;
+}
+
+# A short, genuinely failed transfer may not be classified as an intentional
+# early stop: it must fail even though the WAV header declares a known length.
+"$sox" -n -r 8000 -c 1 -b 16 "$work/long.wav" trim 0 600 2> "$work/generate.err" || {
+  cat "$work/generate.err" >&2; exit 2;
+}
+SOX_TEST_INPUT="$work/long.wav"
+SOX_TEST_MODE=partial
+SOX_TEST_EXIT=9
+if "$sox" -V1 -t wav http://example.invalid/test.wav "$work/partial.wav" 2> "$work/partial.err"; then
+  echo 'Truncated download was reported as success' >&2; exit 2
+fi
+test ! -e "$work/partial.wav"
+
+# Both URL subprocesses and historical shell pipes can be stopped by trim.
+# The pipe producer may exit with SIGPIPE after the consumer has enough audio.
+SOX_TEST_MODE=full
+SOX_TEST_EXIT=0
+"$sox" -V1 -t wav http://example.invalid/test.wav "$work/url-trim.wav" trim 0 0.08 2> "$work/url-trim.err" || {
+  cat "$work/url-trim.err" >&2; exit 2;
+}
+test -s "$work/url-trim.wav"
+"$sox" -V1 -t wav "|cat $work/long.wav" "$work/pipe-trim.wav" trim 0 0.08 2> "$work/pipe-trim.err" || {
+  cat "$work/pipe-trim.err" >&2; exit 2;
+}
+test -s "$work/pipe-trim.wav"
+
+# Metadata inspection does not consume the audio; the downloader must not be
+# required to transmit the whole WAV body for an information-only command.
+"$sox" --info -s http://example.invalid/test.wav > "$work/info.out" 2> "$work/info.err" || {
+  cat "$work/info.err" >&2; exit 2;
+}
+test "$(cat "$work/info.out")" = 4800000 || {
+  echo 'Unexpected sample count in URL metadata inspection' >&2; exit 2;
+}
+
+# Cancellation must not wait for an unused downloader that pauses after
+# supplying enough samples for the trim operation.
+SOX_TEST_MODE=pause
+start=$(date +%s)
+"$sox" --buffer 512 -V1 -t wav http://example.invalid/test.wav "$work/pause.wav" trim 0 0.08 2> "$work/pause.err" || {
+  cat "$work/pause.err" >&2; exit 2;
+}
+elapsed=$(($(date +%s) - start))
+test "$elapsed" -lt 3 || {
+  echo "Early-stop downloader cancellation took ${elapsed}s" >&2; exit 2;
+}
+test -s "$work/pause.wav"
+
+# A format handler may return an error from stopread even when a successful
+# child supplied all the input. Do not confuse that error with child status.
+"$sox" "$source_file" "$work/test.hcom" 2> "$work/hcom-write.err" || {
+  cat "$work/hcom-write.err" >&2; exit 2;
+}
+"$sox" -V1 "$work/test.hcom" "$work/hcom-file.wav" 2> "$work/hcom-file.err" || {
+  cat "$work/hcom-file.err" >&2; exit 2;
+}
+"$sox" -V1 -t hcom "|cat $work/test.hcom" "$work/hcom-pipe.wav" 2> "$work/hcom-pipe.err" || {
+  cat "$work/hcom-pipe.err" >&2; exit 2;
+}
+SOX_TEST_INPUT="$work/test.hcom"
+SOX_TEST_MODE=full
+SOX_TEST_EXIT=0
+"$sox" -V1 -t hcom http://example.invalid/test.hcom "$work/hcom-url.wav" 2> "$work/hcom-url.err" || {
+  cat "$work/hcom-url.err" >&2; exit 2;
+}
+cmp "$work/hcom-file.wav" "$work/hcom-pipe.wav" || exit 2
+cmp "$work/hcom-file.wav" "$work/hcom-url.wav" || exit 2
+
+# Some decoders finish before their underlying FILE reaches physical EOF.
+# Even then, a failed producer must invalidate an otherwise complete decode.
+SOX_TEST_EXIT=7
+if "$sox" -D -V1 -t hcom http://example.invalid/test.hcom "$work/hcom-failed.wav" 2> "$work/hcom-failed.err"; then
+  echo 'Failed HCOM downloader was reported as success' >&2; exit 2
+fi
+test ! -e "$work/hcom-failed.wav" || exit 2
+
+# Check other decoders with logical EOF and compare the successful URL result
+# with the same audio read directly from a file.
+for format in voc maud; do
+  "$sox" "$source_file" "$work/test.$format" 2> "$work/$format-encode.err" || {
+    cat "$work/$format-encode.err" >&2; exit 2;
+  }
+  "$sox" -D -V1 "$work/test.$format" "$work/$format-file.wav" 2> "$work/$format-file.err" || {
+    cat "$work/$format-file.err" >&2; exit 2;
+  }
+  SOX_TEST_INPUT="$work/test.$format"
+  SOX_TEST_EXIT=0
+  "$sox" -D -V1 -t "$format" "http://example.invalid/test.$format" "$work/$format-url.wav" 2> "$work/$format-url.err" || {
+    cat "$work/$format-url.err" >&2; exit 2;
+  }
+  cmp "$work/$format-file.wav" "$work/$format-url.wav" || exit 2
+  SOX_TEST_EXIT=7
+  if "$sox" -D -V1 -t "$format" "http://example.invalid/test.$format" "$work/$format-failed.wav" 2> "$work/$format-failed.err"; then
+    echo "Failed $format downloader was reported as success" >&2; exit 2
+  fi
+  test ! -e "$work/$format-failed.wav" || exit 2
+done
+
+# A completed first input must also be observed in concatenation and mixing.
+SOX_TEST_INPUT="$work/test.hcom"
+SOX_TEST_EXIT=7
+"$sox" -D -V1 "$work/test.hcom" "$work/partner.wav" 2> "$work/partner.err" || {
+  cat "$work/partner.err" >&2; exit 2;
+}
+for combination in concatenate mix; do
+  if "$sox" -D -V1 --combine "$combination" -t hcom http://example.invalid/test.hcom \
+      "$work/partner.wav" "$work/$combination-failed.wav" 2> "$work/$combination-failed.err"; then
+    echo "Failed HCOM downloader in $combination was reported as success" >&2; exit 2
+  fi
+  test ! -e "$work/$combination-failed.wav" || exit 2
+done
+
+# A normally completed shell-pipe read also reports a failing producer.
+SOX_TEST_INPUT="$work/long.wav"
+if "$sox" -V1 -t wav "|cat $work/long.wav; exit 9" "$work/failed-pipe.wav" 2> "$work/failed-pipe.err"; then
+  echo 'Shell-pipe producer failure was reported as success' >&2; exit 2
+fi
+test ! -e "$work/failed-pipe.wav" || exit 2
+exit 0

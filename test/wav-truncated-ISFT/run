@@ -1,0 +1,13 @@
+#! /bin/sh
+
+# Check that a final ISFT chunk whose length is more that the rest of the file
+# still keeps the preceding data and doesn't fail, the same as 14.4.2
+
+rm -f out.wav
+
+${sox:-sox} 00000000_1.wav out.wav
+status=$?
+
+rm -f out.wav
+
+exit $status

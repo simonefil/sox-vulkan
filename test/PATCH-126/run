@@ -1,0 +1,16 @@
+#! /bin/sh
+
+# sox.sf.net patch 126: Global-buffer-overflow at `adpcms.c:58`
+# https://sourceforge.net/p/sox/patches/126
+
+# You have to compile it with the address sanitizer to see the failure.
+# ./configure CFLAGS=-fsanitize=address LDFLAGS=-lasan
+
+rm -f core core.* out.*
+
+${sox:-sox} crash-gbo-voc out.wav
+status=$?
+
+rm -f core core.* out.*
+
+exit $status

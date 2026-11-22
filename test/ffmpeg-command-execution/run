@@ -1,0 +1,43 @@
+#! /bin/sh
+
+# Test for possible remote command injection in Windows versions
+# of sox_ng with ffmpeg support, by supplying a filename with &
+# characters in it, reported by breakingbad from PJSK CTF.
+
+wine > /dev/null 2>&1
+status=$?
+case $status in
+0|1) : OK ;;
+*) echo "You don't seem to have wine installed" 1>&2
+   exit 254 ;;
+esac
+
+sox=${sox:-../../win32.exe}
+
+# If we're being run from check.sh, replace Unix exe with win exe.
+test "$sox" = "../../src/sox_ng" && sox=../../win32.exe
+
+test -f "$sox" || {
+  echo "You need to make $sox first" 1>&2
+  exit 254
+}
+
+file "$sox" | grep -q 'Windows' || {
+  echo "$sox is not a Windows eecutable" 1>&2
+  exit 254
+}
+
+# You don't need an ffmpeg Windows executable for this test to work
+
+rm -f ARKTRICON_MARKER.txt
+status=0
+probe=probe\&COPY\ NUL\ ARKTRICON_MARKER.txt\&rem
+cp ../../src/monkey.wav "$probe"
+wine "$sox" -t ffmpeg "$probe" -n
+test -f ARKTRICON_MARKER.txt && {
+  status=2
+  rm -f ARKTRICON_MARKER.txt
+}
+rm "$probe"
+
+exit $status

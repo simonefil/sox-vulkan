@@ -1,0 +1,103 @@
+#! /bin/sh
+
+# Synthesize the test tones described in
+# https://tech.ebu.ch/files/live/sites/tech/files/shared/tech/tech3341.pdf
+# and check that they are within the given range of the expected result.
+# Only tests requiring a specific output are included,
+# not those requiring a "Max" value, for which the result is lower than the Max.
+
+# Check that bc is available
+bc < /dev/null || exit 254
+
+# See if SoX was compiled with EBUR128 support
+${sox:-sox} -n -n trim 0 1 stat -e 2> /dev/null || exit 254
+
+# A bc function to return our exit status:
+# 0 if l is within t+m and t+p or 2 if not.
+# example: within(-22.9996, -23, -0.1, +0.1)
+# l=loudness t=target m=minus p=plus
+within='define within(l,t,m,p) {
+if (l < t + m) return 2;
+if (l > t + p) return 2;
+return 0;
+}'
+
+# Check that the "sox stat" output in $2 for EBU figure $3 (M S I or T)
+# is between $4+$5 and $4+$6
+# 
+check () {
+  L=`echo "$2" | sed -n "/EBUR128 $3/s/^.*: *//p"`
+  bcinput=`echo "scale=0
+  $within
+  within($L,$4,$5,$6)"`
+  bcoutput=`echo "$bcinput" | bc -l`
+  test "$bcoutput" -eq 0 || {
+    status=2
+    echo "FAIL test $1 $3: $L is not $4 within $5 and $6"
+  }
+}
+
+rm -f ?.wav
+
+status=0
+
+# 1. Stereo sine wave, 1000Hz, -23.0 dBFS per channel, in phase, -23.0 +/-0.1
+out=`${sox:-sox} -n -n synth 20 sine 1000 channels 2 vol -23d stat -e 2>&1`
+for a in M S I; do check 1 "$out" $a -23 -.1 .1; done
+
+# 2. A #1 at -33.0 dBFS
+out=`${sox:-sox} -n -n synth 20 sine 1000 channels 2 vol -33d stat -e 2>&1`
+for a in M S I; do check 2 "$out" $a -33 -.1 .1; done
+
+# 3. 3 tones similar to #1: 10s at -36dB, 60s at -23dB, 10s at -36dB
+${sox:-sox} -n 1.wav synth 10 sine 1000 vol -36d
+${sox:-sox} -n 2.wav synth 60 sine 1000 vol -23d
+${sox:-sox} -n 3.wav synth 10 sine 1000 vol -36d
+out=`${sox:-sox} 1.wav 2.wav 3.wav -n channels 2 stat -e 2>&1`
+check 3 "$out" I -23 -.1 .1
+
+# 4. 5 tones similar to #1
+${sox:-sox} -n 1.wav synth 10 sine 1000 vol -72d
+${sox:-sox} -n 2.wav synth 10 sine 1000 vol -36d
+${sox:-sox} -n 3.wav synth 60 sine 1000 vol -23d
+${sox:-sox} -n 4.wav synth 10 sine 1000 vol -36d
+${sox:-sox} -n 5.wav synth 10 sine 1000 vol -72d
+out=`${sox:-sox} 1.wav 2.wav 3.wav 4.wav 5.wav -n channels 2 stat -e 2>&1`
+check 4 "$out" I -23 -.1 .1
+
+# 5.
+${sox:-sox} -n 1.wav synth 20 sine 1000 vol -26d
+${sox:-sox} -n 2.wav synth 20.1 sine 1000 vol -20d
+${sox:-sox} -n 3.wav synth 20 sine 1000 vol -26d
+out=`${sox:-sox} 1.wav 2.wav 3.wav -n channels 2 stat -e 2>&1`
+check 5 "$out" I -23 -.1 .1
+
+# 6, 5-channel
+${sox:-sox} -n 1.wav synth 20 sine 1000 vol -28d
+${sox:-sox} -n 2.wav synth 20 sine 1000 vol -28d
+${sox:-sox} -n 3.wav synth 20 sine 1000 vol -24d
+${sox:-sox} -n 4.wav synth 20 sine 1000 vol -30d
+${sox:-sox} -n 5.wav synth 20 sine 1000 vol -30d
+out=`${sox:-sox} --combine merge [12345].wav -n stat -e 2>&1`
+check 6-5channel "$out" I -23 -.1 .1
+
+# 6, 6-channel
+${sox:-sox} -n 0.wav synth 20 sine 1000 vol 0
+out=`${sox:-sox} --combine merge [123].wav 0.wav [45].wav -n stat -e 2>&1`
+check 6-6channel "$out" I -23 -.1 .1
+
+# 9
+${sox:-sox} -n 1.wav synth 1.34 sine 1000 vol -20d
+${sox:-sox} -n 2.wav synth 1.66 sine 1000 vol -30d
+out=`${sox:-sox} 1.wav 2.wav -n channels 2 repeat 4 stat -e 2>&1`
+check 9 "$out" S -23 -.1 .1
+
+# 12
+${sox:-sox} -n 1.wav synth 0.18 sine 1000 vol -20d
+${sox:-sox} -n 2.wav synth 0.22 sine 1000 vol -30d
+out=`${sox:-sox} 1.wav 2.wav -n channels 2 repeat 24 stat -e 2>&1`
+check 12 "$out" M -23 -.1 .1
+
+rm -f ?.wav
+
+exit $status

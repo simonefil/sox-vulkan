@@ -1,0 +1,36 @@
+#! /bin/sh
+
+# Test for globbing to match files whose names contain UTF8 characters
+# Identified and fixed by Marcrosoft
+
+wine > /dev/null 2>&1
+status=$?
+case $status in
+0|1) : OK ;;
+*) echo "You don't seem to have wine installed" 1>&2
+   exit 254 ;;
+esac
+
+sox=${sox:-../../win32.exe}
+
+# If we're being run from check.sh, replace Unix exe with win exe.
+test "$sox" = "../../src/sox_ng" && sox=../../win32.exe
+
+test -f "$sox" || {
+  echo "You need to make $sox first" 1>&2
+  exit 254
+}
+
+file "$sox" | grep -q 'Windows' || {
+  echo "$sox is not a Windows eecutable" 1>&2
+  exit 254
+}
+
+rm -f monk*.wav
+cp ../../src/monkey.wav monkæ.wav
+wine "$sox" 'monk*.wav' -n
+status=$?
+
+rm -f monk*.wav
+
+exit $status

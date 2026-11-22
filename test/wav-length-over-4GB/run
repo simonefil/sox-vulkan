@@ -1,0 +1,44 @@
+#! /bin/sh
+
+# Test whether WAV files with 4GB or more of data have a junk value
+# in the data length field, issue.
+
+rm -f 4GB.wav
+
+# Check that there is enough free disk space to do this in case
+# we're running something < sox_ng-4.6.1 that doesn't writes sparse files.
+freeKB="$(df -k . | sed '1d' | awk '{print $4}')"
+if [ -z "$freeKB" ] || [ "$freeKB" -lt 4500000 ]
+then
+    exit 254
+fi
+
+# Create a file with 4GB of data
+if [ ! -f 4GB.wav ]
+then
+${sox:-sox} -D -n -b 16 -e signed 4GB.wav trim 0 2147483648s
+status=$?
+case "$status" in
+0) : ;;
+*) rm -f 4GB.wav
+   exit $status ;;
+esac
+fi
+# Check the DATA length field: a 32-bit word at offset 40-43
+#datalength="$(od -t x4 -j40 -N4 4GB.wav |head -1 | awk '{print $2}')"
+datalength () {
+  od -t x1 -j40 -N4 4GB.wav | head -1 | sed 's/^[0-9]*//' | {
+    read x0 x1 x2 x3  # Least significant to most significant
+    echo "$x3$x2$x1$x0" | tr A-F a-f
+  }
+}
+datalength=`datalength`
+
+case "$datalength" in
+7ffff000) status=0;;
+*) status=2;;
+esac
+
+rm -f 4GB.wav
+
+exit $status

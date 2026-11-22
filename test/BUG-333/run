@@ -1,0 +1,23 @@
+#! /bin/sh
+
+# Template for "run" scripts
+
+# 14.4.2
+
+# sox_ng-14.5.0
+
+# Debian
+
+# 42b355
+
+rm -f core core.*
+
+${sox:-sox} assert-fail-rate_init-rate-303 /tmp/sox.flac remix - norm -3 highpass 22 gain -3 rate 48k norm -3 dither
+status=$?
+
+case $status in
+0) status=255;;
+2) status=0;;
+esac
+
+exit $status

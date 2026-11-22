@@ -1,0 +1,21 @@
+#! /bin/sh
+
+# See if "synth amod" and "synth fmod" produce the same output when they should
+
+rm -f sweep.wav amod.wav fmod.wav
+
+# Make a swept sine wave
+${sox:-sox} -D -V1 -n -b 16 -e signed sweep.wav synth 10 sine 27.5/14080 \
+				        fade l 0 36.91 36.91 trim 0 10 \
+    || exit 254    # If synth doesn't work, we can't do the rest
+
+status=0
+
+# amod and fmod with an offset of 50 should be the same
+${sox:-sox} -D sweep.wav amod.wav synth sine amod 440 || status=254
+${sox:-sox} -D sweep.wav fmod.wav synth sine fmod 440 50 || status=254
+cmp -s amod.wav fmod.wav || status=2
+
+rm -f sweep.wav amod.wav fmod.wav
+
+exit $status

@@ -1,0 +1,15 @@
+#! /bin/sh
+
+# See if it can decode NSP format
+
+rm -f out.wav
+
+${sox:-sox} --help | grep -q '^AUDIO FILE FORMATS.* nsp ' || exit 254
+
+${sox:-sox} addf8.nsp out.wav
+
+status=$?
+
+rm -f out.wav
+
+exit $status

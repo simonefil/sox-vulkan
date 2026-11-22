@@ -1,0 +1,12 @@
+#! /bin/sh
+
+# sox.sf.net bug 293: stats effect returns -inf if window is set to 0.36 seconds
+
+RMSPkdB="$(${sox:-sox} 19-76.aiff -n stats -w .36 2>&1 | grep 'RMS Pk dB' | sed 's/.* //')"
+
+status=0
+case "$RMSPkdB" in
+-inf) status=2;;
+esac
+
+exit $status

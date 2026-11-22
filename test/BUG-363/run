@@ -1,0 +1,21 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/363
+# sox segfaults when parsing CLI options
+
+# 14.4.2
+
+# sox_ng-14.5.0
+
+# Debian
+
+# 42b355
+
+rm -f core core.* out.wav
+
+${sox:-sox} -V -V --norm ../../src/monkey.wav out.wav
+status=$?
+
+rm -f core core.* out.wav
+
+exit $status

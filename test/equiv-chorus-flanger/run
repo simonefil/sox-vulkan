@@ -1,0 +1,71 @@
+#! /bin/sh
+
+# Test that the flanger equivalent of chorus
+# give the same results +/- one sample
+
+# Make sure we have bc
+bc < /dev/null 2> /dev/null || exit 254
+
+sox="${sox:-sox} -D"
+
+generated_files="sweep.wav chorus.wav flanger.wav"
+
+rm -f $generated_files
+
+# Length of the test piece in seconds
+length=10
+
+# Make a constant-loudness swept wave
+# -V0: Suppress fade warning about audio length
+$sox -V0 -n sweep.wav synth $length sine 27.5-14080 \
+                  fade l 0 36.91 36.91 trim 0 10
+
+# Arguments to chorus.
+# Classic sox's chorus delay is  20 to 100, flanger's   0 to 30
+# Classic sox's chorus speed is 0.1 to 5,   flanger's 0.1 to 10
+# Classic sox's chorus depth is   0 to 10,  flanger's   0 to 10
+interp=l
+gain_in=0.5
+gain_out=1
+delay=25
+decay=0.5
+speed=.25
+depth=2
+wave=s
+
+# chorus gain-in gain-out delay decay speed depth -wave
+# If there is no linear chorus interpolation, we can't test this.
+$sox sweep.wav chorus.wav \
+     chorus -$interp $gain_in $gain_out $delay $decay $speed $depth -$wave \
+     trim 0 $length 2> /dev/null || exit 254
+
+# flanger delay depth regen width speed wave phase interp
+if [ "$gain_in" = "0" ]
+then fwidth=inf
+elif [ "$decay" = 0 ]
+then fwidth=0
+else fwidth=`echo "100 * ($decay / $gain_in)" | bc -l | sed 's/\.0*$//'`
+fi
+fvol=`echo "$gain_out / ($decay + $gain_in)" | bc -l | sed 's/\.0*$//'`
+$sox sweep.wav flanger.wav \
+     flanger $delay $depth 0 $fwidth $speed $wave 0 $interp \
+     vol $fvol
+
+status=0
+
+# Calculate the absolute difference between the output waves
+stat=`$sox --combine merge chorus.wav flanger.wav -n remix 1v1,2v-1 stat 2>&1` || status=$?
+# Get minimum and maximum amplitude as an whole number of millionths
+min=`echo "$stat" | sed -n '/Minimum amplitude/s/.*: *//p' | sed 's/0\.0*//'`
+max=`echo "$stat" | sed -n '/Maximum amplitude/s/.*: *//p' | sed 's/0\.0*//'`
+
+echo min=$min max=$max
+
+# Linear gets -4 and +4, quadratic -7 and +7
+if [ "$min" -lt -9 ] || [ "$max" -gt 9 ]
+then status=2
+fi
+
+rm -f $generated_files
+
+exit $status

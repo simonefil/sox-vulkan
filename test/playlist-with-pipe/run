@@ -1,0 +1,38 @@
+#! /bin/sh
+
+# Test for playlists with entries starting with '|' that should be disallowed
+# to avoid command injection by a malicious playlist.
+# Identified and fixed by breakingbad from PJSK CTF.
+
+wine > /dev/null 2>&1
+status=$?
+case $status in
+0|1) : OK ;;
+*) echo "You don't seem to have wine installed" 1>&2
+   exit 254 ;;
+esac
+
+sox=${sox:-../../win32.exe}
+
+# If we're being run from check.sh, replace Unix exe with win exe.
+test "$sox" = "../../src/sox_ng" && sox=../../win32.exe
+
+test -f "$sox" || {
+  echo "You need to make $sox first" 1>&2
+  exit 254
+}
+
+file "$sox" | grep -q 'Windows' || {
+  echo "$sox is not a Windows eecutable" 1>&2
+  exit 254
+}
+
+rm -f PLAYLIST_MARKER.txt
+status=0
+wine "$sox" malicious.m3u -n
+test -f PLAYLIST_MARKER.txt && {
+  status=2
+  rm -f PLAYLIST_MARKER.txt
+}
+
+exit $status

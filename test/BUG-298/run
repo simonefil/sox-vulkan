@@ -1,0 +1,40 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/298/
+# "Use-after-free while feeding malformed aiff file"
+#
+#`There is a Use-After-Free vulnerability triggered by supplying a malformed
+# AIFF file to SoX, using the command
+#
+# ./sox -D -V -V %file% /dev/null
+
+# Reported on 2017-10-17
+
+# 14.4.2:
+# free(): double free detected in tcache 2
+# Aborted (core dumped)
+# with the address sanitizer, it says:
+# sox FAIL formats: can't open input file `crash00': AIFF: no sound data on input file
+# and the sanitizer only reports memory leaks.
+
+# Debian:
+# sox FAIL formats: can't open input file `crash00': AIFF: no sound data on input file
+# and exits 2
+
+# 42b355:
+# sox FAIL formats: can't open input file `crash00': AIFF: no sound data on input file
+# and exits 2
+
+rm -f core core.*
+
+${sox:-sox} -D crash00 /dev/null
+status=$?
+
+rm -f core core.*
+
+case "$status" in
+0) status=255;;
+2) status=0;;
+esac
+
+exit $status

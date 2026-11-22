@@ -1,0 +1,32 @@
+#! /bin/sh
+
+# spectrogram -x
+
+# Applying "sox spectrogram" with x axis of 1001 to a file of 1000 samples
+# produces a segmentation fault.
+#
+#    sox -c 1 -b 16 -r 1000 -n file.wav synth 1 sin 440 gain -3
+#    sox file.wav -n spectrogram -x 1001
+#
+# See https://sourceforge.net/p/sox/mailman/message/33196362
+
+rm -f core core.* sweep.wav spectrogram.png
+
+# Check whether sox was compiled with the spectrogram effect
+${sox:-sox} 2>&1 | grep -q '^EFFECTS:.*spectrogram' || exit 254
+
+# Make a swept sinusoid
+${sox:-sox} -D -n -b 16 -e signed sweep.wav synth 1 sine 27.5/14080
+
+${sox:-sox} sweep.wav -n spectrogram -x 1001   # Should not SEGV
+status=$?
+case $status in
+0)
+    ${sox:-sox} sweep.wav -n spectrogram -X 1001   # Should not SEGV
+    status=$?
+    ;;
+esac
+
+rm -f core core.* sweep.wav spectrogram.png
+
+exit $status

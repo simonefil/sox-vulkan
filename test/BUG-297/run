@@ -1,0 +1,19 @@
+#! /bin/sh
+
+# https://sourceforge.net/p/sox/bugs/297
+# SoX v14.4.2 vulnerable to a heap use-after-free condition
+# after parsing AIFF file and calling sox_append_comments()
+
+rm -f out.wav
+
+${sox:-sox} poc out.wav
+status=$?
+
+rm -f out.wav
+
+case $status in
+2) status=0;;
+0) status=2;;
+esac
+
+exit $status

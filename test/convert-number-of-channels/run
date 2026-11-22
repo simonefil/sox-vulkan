@@ -1,0 +1,79 @@
+#! /bin/sh
+
+# Check that automatic conversion of the number of channels works
+# for formats that only support mono and/or stereo and/or quad
+
+status=0
+
+rm -f out.*
+
+# mono-only formats
+for fmt in cvsd dvms gsrt hcom htk ima lpc10 prc smp sndr sndt txw vox wve
+do
+  for channels in 2 3 4 5
+  do
+    if ${sox:-sox} -n -c $channels out.$fmt trim 0 1
+    then
+      channels=`${sox:-sox} --info out.$fmt | sed -n 's/^Channels *: //p'`
+      test "$channels" -ne 1 && status=2
+      rm out.$fmt
+    else
+      status=$?
+    fi
+  done
+done
+
+# stereo-only formats
+for fmt in cdda
+do
+  for channels in 1 3 4 5
+  do
+    if ${sox:-sox} -n -c $channels out.$fmt trim 0 1
+    then
+      channels=`${sox:-sox} --info out.$fmt | sed -n 's/^Channels *: //p'`
+      test "$channels" -ne 2 && status=2
+      rm out.$fmt
+    else
+      status=$?
+    fi
+  done
+done
+
+# There are no quad-only formats
+
+# mono- and stereo- formats
+for fmt in avr maud voc
+do
+  for channels in 3 4 5
+  do
+    if ${sox:-sox} -n -c $channels out.$fmt trim 0 1
+    then
+      channels=`${sox:-sox} --info out.$fmt | sed -n 's/^Channels *: //p'`
+      test "$channels" -ne 2 && status=2
+      rm out.$fmt
+    else
+      status=$?
+    fi
+  done
+done
+
+# mono/stereo/quad: 8svx
+for fmt in 8svx
+do
+  for channels in 3 5
+  do
+    if ${sox:-sox} -n -c 3 out.$fmt trim 0 1
+    then
+      channels=`${sox:-sox} --info out.$fmt | sed -n 's/^Channels *: //p'`
+      test "$channels" -ne 4 && status=2
+      rm out.$fmt
+    else
+      status=$?
+    fi
+  done
+done
+
+# In theory, .amb files, a form of .wav, should have 3-9, 11 or 16 channels
+# but SoX reads and writes any number of them.
+
+exit $status

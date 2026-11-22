@@ -1,0 +1,17 @@
+#! /bin/sh
+
+# Check 50:50 mix is a no-op for "synth mix"
+
+set -e
+
+rm -f sweep.wav out.wav
+
+status=0
+
+${sox:-sox} -D -n -b 16 -e signed sweep.wav synth 10 sine 27.5/14080 || status=254
+${sox:-sox} -D sweep.wav out.wav synth 10 sine mix 27.5/14080 || status=254
+cmp -s sweep.wav out.wav || status=2
+
+rm sweep.wav out.wav
+
+exit $status

@@ -1019,12 +1019,12 @@ static char * * strtoargv(char * s, int * argc)
   char * t, * * argv = NULL;
 
   for (*argc = 0; *s;) {
-    for (; isspace(*s); ++s);    /* Skip past any (more) white space. */
+    for (; isspace((unsigned char)*s); ++s);    /* Skip past any (more) white space. */
     if (*s) {                    /* Found an arg. */
       lsx_revalloc(argv, *argc + 1);
       argv[(*argc)++] = s;       /* Store pointer to start of arg. */
                                  /* Find the end of the arg: */
-      for (t = s; *s && (esc || squote || dquote || !isspace(*s)); ++s)
+      for (t = s; *s && (esc || squote || dquote || !isspace((unsigned char)*s)); ++s)
         if (!esc && !squote && *s == '"')
           dquote = !dquote;      /* Toggle double quote mode. */
         else if (!esc && !dquote && *s == '\'')

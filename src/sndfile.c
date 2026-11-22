@@ -268,7 +268,7 @@ static int name_to_format(const char *name)
     buffer[FILE_TYPE_BUFLEN] = '\0';
 
     for (k = 0; buffer[k]; k++)
-      buffer[k] = tolower((buffer[k]));
+      buffer[k] = tolower((unsigned char)(buffer[k]));
   } else {
     strncpy(buffer, name, FILE_TYPE_BUFLEN);
     buffer[FILE_TYPE_BUFLEN] = '\0';

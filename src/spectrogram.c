@@ -431,7 +431,7 @@ static int start(sox_effect_t *effp)
   actual = make_window(p, p->last_end = 0);
   lsx_debug("window_density=%g", actual / p->dft_size);
   p->step_size = (p->slack_overlap ? sqrt(actual * p->dft_size) : actual) + 0.5;
-  p->block_steps = effp->in_signal.rate / pixels_per_sec;
+  p->block_steps = max(effp->in_signal.rate / pixels_per_sec, 1);
   p->step_size =
     p->block_steps / ceil((double)p->block_steps / p->step_size) + 0.5;
   p->block_steps = floor((double)p->block_steps / p->step_size + 0.5);

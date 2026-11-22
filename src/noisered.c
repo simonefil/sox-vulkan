@@ -319,8 +319,9 @@ static int sox_noisered_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *o
     priv_t * data = (priv_t *)effp->priv;
     unsigned i;
     unsigned tracks = effp->in_signal.channels;
+    *osamp = 0;
     for (i = 0; i < tracks; i ++)
-        *osamp = process_window(
+        *osamp += process_window(
             effp, data, i, tracks, obuf,
             (unsigned)data->bufdata);
 

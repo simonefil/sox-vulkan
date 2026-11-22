@@ -1883,25 +1883,53 @@ See also
 .B remix
 for an effect that allows channels to be mixed/selected arbitrarily.
 .TP
-\fBchorus \fIgain-in gain-out\fR <\fIdelay decay speed depth \fB\-s\fR\^|\^\fB\-t\fR>
-Add a chorus effect to the audio.  This can make a single vocal sound
-like a chorus, but can also be applied to instrumentation.
+\fBchorus [\fB\-n\fR\^|\^\fBl\fR\^|\^\fBq\fR] [\fB\-s\fR\^|\^\fBt\fR] [\fIgain-in [gain-out\fR {\fIdelay [decay [speed [depth [\fB\-s\fR\^|\^\fBt\fR]]]]}]]
+Add a chorus effect to the audio.  This can make a single voice sound
+like a chorus but can also be applied to instrumentation.
 .SP
-Chorus resembles an echo effect with a short delay, but
-whereas with echo the delay is constant, with chorus, it
-is varied using sinusoidal or triangular modulation.  The modulation
-depth defines the range the modulated delay is played before or after the
-delay. Hence the delayed sound will sound slower or faster, that is the delayed
-sound tuned around the original one, like in a chorus where some vocals are
-slightly off key.
-See [3] for more discussion of the chorus effect.
+Chorus resembles an \fBecho\fR effect with a short delay but,
+while \fBecho\fR's delay is constant, \fBchorus\fR' delay
+varies by a sinusoidal or triangular modulation.
 .SP
-Each four-tuple parameter
-delay/decay/speed/depth gives the delay in milliseconds
-and the decay (relative to gain-in) with a modulation
-speed in Hz using depth in milliseconds.
-The modulation is either sinusoidal (\fB\-s\fR) or triangular
-(\fB\-t\fR).  Gain-out is the volume of the output.
+See [3] for further discussion of the chorus effect.
+.SP
+The \fB\-l\fR flag makes \fBchorus\fR do linear interpolation between samples
+when the offset into the delay line is not a whole number,
+which is slower but makes it considerably less noisy and
+\fB\-q\fR asks for quadratic interpolation which is
+slower still but makes it even less noisy.
+\fB\-n\fR explicitly asks for no interpolation, the default, fast and fuzzy.
+.SP
+\fB\-s\fR or \fB\-t\fR before the stages change the default wave type
+for all of them.
+.SP
+All parameters are optional and, if missing, assume the following values:
+.SP
+.TS
+lb lb lb lb
+l c c le.
+Parameter	Range	Default	Description
+gain-in	-1-1	0.5	T{
+Proportion of input
+.br
+delivered clean to the adder
+T}
+gain-out	-1-1	1	Final volume adjustment
+delay	0-1000	50	Fixed delay in milliseconds
+decay	-1-1	0.5	Volume of delayed output
+speed	0-192k	0.25	Modulation frequency
+depth	0-1000	2	Extra delay in milliseconds
+wave	-s\^|\^-t	-s	Sinusoidal/triangular modulation
+.TE
+.SP
+Each delay ranges from the fixed \fIdelay\fR to \fIdelay\fR\ \(pl\ \fIdepth\fR.
+.SP
+\fIGain-out\fR is then applied to the sum of the input scaled by \fIgain-in\fP
+and the outputs from the delays scaled by their \fIdecay\fRs:
+a safe \fIgain-out\fR is at most
+1\ \(di\ (\fIgain-in\fR\ \(pl\ \fIdecay\fR\ 1\ \(pl\ ...\ \(pl\ \fIdecay\fR\ n).
+.SP
+There is a limit of 256 chorus stages.
 .SP
 A typical delay is around 40ms to 60ms; the modulation speed is best
 near 0\*d25Hz and the modulation depth around 2ms.
@@ -1915,11 +1943,20 @@ Two delays of the original samples:
    play guitar1.wav chorus 0.6 0.9 50 0.4 0.25 2 \-t \\
 	 60 0.32 0.4 1.3 \-s
 .EE
-A fuller sounding chorus (with three additional delays):
+A fuller-sounding chorus (with three additional delays):
 .EX
 .ne 2
    play guitar1.wav chorus 0.5 0.9 50 0.4 0.25 2 \-t \\
 	 60 0.32 0.4 2.3 \-t 40 0.3 0.3 1.3 \-s
+.EE
+\fBflanger\fR can do everything that \fBchorus\fR does except multiple stages:
+.EX
+   chorus \-l gain-in gain-out delay decay speed depth \-wave
+.EE
+is equivalent to
+.EX
+   flanger delay depth 0 100\(mudecay\(digain-in speed wave 0 \\
+      vol gain-out\(di(gain-in\(pldecay)
 .EE
 .TP
 \fBcompand \fIattack1\fB,\fIdecay1\fR{\fB,\fIattack2\fB,\fIdecay2\fR}

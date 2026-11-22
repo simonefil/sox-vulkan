@@ -71,9 +71,15 @@ int lsx_check_read_params(sox_format_t * ft, unsigned channels,
     ft->signal.channels = channels;
   }
 
-  if (rate && ft->signal.rate && ft->signal.rate != rate)
+  if (rate && ft->signal.rate && ft->signal.rate != rate) {
     lsx_warn("`%s': overriding sample rate", ft->filename);
-  else ft->signal.rate = rate;
+  /* Since NaN comparisons yield false, the negation rejects them. */
+  } else if (!(rate > 0)) {
+    lsx_fail_errno(ft, EINVAL, "invalid rate value");
+    return SOX_EOF;
+  } else {
+    ft->signal.rate = rate;
+  }
 
   if (encoding && ft->encoding.encoding && ft->encoding.encoding != encoding)
     lsx_warn("`%s': overriding encoding type", ft->filename);

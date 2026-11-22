@@ -2624,7 +2624,7 @@ static char parse_gopts_and_fopts(file_t * f)
       case 17: sox_globals.use_threads = sox_false; break;
       case 18: f->signal.length = SOX_IGNORE_LENGTH; break;
       case 19: do_guarded_norm = is_guarded = sox_true;
-        norm_level = lsx_strdup(optstate.arg);
+        if (optstate.arg) norm_level = lsx_strdup(optstate.arg);
         break;
       case 20:
         if (info->flags & sox_version_have_magic)

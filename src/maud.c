@@ -18,8 +18,15 @@
 #include <errno.h>
 
 /* Private data for MAUD file */
+/* Writing files, the size is always rounded up to a multiple of 2
+ * but when reading them with lsx_rawread(), this returns one sample more
+ * than is right from a mono file with an odd number of samples
+ * so we check the number of samples we have read and stop when we have
+ * had enough.
+ */
 typedef struct {
         uint32_t nsamples;
+        uint32_t nread;
 } priv_t;
 
 static int maudwriteheader(sox_format_t *);
@@ -205,7 +212,24 @@ static int startread(sox_format_t * ft)
         }
         if (lsx_readdw(ft, &(p->nsamples)))
             return(SOX_EOF);
+        p->nread = 0;
         return(SOX_SUCCESS);
+}
+
+static size_t read_samples(sox_format_t * ft, sox_sample_t * buf, size_t nsamp)
+{
+    priv_t * p = (priv_t *) ft->priv;
+    uint32_t n_to_read;
+    uint32_t nread;
+
+    if (p->nsamples == 0x7f000000)
+        /* Read partially-written files to the end */
+        n_to_read = nsamp;
+    else
+        n_to_read = min(nsamp, p->nsamples - p->nread);
+    nread = lsx_rawread(ft, buf, n_to_read);
+    p->nread += nread;
+    return nread;
 }
 
 static int startwrite(sox_format_t * ft)
@@ -371,7 +395,7 @@ LSX_FORMAT_HANDLER(maud)
   static sox_format_handler_t const handler = {SOX_LIB_VERSION_CODE,
     "Used with the ‘Toccata’ sound-card on the Amiga",
     names, SOX_FILE_BIG_END | SOX_FILE_MONO | SOX_FILE_STEREO,
-    startread, lsx_rawread, lsx_rawstopread,
+    startread, read_samples, lsx_rawstopread,
     startwrite, write_samples, stopwrite,
     NULL, write_encodings, NULL, sizeof(priv_t)
   };

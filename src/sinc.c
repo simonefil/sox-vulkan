@@ -17,6 +17,7 @@
 
 #include "sox_i.h"
 #include "dft_filter.h"
+#include <ctype.h>
 #include <string.h>
 
 typedef struct {
@@ -53,6 +54,22 @@ static int create(sox_effect_t * effp, int argc, char * * argv)
       case 't': p->tbw1 = lsx_parse_frequency(optstate.arg, &parse_ptr2);
         if (p->tbw1 < 1 || *parse_ptr2) return lsx_usage(effp);
         break;
+      case '?': case ':':
+        if (optstate.ind < argc &&
+            argv[optstate.ind][0] == '-' && isdigit((unsigned char)argv[optstate.ind][1])) {
+          /* "-1000" */
+          c = 0;
+          break;
+        }
+        if (optstate.ind == argc && strchr(optstate.shortopts, optstate.opt))
+          /* Missing obligatory parameter */
+          lsx_fail("%s what?", argv[optstate.ind - 1]);
+        else {
+          /* Invalid option flag */
+          lsx_fail("unknown option `-%c'", optstate.opt);
+          lsx_usage(effp);
+        }
+        return SOX_EOF;
       default: c = 0;
     }
     if ((p->att && p->beta >= 0) || (p->tbw1 && p->num_taps[1]))

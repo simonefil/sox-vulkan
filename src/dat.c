@@ -108,7 +108,7 @@ static size_t sox_datread(sox_format_t * ft, sox_sample_t *buf, size_t nsamp)
         SOX_SAMPLE_LOCALS;
         retc = sscanf(&inpstr[inpPtr]," %lg%n", &sampval, &inpPtrInc);
         inpPtr += inpPtrInc;
-        if (retc != 1) {
+        if (retc != 1 || !isfinite(sampval)) {
           lsx_fail_errno(ft,SOX_EOF,"Unable to read sample.");
           return 0;
         }

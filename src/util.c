@@ -18,6 +18,7 @@
 
 #include "sox_i.h"
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 
 int lsx_strcasecmp(const char * s1, const char * s2)
@@ -44,6 +45,40 @@ int lsx_strncasecmp(char const * s1, char const * s2, size_t n)
     s1++, s2++;
   return toupper(*s1) - toupper(*s2);
 #endif
+}
+
+/* A version of sscanf() that disallows NaNs, which tend to provoke
+ * Floating Point Exceptions.
+ *
+ * Almost all uses of sscanf for floating point values start with %f or %lf
+ * with one " %lg" in dat.c (reading textual FP sample values),
+ * which checks for itself.
+ */
+#undef sscanf
+int lsx_sscanf(const char *str, const char *format, ...)
+{
+  va_list va, va2;
+  int retval;
+
+  va_start(va, format);
+  va_copy(va2, va);
+  retval = vsscanf(str, format, va);
+
+  /* float */
+  if (retval > 0 && format[0] == '%' && format[1] == 'f') {
+    float *ptr = va_arg(va2, float *);
+    if (isnan(*ptr)) retval = 0;
+  }
+
+  /* double */
+  if (retval > 0 && format[0] == '%' && format[1] == 'l' && format[2] == 'f') {
+    double *ptr = va_arg(va2, double *);
+    if (isnan(*ptr)) retval = 0;
+  }
+
+  va_end(va2);
+  va_end(va);
+  return retval;
 }
 
 sox_bool lsx_strends(char const * str, char const * end)

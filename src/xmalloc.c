@@ -69,5 +69,5 @@ void *lsx_realloc_array(void *p, size_t n, size_t size)
 
 char *lsx_strdup(const char *s)
 {
-  return lsx_checkptr(strdup(s));
+  return s ? lsx_checkptr(strdup(s)) : NULL;
 }

@@ -33,6 +33,8 @@ struct gsm_state {
 	word		v[9];		/* short_term.c, synthesis	*/
 	word		msr;		/* decoder.c,	Postprocessing	*/
 
+	word		e[ 50 ];	/* code.c 			*/
+
 	char		verbose;	/* only used if !NDEBUG		*/
 	char		fast;		/* only used if FAST		*/
 

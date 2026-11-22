@@ -751,8 +751,10 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
 #define POPEN_MODE "r"
 #endif
     f = popen(identifier + 1, POPEN_MODE);
-    *io_type = lsx_io_pipe;
-    incr_pipe_size(f);
+    if (f) {
+      *io_type = lsx_io_pipe;
+      incr_pipe_size(f);
+    }
 #else
     lsx_fail("this build of SoX cannot open pipes");
 #endif

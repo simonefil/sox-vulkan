@@ -95,7 +95,9 @@ static sox_bool read_knots(sox_effect_t * effp)
       if (num_converted == 2) {
         if (p->num_knots && p->knots[p->num_knots].f <= p->knots[p->num_knots - 1].f) {
           lsx_fail("knot frequencies must be strictly increasing");
-          break;
+          if (file != stdin)
+            fclose(file);
+          return sox_false;
         }
         lsx_revalloc(p->knots, ++p->num_knots + 1);
       } else if (num_converted != 0)

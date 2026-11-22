@@ -99,11 +99,11 @@ static int parse(sox_effect_t * effp, char **argv, sox_rate_t rate)
     /* sanity checks */
     if (!argv && p->bends[i].duration < p->bends[i].start) {
       lsx_fail("Bend %" PRIuPTR " has negative width", i+1);
-      break;
+      return SOX_EOF;
     }
     if (!argv && i && p->bends[i].start < p->bends[i-1].start) {
       lsx_fail("Bend %" PRIuPTR " overlaps with previous one", i+1);
-      break;
+      return SOX_EOF;
     }
 
     p->bends[i].duration -= p->bends[i].start;
@@ -147,7 +147,10 @@ static int start(sox_effect_t * effp)
     return SOX_EOF;
   }
   p->shift = 1;
-  parse(effp, 0, effp->in_signal.rate); /* Re-parse now rate is known */
+  /* Re-parse now rate is known */
+  if (parse(effp, 0, effp->in_signal.rate))
+    return SOX_EFF_NULL;
+
   p->in_pos = p->bends_pos = 0;
   for (i = 0; i < p->nbends; ++i) {
     if (p->bends[i].duration) {

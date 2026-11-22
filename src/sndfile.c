@@ -170,6 +170,7 @@ static sox_encoding_t sox_enc(int ft_encoding, unsigned * size)
     case SF_FORMAT_DWVW_24  : *size = 24; return SOX_ENCODING_DWVW;
     case SF_FORMAT_DWVW_N   : *size =  0; return SOX_ENCODING_DWVWN;
     case SF_FORMAT_GSM610   : *size =  0; return SOX_ENCODING_GSM;
+    case SF_FORMAT_VORBIS   : *size =  0; return SOX_ENCODING_VORBIS;
     default                 : *size =  0; return SOX_ENCODING_UNKNOWN;
   }
 }

@@ -20,6 +20,7 @@
  */
 
 #include "sox_i.h"
+#include <limits.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <stdarg.h>
@@ -61,9 +62,14 @@ int lsx_check_read_params(sox_format_t * ft, unsigned channels,
   if (ft->seekable)
     ft->data_start = lsx_tell(ft);
 
-  if (channels && ft->signal.channels && ft->signal.channels != channels)
+  if (channels && ft->signal.channels && ft->signal.channels != channels) {
     lsx_warn("`%s': overriding number of channels", ft->filename);
-  else ft->signal.channels = channels;
+  } else if (channels > SHRT_MAX) {
+    lsx_fail_errno(ft, EINVAL, "implausibly large number of channels");
+    return SOX_EOF;
+  } else {
+    ft->signal.channels = channels;
+  }
 
   if (rate && ft->signal.rate && ft->signal.rate != rate)
     lsx_warn("`%s': overriding sample rate", ft->filename);

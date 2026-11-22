@@ -1154,19 +1154,37 @@ static void set_output_format(sox_format_t * ft)
     ft->signal.rate = SOX_DEFAULT_RATE;
 
   if (ft->handler.flags & SOX_FILE_CHANS) {
-    if (ft->signal.channels == 1 && !(ft->handler.flags & SOX_FILE_MONO)) {
-      ft->signal.channels = (ft->handler.flags & SOX_FILE_STEREO)? 2 : 4;
-      lsx_warn("%s can't encode mono; setting channels to %u", ft->handler.names[0], ft->signal.channels);
-    } else
-    if (ft->signal.channels == 2 && !(ft->handler.flags & SOX_FILE_STEREO)) {
-      ft->signal.channels = (ft->handler.flags & SOX_FILE_QUAD)? 4 : 1;
-      lsx_warn("%s can't encode stereo; setting channels to %u", ft->handler.names[0], ft->signal.channels);
-    } else
-    if (ft->signal.channels == 4 && !(ft->handler.flags & SOX_FILE_QUAD)) {
-      ft->signal.channels = (ft->handler.flags & SOX_FILE_STEREO)? 2 : 1;
-      lsx_warn("%s can't encode quad; setting channels to %u", ft->handler.names[0], ft->signal.channels);
+    unsigned wanted = ft->signal.channels; /* to see if we changed it */
+
+    switch (ft->signal.channels) {
+    case 1:
+      if (!(ft->handler.flags & SOX_FILE_MONO))
+        ft->signal.channels = (ft->handler.flags & SOX_FILE_STEREO)? 2 : 4;
+      break;
+    case 2:
+      if (!(ft->handler.flags & SOX_FILE_STEREO))
+        ft->signal.channels = (ft->handler.flags & SOX_FILE_QUAD)? 4 : 1;
+      break;
+    case 4:
+      if (!(ft->handler.flags & SOX_FILE_QUAD))
+        ft->signal.channels = (ft->handler.flags & SOX_FILE_STEREO)? 2 : 1;
+      break;
+    default:
+      /* For 3-channel and >4-channel, convert to the best supported one */
+      if (ft->handler.flags & SOX_FILE_QUAD)
+        ft->signal.channels = 4;
+      else if (ft->handler.flags & SOX_FILE_STEREO)
+        ft->signal.channels = 2;
+      else if (ft->handler.flags & SOX_FILE_MONO)
+        ft->signal.channels = 1;
     }
-  } else ft->signal.channels = max(ft->signal.channels, 1);
+    if (ft->signal.channels != wanted)
+      lsx_warn("%s can't encode %u channel%s; setting to %u",
+                ft->handler.names[0], wanted, wanted > 1 ? "s" : "",
+                ft->signal.channels);
+  } else {
+    ft->signal.channels = max(ft->signal.channels, 1);
+  }
 
   if (!encodings)
     return;

@@ -78,14 +78,17 @@
 #cmakedefine HAVE_SYS_IOCTL_H         1
 
 /* Functions */
+#cmakedefine HAVE_ALIGNED_ALLOC       1
 #cmakedefine HAVE_FMEMOPEN            1
 #cmakedefine HAVE_FORK                1
 #cmakedefine HAVE_FSEEKO              1
 #cmakedefine HAVE_GETTIMEOFDAY        1
 #cmakedefine HAVE_LRINT               1
+#cmakedefine HAVE_MEMALIGN            1
 #cmakedefine HAVE_MKSTEMP             1
 #cmakedefine HAVE_PIPE                1
 #cmakedefine HAVE_POPEN               1
+#cmakedefine HAVE_POSIX_MEMALIGN      1
 #cmakedefine HAVE_STRCASECMP          1
 #cmakedefine HAVE_STRDUP              1
 #cmakedefine HAVE_VSNPRINTF           1

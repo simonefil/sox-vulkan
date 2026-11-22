@@ -235,6 +235,10 @@ check_function_exists(mkstemp HAVE_MKSTEMP)
 check_function_exists(fmemopen HAVE_FMEMOPEN)
 check_function_exists(lrint HAVE_LRINT)
 check_function_exists(fseeko HAVE_FSEEKO)
+# Heap allocation aligned for sdm's LSX_ALIGN(32) state
+check_function_exists(aligned_alloc HAVE_ALIGNED_ALLOC)
+check_function_exists(memalign HAVE_MEMALIGN)
+check_function_exists(posix_memalign HAVE_POSIX_MEMALIGN)
 
 # Math library
 include(CheckLibraryExists)

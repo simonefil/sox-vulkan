@@ -196,12 +196,39 @@
 
 #ifdef HAVE_ALIGNED_ALLOC
   #define aligned_free(p) free(p)
+#elif defined(HAVE_MEMALIGN)
+  #include <malloc.h>
+  #define aligned_alloc(a, s) memalign(a, s)
+  #define aligned_free(p) free(p)
+#elif defined(HAVE_POSIX_MEMALIGN)
+  #include <errno.h>
+static inline void *sox_aligned_alloc_pm(size_t align, size_t size)
+{
+  void *ptr;
+  int err = posix_memalign(&ptr, align, size);
+
+  if (!err) return ptr;
+  errno = err;
+  return 0;
+}
+  #define aligned_alloc(a, s) sox_aligned_alloc_pm(a, s)
+  #define aligned_free(p) free(p)
 #elif defined _MSC_VER
   #define aligned_alloc(a, s) _aligned_malloc(s, a)
   #define aligned_free(p) _aligned_free(p)
 #else
-  #define aligned_alloc(a, s) malloc(s)
-  #define aligned_free(p) free(p)
+static inline void *sox_aligned_alloc_m(size_t align, size_t size)
+{
+  void *res = malloc(align + size + sizeof(void *));
+  char *aligned = (char *)res + align + sizeof(void *);
+
+  aligned -= ((size_t)aligned & (align - 1));
+  ((void **)aligned)[-1] = res;
+  return (void *)aligned;
+}
+
+  #define aligned_alloc(a, s) sox_aligned_alloc_m(a, s)
+  #define aligned_free(p) free(((void**)p)[-1])
 #endif
 
 /*------------------------------- Maths stuff --------------------------------*/

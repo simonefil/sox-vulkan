@@ -3440,9 +3440,10 @@ diminished.  Applying a small amount of stereo reverb to a (dry) mono signal
 will usually make it sound more natural.  See [3] for a detailed description
 of reverberation.
 .SP
-Note that this effect
-increases both the volume and the length of the audio, so to prevent clipping
-in these domains, a typical invocation might be:
+This effect increases the volume of the audio and continues to reverberate
+after the input finishes so, to prevent clipping and
+keep the audible part of the final reverberation,
+a typical invocation might be:
 .EX
    play dry.wav gain \-3 pad 0 3 reverb
 .EE

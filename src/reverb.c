@@ -271,7 +271,8 @@ sox_effect_handler_t const *lsx_reverb_effect_fn(void)
     " [pre-delay (0ms)"
     " [wet-gain (0dB)"
     "]]]]]]",
-    SOX_EFF_MCHAN, getopts, start, flow, NULL, stop, NULL, sizeof(priv_t)
+    SOX_EFF_MCHAN | SOX_EFF_CHAN,
+    getopts, start, flow, NULL, stop, NULL, sizeof(priv_t)
   };
   return &handler;
 }

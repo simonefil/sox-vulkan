@@ -625,6 +625,10 @@ static int getblock(sox_format_t * ft)
         v->rate = new_rate_32;
         ft->signal.rate = new_rate_32;
         lsx_readb(ft, &uc);
+        if (uc <= 1) {
+          lsx_fail_errno(ft, SOX_EFMT, "2 bits per word required");
+          return (SOX_EOF);
+        }
         v->size = uc;
         lsx_readb(ft, &uc);
         if (v->channels != -1 && uc != v->channels) {

@@ -181,11 +181,17 @@ static int stop_write(sox_format_t * ft)
   if (ft->seekable && WavpackGetNumSamples(p->codec) != WavpackGetSampleIndex(p->codec) && p->first_block_size >= 4) {
     char * buf = lsx_malloc(p->first_block_size);
     lsx_rewind(ft);
-    lsx_readchars(ft, buf, p->first_block_size);
+    if (lsx_readchars(ft, buf, p->first_block_size)) {
+      lsx_fail_errno(ft, SOX_EOF, "Cannot reread header");
+      return SOX_EOF;
+    }
     if (!memcmp(buf, "wvpk", (size_t)4)) {
       WavpackUpdateNumSamples(p->codec, buf);
       lsx_rewind(ft);
-      lsx_writebuf(ft, buf, p->first_block_size);
+      if (lsx_writebuf(ft, buf, p->first_block_size) != p->first_block_size) {
+        lsx_fail_errno(ft, SOX_EOF, "Cannot rewrite header");
+        return SOX_EOF;
+      }
     }
     free(buf);
   }

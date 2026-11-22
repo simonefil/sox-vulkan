@@ -237,8 +237,8 @@ int lsx_adpcm_stopread(sox_format_t * ft UNUSED, adpcm_io_t * state)
  *              state  - ADPCM state structure
  *              buffer - output buffer
  *              length - size of output buffer
- * Returns    : int    - SOX_SUCCESS
- *                       SOX_EOF
+ * Returns    : size_t - the number of samples written
+ *                       or (size_t)SOX_EOF on failure
  * Exceptions :
  * Notes      :
  ******************************************************************************/
@@ -263,7 +263,10 @@ size_t lsx_adpcm_write(sox_format_t * ft, adpcm_io_t * state, const sox_sample_t
       state->file.buf[state->file.count++] = byte;
 
       if (state->file.count >= state->file.size) {
-        lsx_writebuf(ft, state->file.buf, state->file.count);
+        if (lsx_writebuf(ft, state->file.buf, state->file.count) != state->file.count) {
+	  lsx_fail_errno(ft, SOX_EOF, "write error");
+	  return (size_t) SOX_EOF;
+       }
 
         state->file.count = 0;
       }
@@ -283,12 +286,12 @@ size_t lsx_adpcm_write(sox_format_t * ft, adpcm_io_t * state, const sox_sample_t
  * Description: Flushes any leftover samples.
  * Parameters : ft   - file info structure
  *              state  - ADPCM state structure
- * Returns    :
+ * Returns    : int - SOX_SUCCESS or SOX_EOF
  * Exceptions :
  * Notes      : 1. Called directly for writing framed formats
  ******************************************************************************/
 
-void lsx_adpcm_flush(sox_format_t * ft, adpcm_io_t * state)
+int lsx_adpcm_flush(sox_format_t * ft, adpcm_io_t * state)
 {
   uint8_t byte = state->store.byte;
   uint8_t flag = state->store.flag;
@@ -300,7 +303,11 @@ void lsx_adpcm_flush(sox_format_t * ft, adpcm_io_t * state)
     state->file.buf[state->file.count++] = byte;
   }
   if (state->file.count > 0)
-    lsx_writebuf(ft, state->file.buf, state->file.count);
+    if(lsx_writebuf(ft, state->file.buf, state->file.count) != state->file.count) {
+      lsx_fail_errno(ft, SOX_EOF, "write error");
+      return SOX_EOF;
+    }
+  return SOX_SUCCESS;
 }
 
 /******************************************************************************
@@ -309,14 +316,14 @@ void lsx_adpcm_flush(sox_format_t * ft, adpcm_io_t * state)
  *              allocated in voxstart/imastart.
  * Parameters : ft   - file info structure
  *              state  - ADPCM state structure
- * Returns    : int  - SOX_SUCCESS
+ * Returns    : int  - SOX_SUCCESS or SOX_EOF
  * Exceptions :
  * Notes      :
  ******************************************************************************/
 
 int lsx_adpcm_stopwrite(sox_format_t * ft, adpcm_io_t * state)
 {
-  lsx_adpcm_flush(ft, state);
+  int retval = lsx_adpcm_flush(ft, state);
   free(state->file.buf);
-  return (SOX_SUCCESS);
+  return retval;
 }

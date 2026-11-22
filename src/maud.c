@@ -22,7 +22,7 @@ typedef struct {
         uint32_t nsamples;
 } priv_t;
 
-static void maudwriteheader(sox_format_t *);
+static int maudwriteheader(sox_format_t *);
 
 /*
  * Do anything required before you start reading samples.
@@ -48,21 +48,29 @@ static int startread(sox_format_t * ft)
         uint16_t trash16;
         int rc;
 
+#define read_error() { \
+        lsx_fail_errno(ft, SOX_EOF, "file is truncated in %.4s chunk", buf); \
+        return (SOX_EOF); \
+}
+
         /* Needed for rawread() */
         rc = lsx_rawstartread(ft);
         if (rc)
             return rc;
 
         /* read FORM chunk */
-        if (lsx_reads(ft, buf, (size_t)4) == SOX_EOF || strncmp(buf, "FORM", (size_t)4) != 0)
+        if (lsx_reads(ft, buf, (size_t)4) == SOX_EOF)
+                read_error();
+        if (strncmp(buf, "FORM", (size_t)4) != 0)
         {
                 lsx_fail_errno(ft,SOX_EHDR,"MAUD: header does not begin with magic word `FORM'");
                 return (SOX_EOF);
         }
 
-        lsx_readdw(ft, &trash32); /* totalsize */
-
-        if (lsx_reads(ft, buf, (size_t)4) == SOX_EOF || strncmp(buf, "MAUD", (size_t)4) != 0)
+        if (lsx_readdw(ft, &trash32) || /* totalsize */
+            lsx_reads(ft, buf, (size_t)4))
+                read_error();
+        if (strncmp(buf, "MAUD", (size_t)4) != 0)
         {
                 lsx_fail_errno(ft,SOX_EHDR,"MAUD: `FORM' chunk does not specify `MAUD' as type");
                 return(SOX_EOF);
@@ -79,7 +87,8 @@ static int startread(sox_format_t * ft)
 
                 if (strncmp(buf,"MHDR",(size_t)4) == 0) {
 
-                        lsx_readdw(ft, &chunksize);
+                        if (lsx_readdw(ft, &chunksize))
+			    read_error();
                         if (chunksize != 8*4)
                         {
                             lsx_fail_errno(ft,SOX_EHDR,"MAUD: MHDR chunk has bad size");
@@ -87,16 +96,16 @@ static int startread(sox_format_t * ft)
                         }
 
                         /* number of samples stored in MDAT */
-                        lsx_readdw(ft, &(p->nsamples));
-
-                        /* number of bits per sample as stored in MDAT */
-                        lsx_readw(ft, &bitpersam);
-
-                        /* number of bits per sample after decompression */
-                        lsx_readw(ft, &trash16);
-
-                        lsx_readdw(ft, &nom);         /* clock source frequency */
-                        lsx_readw(ft, &denom);       /* clock devide           */
+                        if (lsx_readdw(ft, &(p->nsamples)) ||
+                            /* number of bits per sample as stored in MDAT */
+                            lsx_readw(ft, &bitpersam) ||
+                            /* number of bits per sample after decompression */
+                            lsx_readw(ft, &trash16) ||
+			    /* clock source frequency */
+                            lsx_readdw(ft, &nom) ||
+			    /* clock divide */
+                            lsx_readw(ft, &denom))
+			    read_error();
                         if (denom == 0)
                         {
                             lsx_fail_errno(ft,SOX_EHDR,"MAUD: frequency denominator == 0, failed");
@@ -105,7 +114,8 @@ static int startread(sox_format_t * ft)
 
                         ft->signal.rate = nom / denom;
 
-                        lsx_readw(ft, &chaninf); /* channel information */
+                        if (lsx_readw(ft, &chaninf)) /* channel information */
+			    read_error();
                         switch (chaninf) {
                         case 0:
                                 ft->signal.channels = 1;
@@ -118,18 +128,20 @@ static int startread(sox_format_t * ft)
                                 return (SOX_EOF);
                         }
 
-                        lsx_readw(ft, &chaninf); /* number of channels (mono: 1, stereo: 2, ...) */
+                        /* number of channels (mono: 1, stereo: 2, ...) */
+                        if (lsx_readw(ft, &chaninf))
+                                return(SOX_EOF);
                         if (chaninf != ft->signal.channels)
                         {
                                 lsx_fail_errno(ft,SOX_EFMT,"MAUD: unsupported number of channels in file");
                             return(SOX_EOF);
                         }
 
-                        lsx_readw(ft, &chaninf); /* compression type */
-
-                        lsx_readdw(ft, &trash32); /* rest of chunk, unused yet */
-                        lsx_readdw(ft, &trash32);
-                        lsx_readdw(ft, &trash32);
+                        if (lsx_readw(ft, &chaninf) || /* compression type */
+                            lsx_readdw(ft, &trash32) || /* rest of chunk, unused yet */
+                            lsx_readdw(ft, &trash32) ||
+                            lsx_readdw(ft, &trash32))
+                                return(SOX_EOF);
 
                         if (bitpersam == 8 && chaninf == 0) {
                                 ft->encoding.bits_per_sample = 8;
@@ -157,7 +169,8 @@ static int startread(sox_format_t * ft)
                 }
 
                 if (strncmp(buf,"ANNO",(size_t)4) == 0) {
-                        lsx_readdw(ft, &chunksize);
+                        if (lsx_readdw(ft, &chunksize))
+			        return(SOX_EOF);
                         if (chunksize & 1)
                                 chunksize++;
                         chunk_buf = lsx_malloc(chunksize + (size_t)1);
@@ -175,10 +188,12 @@ static int startread(sox_format_t * ft)
                 }
 
                 /* some other kind of chunk */
-                lsx_readdw(ft, &chunksize);
+                if (lsx_readdw(ft, &chunksize))
+			return(SOX_EOF);
                 if (chunksize & 1)
                         chunksize++;
-                lsx_seeki(ft, (off_t)chunksize, SEEK_CUR);
+                if (lsx_seeki(ft, (off_t)chunksize, SEEK_CUR))
+			return(SOX_EOF);
                 continue;
 
         }
@@ -188,7 +203,8 @@ static int startread(sox_format_t * ft)
             lsx_fail_errno(ft,SOX_EFMT,"MAUD: MDAT chunk not found");
             return(SOX_EOF);
         }
-        lsx_readdw(ft, &(p->nsamples));
+        if (lsx_readdw(ft, &(p->nsamples)))
+            return(SOX_EOF);
         return(SOX_SUCCESS);
 }
 
@@ -196,6 +212,7 @@ static int startwrite(sox_format_t * ft)
 {
         priv_t * p = (priv_t *) ft->priv;
         int rc;
+	int status;
 
         /* Needed for rawwrite() */
         rc = lsx_rawstartwrite(ft);
@@ -209,9 +226,9 @@ static int startwrite(sox_format_t * ft)
             return (SOX_EOF);
         }
         p->nsamples = 0x7f000000;
-        maudwriteheader(ft);
+        status = maudwriteheader(ft);
         p->nsamples = 0;
-        return (SOX_SUCCESS);
+        return (status);
 }
 
 static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t len)
@@ -238,90 +255,108 @@ static int stopwrite(sox_format_t * ft)
             return(SOX_EOF);
         }
 
-        maudwriteheader(ft);
-        return(SOX_SUCCESS);
+        return(maudwriteheader(ft));
+}
+
+#define write_error() { \
+	lsx_fail_errno(ft, SOX_EOF, "write error"); \
+	return SOX_EOF; \
 }
 
 #define MAUDHEADERSIZE (4+(4+4+32)+(4+4+19+1)+(4+4))
-static void maudwriteheader(sox_format_t * ft)
+static int maudwriteheader(sox_format_t * ft)
 {
         priv_t * p = (priv_t *) ft->priv;
         uint32_t mdat_size; /* MDAT chunk size */
 
         mdat_size = p->nsamples * (ft->encoding.bits_per_sample >> 3);
 
-        lsx_writes(ft, "FORM");
-        lsx_writedw(ft, MAUDHEADERSIZE + mdat_size + mdat_size%2);  /* size of file */
-        lsx_writes(ft, "MAUD"); /* File type */
+        if (lsx_writes(ft, "FORM") ||
+            lsx_writedw(ft, MAUDHEADERSIZE + mdat_size + mdat_size%2) ||  /* size of file */
+            lsx_writes(ft, "MAUD") ||     /* File type */
 
-        lsx_writes(ft, "MHDR");
-        lsx_writedw(ft,  8*4); /* number of bytes to follow */
-        lsx_writedw(ft, p->nsamples);  /* number of samples stored in MDAT */
+            lsx_writes(ft, "MHDR") ||
+            lsx_writedw(ft,  8*4) ||      /* number of bytes to follow */
+            lsx_writedw(ft, p->nsamples)) /* number of samples stored in MDAT */
+	  write_error();
 
         switch (ft->encoding.encoding) {
 
         case SOX_ENCODING_UNSIGNED:
-          lsx_writew(ft, 8); /* number of bits per sample as stored in MDAT */
-          lsx_writew(ft, 8); /* number of bits per sample after decompression */
+          if (lsx_writew(ft, 8) || /* number of bits per sample as stored in MDAT */
+              lsx_writew(ft, 8)) /* number of bits per sample after decompression */
+	    write_error();
           break;
 
         case SOX_ENCODING_SIGN2:
-          lsx_writew(ft, 16); /* number of bits per sample as stored in MDAT */
-          lsx_writew(ft, 16); /* number of bits per sample after decompression */
+          if (lsx_writew(ft, 16) || /* number of bits per sample as stored in MDAT */
+              lsx_writew(ft, 16)) /* number of bits per sample after decompression */
+	    write_error();
           break;
 
         case SOX_ENCODING_ALAW:
         case SOX_ENCODING_ULAW:
-          lsx_writew(ft, 8); /* number of bits per sample as stored in MDAT */
-          lsx_writew(ft, 16); /* number of bits per sample after decompression */
+          if (lsx_writew(ft, 8) || /* number of bits per sample as stored in MDAT */
+              lsx_writew(ft, 16)) /* number of bits per sample after decompression */
+	    write_error();
           break;
 
         default:
           break;
         }
 
-        lsx_writedw(ft, (unsigned)(ft->signal.rate + .5)); /* sample rate, Hz */
-        lsx_writew(ft, (int) 1); /* clock devide */
+        if (lsx_writedw(ft, (unsigned)(ft->signal.rate + .5)) || /* sample rate, Hz */
+            lsx_writew(ft, (int) 1)) /* clock devide */
+	  write_error();
 
         if (ft->signal.channels == 1) {
-          lsx_writew(ft, 0); /* channel information */
-          lsx_writew(ft, 1); /* number of channels (mono: 1, stereo: 2, ...) */
+          if (lsx_writew(ft, 0) || /* channel information */
+              lsx_writew(ft, 1)) /* number of channels (mono: 1, stereo: 2, ...) */
+	    write_error();
         }
         else {
-          lsx_writew(ft, 1);
-          lsx_writew(ft, 2);
+          if (lsx_writew(ft, 1) ||
+              lsx_writew(ft, 2))
+	    write_error();
         }
 
         switch (ft->encoding.encoding) {
 
         case SOX_ENCODING_UNSIGNED:
         case SOX_ENCODING_SIGN2:
-          lsx_writew(ft, 0); /* no compression */
+          if (lsx_writew(ft, 0)) /* no compression */
+	    write_error();
           break;
 
         case SOX_ENCODING_ULAW:
-          lsx_writew(ft, 3);
+          if (lsx_writew(ft, 3))
+	    write_error();
           break;
 
         case SOX_ENCODING_ALAW:
-          lsx_writew(ft, 2);
+          if (lsx_writew(ft, 2))
+	    write_error();
           break;
 
         default:
           break;
         }
 
-        lsx_writedw(ft, 0); /* reserved */
-        lsx_writedw(ft, 0); /* reserved */
-        lsx_writedw(ft, 0); /* reserved */
+        if (lsx_writedw(ft, 0) || /* reserved */
+            lsx_writedw(ft, 0) || /* reserved */
+            lsx_writedw(ft, 0) || /* reserved */
 
-        lsx_writes(ft, "ANNO");
-        lsx_writedw(ft, 19); /* length of block */
-        lsx_writes(ft, "file created by SoX");
-        lsx_padbytes(ft, (size_t)1);
+            lsx_writes(ft, "ANNO") ||
+            lsx_writedw(ft, 19) || /* length of block */
+            lsx_writes(ft, "file created by SoX") ||
+            lsx_padbytes(ft, (size_t)1) ||
 
-        lsx_writes(ft, "MDAT");
-        lsx_writedw(ft, p->nsamples * (ft->encoding.bits_per_sample >> 3)); /* samples in file */
+            lsx_writes(ft, "MDAT") ||
+	    /* samples in file */
+            lsx_writedw(ft, p->nsamples * (ft->encoding.bits_per_sample >> 3)))
+	  write_error();
+
+        return SOX_SUCCESS;
 }
 
 LSX_FORMAT_HANDLER(maud)

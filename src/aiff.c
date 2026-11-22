@@ -29,7 +29,7 @@
 static double read_ieee_extended(sox_format_t *);
 static int aiffwriteheader(sox_format_t *, uint64_t);
 static int aifcwriteheader(sox_format_t *, uint64_t);
-static void write_ieee_extended(sox_format_t *, double);
+static int write_ieee_extended(sox_format_t *, double);
 static double ConvertFromIeeeExtended(unsigned char*);
 static void ConvertToIeeeExtended(double, char *);
 static int textChunk(char **text, char *chunkDescription, sox_format_t * ft);
@@ -54,7 +54,6 @@ int lsx_aiffstartread(sox_format_t * ft)
     uint32_t position;
     char name[40];
   } marks[32];
-  unsigned short looptype;
   int i, j;
   unsigned short nmarks = 0;
   unsigned short sustainLoopBegin = 0, sustainLoopEnd = 0,
@@ -71,13 +70,18 @@ int lsx_aiffstartread(sox_format_t * ft)
   uint32_t trash32;
 
   int rc;
+#define read_error() { \
+	lsx_fail_errno(ft,SOX_EOF, "file is truncated in %.4s chunk", buf); \
+        return(SOX_EOF); \
+}
 
   /* FORM chunk */
   if (lsx_reads(ft, buf, (size_t)4) == SOX_EOF || strncmp(buf, "FORM", (size_t)4) != 0) {
     lsx_fail_errno(ft,SOX_EHDR,"AIFF header does not begin with magic word `FORM'");
     return(SOX_EOF);
   }
-  lsx_readdw(ft, &totalsize);
+  if (lsx_readdw(ft, &totalsize))
+    return(SOX_EOF);
   if (lsx_reads(ft, buf, (size_t)4) == SOX_EOF || (strncmp(buf, "AIFF", (size_t)4) != 0 &&
         strncmp(buf, "AIFC", (size_t)4) != 0)) {
     lsx_fail_errno(ft,SOX_EHDR,"AIFF `FORM' chunk does not specify `AIFF' or `AIFC' as type");
@@ -98,14 +102,16 @@ int lsx_aiffstartread(sox_format_t * ft)
     }
     if (strncmp(buf, "COMM", (size_t)4) == 0) {
       /* COMM chunk */
-      lsx_readdw(ft, &chunksize);
-      lsx_readw(ft, &channels);
-      lsx_readdw(ft, &frames);
-      lsx_readw(ft, &bits);
-      rate = read_ieee_extended(ft);
+      if (lsx_readdw(ft, &chunksize) ||
+          lsx_readw(ft, &channels) ||
+          lsx_readdw(ft, &frames) ||
+          lsx_readw(ft, &bits) ||
+          isnan(rate = read_ieee_extended(ft)))
+	read_error();
       chunksize -= 18;
       if (chunksize > 0) {
-        lsx_reads(ft, buf, (size_t)4);
+        if (lsx_reads(ft, buf, (size_t)4))
+	  read_error();
         chunksize -= 4;
         if (strncmp(buf, "sowt", (size_t)4) == 0) {
           /* CD audio as read on Mac OS machines */
@@ -138,14 +144,16 @@ int lsx_aiffstartread(sox_format_t * ft)
         }
       }
       while(chunksize-- > 0)
-        lsx_readb(ft, &trash8);
+        if (lsx_readb(ft, &trash8))
+	  read_error();
       foundcomm = 1;
     }
     else if (strncmp(buf, "SSND", (size_t)4) == 0) {
       /* SSND chunk */
-      lsx_readdw(ft, &chunksize);
-      lsx_readdw(ft, &offset);
-      lsx_readdw(ft, &blocksize);
+      if (lsx_readdw(ft, &chunksize) ||
+          lsx_readdw(ft, &offset) ||
+          lsx_readdw(ft, &blocksize))
+	read_error();
       chunksize -= 8;
       ssndsize = chunksize;
       /* word-align chunksize in case it wasn't
@@ -157,13 +165,16 @@ int lsx_aiffstartread(sox_format_t * ft)
         break;
       /* else, seek to end of sound and hunt for more */
       seekto = lsx_tell(ft);
-      lsx_seeki(ft, (off_t)chunksize, SEEK_CUR);
+      if (lsx_seeki(ft, (off_t)chunksize, SEEK_CUR))
+	read_error();
     }
     else if (strncmp(buf, "MARK", (size_t)4) == 0) {
       /* MARK chunk */
-      lsx_readdw(ft, &chunksize);
+      if (lsx_readdw(ft, &chunksize))
+	read_error();
       if (chunksize >= sizeof(nmarks)) {
-        lsx_readw(ft, &nmarks);
+        if (lsx_readw(ft, &nmarks))
+          read_error();
         chunksize -= sizeof(nmarks);
       }
       else nmarks = 0;
@@ -186,8 +197,9 @@ int lsx_aiffstartread(sox_format_t * ft)
 
         if (chunksize < 6)
           break;
-        lsx_readw(ft, &(marks[i].id));
-        lsx_readdw(ft, &(marks[i].position));
+        if (lsx_readw(ft, &(marks[i].id)) ||
+            lsx_readdw(ft, &(marks[i].position)))
+          read_error();
         chunksize -= 6;
         /* If error reading length then
          * don't try to read more bytes
@@ -202,7 +214,8 @@ int lsx_aiffstartread(sox_format_t * ft)
         if (read_len > 39)
           read_len = 39;
         for(j = 0; j < len && chunksize; j++) {
-          lsx_readb(ft, &tmp_c);
+          if (lsx_readb(ft, &tmp_c))
+	    read_error();
           if (j < read_len)
             marks[i].name[j] = tmp_c;
           chunksize--;
@@ -210,54 +223,60 @@ int lsx_aiffstartread(sox_format_t * ft)
         marks[i].name[read_len] = 0;
         if ((len & 1) == 0 && chunksize) {
           chunksize--;
-          lsx_readb(ft, &trash8);
+          if (lsx_readb(ft, &trash8))
+            read_error();
         }
       }
       /* HA HA!  Sound Designer (and others) makes */
       /* bogus files. It spits out bogus chunksize */
       /* for MARK field */
       while(chunksize-- > 0)
-        lsx_readb(ft, &trash8);
+        if (lsx_readb(ft, &trash8))
+          read_error();
     }
     else if (strncmp(buf, "INST", (size_t)4) == 0) {
+      unsigned short sustain, release;
       /* INST chunk */
-      lsx_readdw(ft, &chunksize);
-      lsx_readsb(ft, &(ft->oob.instr.MIDInote));
-      lsx_readb(ft, &trash8);
-      lsx_readsb(ft, &(ft->oob.instr.MIDIlow));
-      lsx_readsb(ft, &(ft->oob.instr.MIDIhi));
-      /* Low  velocity */
-      lsx_readb(ft, &trash8);
-      /* Hi  velocity */
-      lsx_readb(ft, &trash8);
-      lsx_readw(ft, &trash16);/* gain */
-      lsx_readw(ft, &looptype); /* sustain loop */
-      ft->oob.loops[0].type = looptype;
-      lsx_readw(ft, &sustainLoopBegin); /* begin marker */
-      lsx_readw(ft, &sustainLoopEnd);    /* end marker */
-      lsx_readw(ft, &looptype); /* release loop */
-      ft->oob.loops[1].type = looptype;
-      lsx_readw(ft, &releaseLoopBegin);  /* begin marker */
-      lsx_readw(ft, &releaseLoopEnd);    /* end marker */
+      if (lsx_readdw(ft, &chunksize) ||
+          lsx_readsb(ft, &(ft->oob.instr.MIDInote)) ||
+          lsx_readb(ft, &trash8) ||
+          lsx_readsb(ft, &(ft->oob.instr.MIDIlow)) ||
+          lsx_readsb(ft, &(ft->oob.instr.MIDIhi)) ||
+          lsx_readb(ft, &trash8) ||            /* Low  velocity */
+          lsx_readb(ft, &trash8) ||            /* Hi  velocity */
+          lsx_readw(ft, &trash16) ||           /* gain */
+          lsx_readw(ft, &sustain) ||           /* sustain loop */
+          lsx_readw(ft, &sustainLoopBegin) ||  /* begin marker */
+          lsx_readw(ft, &sustainLoopEnd) ||    /* end marker */
+          lsx_readw(ft, &release) ||           /* release loop */
+          lsx_readw(ft, &releaseLoopBegin) ||  /* begin marker */
+          lsx_readw(ft, &releaseLoopEnd))      /* end marker */
+        read_error();
+      ft->oob.loops[0].type = sustain;
+      ft->oob.loops[1].type = release;
 
       foundinstr = 1;
     }
     else if (strncmp(buf, "APPL", (size_t)4) == 0) {
-      lsx_readdw(ft, &chunksize);
+      if (lsx_readdw(ft, &chunksize))
+        read_error();
       /* word-align chunksize in case it wasn't
        * done by writing application already.
        */
       chunksize += (chunksize % 2);
-      while(chunksize-- > 0)
-        lsx_readb(ft, &trash8);
+      while (chunksize-- > 0)
+        if (lsx_readb(ft, &trash8))
+          read_error();
     }
     else if (strncmp(buf, "ALCH", (size_t)4) == 0) {
       /* I think this is bogus and gets grabbed by APPL */
       /* INST chunk */
-      lsx_readdw(ft, &trash32);                /* ENVS - jeez! */
-      lsx_readdw(ft, &chunksize);
+      if (lsx_readdw(ft, &trash32) ||   /* ENVS - jeez! */
+          lsx_readdw(ft, &chunksize))
+        read_error();
       while(chunksize-- > 0)
-        lsx_readb(ft, &trash8);
+        if (lsx_readb(ft, &trash8))
+          read_error();
     }
     else if (strncmp(buf, "ANNO", (size_t)4) == 0) {
       rc = textChunk(&annotation, "Annotation:", ft);
@@ -309,7 +328,8 @@ int lsx_aiffstartread(sox_format_t * ft)
     }
     else if (strncmp(buf, "ID3 ", 4) == 0) {
       off_t offs;
-      lsx_readdw(ft, &chunksize);
+      if (lsx_readdw(ft, &chunksize))
+        read_error();
       offs = lsx_tell(ft);
       lsx_id3_read_tag(ft, 0);
       lsx_seeki(ft, offs + chunksize, SEEK_SET);
@@ -319,7 +339,8 @@ int lsx_aiffstartread(sox_format_t * ft)
         break;
       buf[4] = 0;
       lsx_debug("AIFFstartread: ignoring `%s' chunk", buf);
-      lsx_readdw(ft, &chunksize);
+      if (lsx_readdw(ft, &chunksize))
+        return SOX_EOF;
       if (lsx_eof(ft))
         break;
       /* account for padding after odd-sized chunks */
@@ -340,9 +361,12 @@ int lsx_aiffstartread(sox_format_t * ft)
    * Like, say, instrument loops.
    */
   if (ft->seekable) {
-    if (seekto > 0)
-      lsx_seeki(ft, seekto, SEEK_SET);
-    else {
+    if (seekto > 0) {
+      if (lsx_seeki(ft, seekto, SEEK_SET)) {
+        lsx_fail_errno(ft,SOX_EHDR,"can't seek past header");
+        return(SOX_EOF);
+      }
+    } else {
       lsx_fail_errno(ft,SOX_EOF,"AIFF: no sound data on input file");
       return(SOX_EOF);
     }
@@ -469,7 +493,9 @@ static int textChunk(char **text, char *chunkDescription, sox_format_t * ft)
 {
   uint32_t chunksize0;
   size_t chunksize;
-  lsx_readdw(ft, &chunksize0);
+
+  if (lsx_readdw(ft, &chunksize0))
+    return SOX_EOF;
   chunksize = chunksize0;
 
   /* allocate enough memory to hold the text including a terminating \0 */
@@ -514,15 +540,17 @@ static int commentChunk(char **text, char *chunkDescription, sox_format_t * ft)
   unsigned int totalReadLength = 0;
   unsigned int commentIndex;
 
-  lsx_readdw(ft, &chunksize);
-  lsx_readw(ft, &numComments);
+  if (lsx_readdw(ft, &chunksize) ||
+      lsx_readw(ft, &numComments))
+    return SOX_EOF;
   totalReadLength += 2; /* chunksize doesn't count */
   for(commentIndex = 0; commentIndex < numComments; commentIndex++) {
     unsigned short commentLength;
 
-    lsx_readdw(ft, &timeStamp);
-    lsx_readw(ft, &markerId);
-    lsx_readw(ft, &commentLength);
+    if (lsx_readdw(ft, &timeStamp) ||
+        lsx_readw(ft, &markerId) ||
+        lsx_readw(ft, &commentLength))
+      return SOX_EOF;
     if (((size_t)totalCommentLength) + commentLength > USHRT_MAX) {
         lsx_fail_errno(ft,SOX_EOF,"AIFF: Comment too long in %s header", chunkDescription);
         return(SOX_EOF);
@@ -558,7 +586,8 @@ static int commentChunk(char **text, char *chunkDescription, sox_format_t * ft)
        size_t i;
        char c;
        for (i=0; i < chunksize - totalReadLength; i++ )
-           lsx_readbuf(ft, &c, (size_t)1);
+           if (lsx_readbuf(ft, &c, (size_t)1) != 1)
+	       return SOX_EOF;
   }
   return(SOX_SUCCESS);
 }
@@ -576,8 +605,8 @@ int lsx_aiffstopread(sox_format_t * ft)
                 if (lsx_readbuf(ft, buf, (size_t)4) != 4)
                         break;
 
-                lsx_readdw(ft, &chunksize);
-                if (lsx_eof(ft))
+                if (lsx_readdw(ft, &chunksize) ||
+                    lsx_eof(ft))
                         break;
                 buf[4] = '\0';
                 lsx_warn("Ignoring AIFF tail chunk: `%s', %u bytes long",
@@ -586,7 +615,7 @@ int lsx_aiffstopread(sox_format_t * ft)
                         lsx_warn("       You're stripping MIDI/loop info!");
                 while (chunksize-- > 0)
                 {
-                        if (lsx_readb(ft, &trash) == SOX_EOF)
+                        if (lsx_readb(ft, &trash))
                                 break;
                 }
             }
@@ -703,7 +732,8 @@ static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
           hsize += 8 /* COMT hdr */ + comment_chunk_size;
         }
 
-        lsx_writes(ft, "FORM"); /* IFF header */
+        if (lsx_writes(ft, "FORM")) /* IFF header */
+          return(SOX_EOF);
         /* file size */
         size = hsize + nframes * (ft->encoding.bits_per_sample >> 3) * ft->signal.channels;
         if (size > UINT_MAX)
@@ -711,49 +741,50 @@ static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
             lsx_warn("file size too big for accurate AIFF header");
             size = UINT_MAX;
         }
-        lsx_writedw(ft, (unsigned)size);
-        lsx_writes(ft, "AIFF"); /* File type */
+        if (lsx_writedw(ft, (unsigned)size) ||
+            lsx_writes(ft, "AIFF")) /* File type */
+          return(SOX_EOF);
 
         /* Now we write the COMT comment chunk using the precomputed sizes */
         if (ft->oob.comments)
         {
-          lsx_writes(ft, "COMT");
-          lsx_writedw(ft, (unsigned) comment_chunk_size);
-
-          /* one comment */
-          lsx_writew(ft, 1);
-
-          /* time stamp of comment, Unix knows of time from 1/1/1970,
-             Apple knows time from 1/1/1904 */
-          lsx_writedw(ft, (unsigned)((sox_globals.repeatable? 0 : time(NULL)) + 2082844800));
-
-          /* A marker ID of 0 indicates the comment is not associated
-             with a marker */
-          lsx_writew(ft, 0);
-
-          /* now write the count and the bytes of text */
-          lsx_writew(ft, (unsigned) padded_comment_size);
-          lsx_writes(ft, comment);
-          if (comment_size != padded_comment_size)
-                lsx_writes(ft, " ");
+          if (lsx_writes(ft, "COMT") ||
+              lsx_writedw(ft, (unsigned) comment_chunk_size) ||
+              /* one comment */
+	      lsx_writew(ft, 1) ||
+              /* time stamp of comment, Unix knows of time from 1/1/1970,
+                 Apple knows time from 1/1/1904 */
+              lsx_writedw(ft, (unsigned)((sox_globals.repeatable? 0 : time(NULL)) + 2082844800)) ||
+              /* A marker ID of 0 indicates the comment is not associated
+                 with a marker */
+              lsx_writew(ft, 0) ||
+              /* now write the count and the bytes of text */
+              lsx_writew(ft, (unsigned) padded_comment_size) ||
+              lsx_writes(ft, comment) ||
+              (comment_size != padded_comment_size
+                ? lsx_writes(ft, " ") : 0))
+            return(SOX_EOF);
         }
         free(comment);
 
         /* COMM chunk -- describes encoding (and #frames) */
-        lsx_writes(ft, "COMM");
-        lsx_writedw(ft, 18); /* COMM chunk size */
-        lsx_writew(ft, ft->signal.channels); /* nchannels */
-        lsx_writedw(ft, (unsigned) nframes); /* number of frames */
-        lsx_writew(ft, bits); /* sample width, in bits */
-        write_ieee_extended(ft, (double)ft->signal.rate);
+        if (lsx_writes(ft, "COMM") ||
+            lsx_writedw(ft, 18) || /* COMM chunk size */
+            lsx_writew(ft, ft->signal.channels) || /* nchannels */
+            lsx_writedw(ft, (unsigned) nframes) || /* number of frames */
+            lsx_writew(ft, bits) || /* sample width, in bits */
+            write_ieee_extended(ft, (double)ft->signal.rate))
+                return(SOX_EOF);
 
         /* MARK chunk -- set markers */
         if (ft->oob.instr.nloops) {
-                lsx_writes(ft, "MARK");
+                if (lsx_writes(ft, "MARK"))
+                        return(SOX_EOF);
                 if (ft->oob.instr.nloops > 2)
                         ft->oob.instr.nloops = 2;
-                lsx_writedw(ft, 2 + 16u*ft->oob.instr.nloops);
-                lsx_writew(ft, ft->oob.instr.nloops);
+                if (lsx_writedw(ft, 2 + 16u*ft->oob.instr.nloops) ||
+                    lsx_writew(ft, ft->oob.instr.nloops))
+                        return(SOX_EOF);
 
                 for(i = 0; i < ft->oob.instr.nloops; i++) {
                         unsigned start = ft->oob.loops[i].start > UINT_MAX
@@ -762,49 +793,50 @@ static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
                         unsigned end = ft->oob.loops[i].start + ft->oob.loops[i].length > UINT_MAX
                             ? UINT_MAX
                             : ft->oob.loops[i].start + ft->oob.loops[i].length;
-                        lsx_writew(ft, i + 1);
-                        lsx_writedw(ft, start);
-                        lsx_writeb(ft, 0);
-                        lsx_writeb(ft, 0);
-                        lsx_writew(ft, i*2 + 1);
-                        lsx_writedw(ft, end);
-                        lsx_writeb(ft, 0);
-                        lsx_writeb(ft, 0);
+                        if (lsx_writew(ft, i + 1) ||
+                            lsx_writedw(ft, start) ||
+                            lsx_writeb(ft, 0) ||
+                            lsx_writeb(ft, 0) ||
+                            lsx_writew(ft, i*2 + 1) ||
+                            lsx_writedw(ft, end) ||
+                            lsx_writeb(ft, 0) ||
+                            lsx_writeb(ft, 0))
+				return(SOX_EOF);
                 }
 
-                lsx_writes(ft, "INST");
-                lsx_writedw(ft, 20);
-                /* random MIDI shit that we default on */
-                lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDInote);
-                lsx_writeb(ft, 0);                       /* detune */
-                lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIlow);
-                lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIhi);
-                lsx_writeb(ft, 1);                       /* low velocity */
-                lsx_writeb(ft, 127);                     /* hi  velocity */
-                lsx_writew(ft, 0);                               /* gain */
+                if (lsx_writes(ft, "INST") ||
+                    lsx_writedw(ft, 20) ||
+                    /* random MIDI shit that we default on */
+                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDInote) ||
+                    lsx_writeb(ft, 0) ||                 /* detune */
+                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIlow) ||
+                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIhi) ||
+                    lsx_writeb(ft, 1) ||                 /* low velocity */
+                    lsx_writeb(ft, 127) ||               /* hi  velocity */
+                    lsx_writew(ft, 0) ||                 /* gain */
 
-                /* sustain loop */
-                lsx_writew(ft, ft->oob.loops[0].type);
-                lsx_writew(ft, 1);                               /* marker 1 */
-                lsx_writew(ft, 3);                               /* marker 3 */
-                /* release loop, if there */
-                if (ft->oob.instr.nloops == 2) {
-                        lsx_writew(ft, ft->oob.loops[1].type);
-                        lsx_writew(ft, 2);                       /* marker 2 */
-                        lsx_writew(ft, 4);                       /* marker 4 */
-                } else {
-                        lsx_writew(ft, 0);                       /* no release loop */
-                        lsx_writew(ft, 0);
-                        lsx_writew(ft, 0);
-                }
+                    /* sustain loop */
+                    lsx_writew(ft, ft->oob.loops[0].type) ||
+                    lsx_writew(ft, 1) ||                 /* marker 1 */
+                    lsx_writew(ft, 3) ||
+                    /* release loop, if there */
+                    (ft->oob.instr.nloops == 2
+                      ?(lsx_writew(ft, ft->oob.loops[1].type) ||
+                        lsx_writew(ft, 2) ||             /* marker 2 */
+                        lsx_writew(ft, 4))               /* marker 4 */
+                      :(lsx_writew(ft, 0) ||             /* no release loop */
+                        lsx_writew(ft, 0) ||
+                        lsx_writew(ft, 0))))
+		    return SOX_EOF;
         }
 
         /* SSND chunk -- describes data */
-        lsx_writes(ft, "SSND");
-        /* chunk size */
-        lsx_writedw(ft, (unsigned) (8 + nframes * ft->signal.channels * (ft->encoding.bits_per_sample >> 3)));
-        lsx_writedw(ft, 0); /* offset */
-        lsx_writedw(ft, 0); /* block size */
+        if (lsx_writes(ft, "SSND") ||
+            /* chunk size */
+            lsx_writedw(ft, (unsigned) (8 + nframes * ft->signal.channels * (ft->encoding.bits_per_sample >> 3))) ||
+            lsx_writedw(ft, 0) || /* offset */
+            lsx_writedw(ft, 0))   /* block size */
+	        return(SOX_EOF);
         return(SOX_SUCCESS);
 }
 
@@ -908,7 +940,8 @@ static int aifcwriteheader(sox_format_t * ft, uint64_t nframes)
         hsize = 12 /*FVER*/ + 8 /*COMM hdr*/ + comm_len+comm_padding /*COMM chunk*/ +
                 8 /*SSND hdr*/ + 12 /*SSND chunk*/;
 
-        lsx_writes(ft, "FORM"); /* IFF header */
+        if (lsx_writes(ft, "FORM")) /* IFF header */
+	    return(SOX_EOF);
         /* file size */
         size = hsize + nframes * (ft->encoding.bits_per_sample >> 3) * ft->signal.channels;
         if (size > UINT_MAX)
@@ -916,34 +949,34 @@ static int aifcwriteheader(sox_format_t * ft, uint64_t nframes)
             lsx_warn("file size too big for accurate AIFC header");
             size = UINT_MAX;
         }
-        lsx_writedw(ft, (unsigned)size);
-        lsx_writes(ft, "AIFC"); /* File type */
+        if (lsx_writedw(ft, (unsigned)size) ||
+            lsx_writes(ft, "AIFC") || /* File type */
 
-        /* FVER chunk */
-        lsx_writes(ft, "FVER");
-        lsx_writedw(ft, 4); /* FVER chunk size */
-        lsx_writedw(ft, 0xa2805140); /* version_date(May23,1990,2:40pm) */
+            /* FVER chunk */
+            lsx_writes(ft, "FVER") ||
+            lsx_writedw(ft, 4) || /* FVER chunk size */
+            lsx_writedw(ft, 0xa2805140) || /* version_date(May23,1990,2:40pm) */
 
-        /* COMM chunk -- describes encoding (and #frames) */
-        lsx_writes(ft, "COMM");
-        lsx_writedw(ft, comm_len+comm_padding); /* COMM chunk size */
-        lsx_writew(ft, ft->signal.channels); /* nchannels */
-        lsx_writedw(ft, (unsigned) nframes); /* number of frames */
-        lsx_writew(ft, bits); /* sample width, in bits */
-        write_ieee_extended(ft, (double)ft->signal.rate);
+            /* COMM chunk -- describes encoding (and #frames) */
+            lsx_writes(ft, "COMM") ||
+            lsx_writedw(ft, comm_len+comm_padding) || /* COMM chunk size */
+            lsx_writew(ft, ft->signal.channels) || /* nchannels */
+            lsx_writedw(ft, (unsigned) nframes) || /* number of frames */
+            lsx_writew(ft, bits) || /* sample width, in bits */
+            write_ieee_extended(ft, (double)ft->signal.rate) ||
 
-        lsx_writes(ft, ctype); /*compression_type*/
-        lsx_writeb(ft, cname_len);
-        lsx_writes(ft, cname);
-        if (comm_padding)
-          lsx_writeb(ft, 0);
+            lsx_writes(ft, ctype) || /*compression_type*/
+            lsx_writeb(ft, cname_len) ||
+            lsx_writes(ft, cname) ||
+            (comm_padding ? lsx_writeb(ft, 0) : 0) ||
 
-        /* SSND chunk -- describes data */
-        lsx_writes(ft, "SSND");
-        /* chunk size */
-        lsx_writedw(ft, (unsigned) (8 + nframes * ft->signal.channels * (ft->encoding.bits_per_sample >> 3)));
-        lsx_writedw(ft, 0); /* offset */
-        lsx_writedw(ft, 0); /* block size */
+            /* SSND chunk -- describes data */
+            lsx_writes(ft, "SSND") ||
+            /* chunk size */
+            lsx_writedw(ft, (unsigned) (8 + nframes * ft->signal.channels * (ft->encoding.bits_per_sample >> 3))) ||
+            lsx_writedw(ft, 0) || /* offset */
+            lsx_writedw(ft, 0)) /* block size */
+	        return(SOX_EOF);
 
         /* Any Private chunks shall appear after the required chunks (FORM,FVER,COMM,SSND) */
         return(SOX_SUCCESS);
@@ -955,12 +988,12 @@ static double read_ieee_extended(sox_format_t * ft)
         if (lsx_readbuf(ft, buf, (size_t)10) != 10)
         {
                 lsx_fail_errno(ft,SOX_EOF,"EOF while reading IEEE extended number");
-                return(SOX_EOF);
+                return(NAN);
         }
         return ConvertFromIeeeExtended(buf);
 }
 
-static void write_ieee_extended(sox_format_t * ft, double x)
+static int write_ieee_extended(sox_format_t * ft, double x)
 {
         char buf[10];
         ConvertToIeeeExtended(x, buf);
@@ -968,7 +1001,9 @@ static void write_ieee_extended(sox_format_t * ft, double x)
                 x,
                 buf[0], buf[1], buf[2], buf[3], buf[4],
                 buf[5], buf[6], buf[7], buf[8], buf[9]);
-        (void)lsx_writebuf(ft, buf, (size_t) 10);
+        if (lsx_writebuf(ft, buf, (size_t) 10) != 10)
+		return SOX_EOF;
+	return SOX_SUCCESS;
 }
 
 

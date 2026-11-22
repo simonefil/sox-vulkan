@@ -63,6 +63,11 @@ struct WaveHeader_ {
 static const unsigned char magic1[4] = {0, 0x06, 0x10, 0xF6};
 static const unsigned char magic2[4] = {0, 0x52, 0x00, 0x52};
 
+#define read_error() { \
+    lsx_fail_errno(ft, SOX_EOF, "file is truncated"); \
+    return(SOX_EOF); \
+}
+
 /*
  * Do anything required before you start reading samples.
  * Read file header.
@@ -93,22 +98,27 @@ static int startread(sox_format_t * ft)
     while (lsx_read_b_buf(ft, &trash, (size_t) 1) == 1)
         num_samp_bytes++;
     num_samp_bytes -= 32;         /* calculate num samples by sub header size */
-    lsx_seeki(ft, (off_t)0, 0);   /* rewind file */
+    if (lsx_seeki(ft, (off_t)0, 0)) /* rewind file */
+        return(SOX_EOF);
     sk->rest = num_samp_bytes;    /* set how many sample bytes to read */
 
     /* first 6 bytes are file type ID LM8953 */
-    lsx_readchars(ft, filetype, sizeof(filetype) - 1);
+    if (lsx_readchars(ft, filetype, sizeof(filetype) - 1))
+        read_error();
     filetype[6] = '\0';
     for( c = 16; c > 0 ; c-- )    /* Discard next 16 bytes */
-        lsx_readb(ft, &trash);
-    lsx_readsb(ft, &format);
-    lsx_readb(ft, &sample_rate);
+        if (lsx_readb(ft, &trash))
+            read_error();
+    if (lsx_readsb(ft, &format) ||
+        lsx_readb(ft, &sample_rate))
+            read_error();
     /*
      * save next 8 bytes - if sample rate is 0, then we need
      *  to look at gunk[2] and gunk[5] to get real rate
      */
     for( c = 0; c < 8; c++ )
-        lsx_readb(ft, &(gunk[c]));
+        if (lsx_readb(ft, &(gunk[c])))
+            read_error();
     /*
      * We should now be pointing at start of raw sample data in file
      */
@@ -209,9 +219,10 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
      */
     for(done = 0; done < len; ) {
         if(sk->rest < 3) break; /* Finished reading from file? */
-        lsx_readb(ft, &uc1);
-        lsx_readb(ft, &uc2);
-        lsx_readb(ft, &uc3);
+        if (lsx_readb(ft, &uc1) ||
+            lsx_readb(ft, &uc2) ||
+            lsx_readb(ft, &uc3))
+	        break;
         sk->rest -= 3; /* adjust remaining for bytes we just read */
         s1 = (unsigned short) (uc1 << 4) | (((uc2 >> 4) & 017));
         s2 = (unsigned short) (uc3 << 4) | (( uc2 & 017 ));
@@ -222,9 +233,14 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
     return done;
 }
 
+#define write_error() { \
+    lsx_fail_errno(ft, SOX_EOF, "write error"); \
+    return(SOX_EOF); \
+}
+
 static int startwrite(sox_format_t * ft)
 {
-  priv_t * sk = (priv_t *) ft->priv;
+    priv_t * sk = (priv_t *) ft->priv;
     struct WaveHeader_ WH;
 
     lsx_debug("tx16w selected output");
@@ -241,7 +257,8 @@ static int startwrite(sox_format_t * ft)
     /* dummy numbers, just for place holder, real header is written
        at end of processing, since byte count is needed */
 
-    lsx_writebuf(ft, &WH, (size_t) 32);
+    if (lsx_writebuf(ft, &WH, (size_t) 32) != 32)
+      write_error();
     sk->bytes_out = 32;
     return(SOX_SUCCESS);
 }
@@ -294,7 +311,8 @@ static int stopwrite(sox_format_t * ft)
 
     if (sk->odd_flag) {
       sox_sample_t pad = 0;
-      write_samples(ft, &pad, (size_t) 1);
+      if (write_samples(ft, &pad, (size_t) 1) != 1)
+        write_error();
     }
 
     /* All samples are already written out. */
@@ -339,9 +357,10 @@ static int stopwrite(sox_format_t * ft)
         AttackLength                       = 0x40;
         LoopLength                         = 0x40;
         for(i=sk->samples_out;i<0x80;i++) {
-            lsx_writeb(ft, 0);
-            lsx_writeb(ft, 0);
-            lsx_writeb(ft, 0);
+            if (lsx_writeb(ft, 0) ||
+                lsx_writeb(ft, 0) ||
+                lsx_writeb(ft, 0))
+                return(SOX_EOF);
             sk->bytes_out += 3;
         }
     }
@@ -349,7 +368,8 @@ static int stopwrite(sox_format_t * ft)
     /* Fill up to 256 byte blocks; the TX16W seems to like that */
 
     while ((sk->bytes_out % 0x100) != 0) {
-        lsx_writeb(ft, 0);
+        if (lsx_writeb(ft, 0))
+            write_error();
         sk->bytes_out++;
     }
 
@@ -364,7 +384,8 @@ static int stopwrite(sox_format_t * ft)
         magic2[WH.sample_rate];
 
     lsx_rewind(ft);
-    lsx_writebuf(ft, &WH, (size_t) 32);
+    if (lsx_writebuf(ft, &WH, (size_t) 32) != 32)
+        write_error();
 
     return(SOX_SUCCESS);
 }

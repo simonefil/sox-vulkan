@@ -51,5 +51,5 @@ int lsx_adpcm_ima_start(sox_format_t * ft, adpcm_io_t * state);
 size_t lsx_adpcm_read(sox_format_t * ft, adpcm_io_t * state, sox_sample_t *buffer, size_t len);
 int lsx_adpcm_stopread(sox_format_t * ft, adpcm_io_t * state);
 size_t lsx_adpcm_write(sox_format_t * ft, adpcm_io_t * state, const sox_sample_t *buffer, size_t length);
-void lsx_adpcm_flush(sox_format_t * ft, adpcm_io_t * state);
+int lsx_adpcm_flush(sox_format_t * ft, adpcm_io_t * state);
 int lsx_adpcm_stopwrite(sox_format_t * ft, adpcm_io_t * state);

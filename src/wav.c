@@ -319,6 +319,11 @@ static unsigned short  AdpcmReadBlock(sox_format_t * ft)
 /* Common ADPCM Write Function                                              */
 /****************************************************************************/
 
+#define write_error() { \
+    lsx_fail_errno(ft, SOX_EOF, "write error"); \
+    return SOX_EOF; \
+}
+
 static int xxxAdpcmWriteBlock(sox_format_t * ft)
 {
     priv_t * wav = (priv_t *) ft->priv;
@@ -339,10 +344,7 @@ static int xxxAdpcmWriteBlock(sox_format_t * ft)
         }
         /* write the compressed packet */
         if (lsx_writebuf(ft, wav->packet, (size_t) wav->blockAlign) != wav->blockAlign)
-        {
-            lsx_fail_errno(ft,SOX_EOF,"write error");
-            return (SOX_EOF);
-        }
+            write_error();
         /* update lengths and samplePtr */
         wav->dataLength += wav->blockAlign;
         if (pad_nsamps)
@@ -475,10 +477,7 @@ static int wavgsmflush(sox_format_t * ft)
     /*encode the odd half long (33 byte) frame */
     gsm_encode(wav->gsmhandle, wav->gsmsample+160, frame+32);
     if (lsx_writebuf(ft, frame, (size_t) 65) != 65)
-    {
-        lsx_fail_errno(ft,SOX_EOF,"write error");
-        return (SOX_EOF);
-    }
+        write_error();
     wav->gsmbytecount += 65;
 
     wav->gsmindex = 0;
@@ -510,24 +509,25 @@ static size_t wavgsmwrite(sox_format_t * ft, const sox_sample_t *buf, size_t len
 
 }
 
-static void wavgsmstopwrite(sox_format_t * ft)
+static int wavgsmstopwrite(sox_format_t * ft)
 {
     priv_t *       wav = (priv_t *) ft->priv;
 
     ft->sox_errno = SOX_SUCCESS;
 
     if (wav->gsmindex)
-        wavgsmflush(ft);
+        if (wavgsmflush(ft))
+            write_error();
 
     /* Add a pad byte if amount of written bytes is not even. */
     if (wav->gsmbytecount && wav->gsmbytecount % 2){
         if(lsx_writeb(ft, 0))
-            lsx_fail_errno(ft,SOX_EOF,"write error");
-        else
-            wav->gsmbytecount += 1;
+            write_error();
+        wav->gsmbytecount += 1;
     }
 
     wavgsmdestroy(ft);
+    return SOX_SUCCESS;
 }
 #endif
 
@@ -1419,20 +1419,24 @@ static int wavwritehdr(sox_format_t * ft, int second_header)
     {
         if (!second_header)
             lsx_report("Requested to swap bytes so writing RIFX header");
-        lsx_writes(ft, "RIFX");
+        if (lsx_writes(ft, "RIFX"))
+            write_error();
     }
     else
-        lsx_writes(ft, "RIFF");
-    lsx_writedw(ft, wRiffLength);
-    lsx_writes(ft, "WAVE");
-    lsx_writes(ft, "fmt ");
-    lsx_writedw(ft, wFmtSize);
-    lsx_writew(ft, isExtensible ? WAVE_FORMAT_EXTENSIBLE : wFormatTag);
-    lsx_writew(ft, wChannels);
-    lsx_writedw(ft, dwSamplesPerSecond);
-    lsx_writedw(ft, dwAvgBytesPerSec);
-    lsx_writew(ft, wBlockAlign);
-    lsx_writew(ft, wBitsPerSample); /* end info common to all fmts */
+        if (lsx_writes(ft, "RIFF"))
+            write_error();
+
+    if (lsx_writedw(ft, wRiffLength) ||
+        lsx_writes(ft, "WAVE") ||
+        lsx_writes(ft, "fmt ") ||
+        lsx_writedw(ft, wFmtSize) ||
+        lsx_writew(ft, isExtensible ? WAVE_FORMAT_EXTENSIBLE : wFormatTag) ||
+        lsx_writew(ft, wChannels) ||
+        lsx_writedw(ft, dwSamplesPerSecond) ||
+        lsx_writedw(ft, dwAvgBytesPerSec) ||
+        lsx_writew(ft, wBlockAlign) ||
+        lsx_writew(ft, wBitsPerSample)) /* end info common to all fmts */
+            write_error();
 
     if (isExtensible) {
       uint32_t dwChannelMask=0;  /* unassigned speaker mapping by default */
@@ -1451,34 +1455,40 @@ static int wavwritehdr(sox_format_t * ft, int second_header)
         else if (wChannels == 8) dwChannelMask = 0x63F;   /* 8 channels (7.1) = FL, FR, FC, LF, BL, BR, SL, SR */
       }
  
-      lsx_writew(ft, 22);
-      lsx_writew(ft, wBitsPerSample); /* No padding in container */
-      lsx_writedw(ft, dwChannelMask); /* Speaker mapping is something reasonable */
-      lsx_writew(ft, wFormatTag);
-      lsx_writebuf(ft, guids[!strcmp(ft->filetype, "amb")], (size_t)14);
+      if (lsx_writew(ft, 22) ||
+          lsx_writew(ft, wBitsPerSample) || /* No padding in container */
+          lsx_writedw(ft, dwChannelMask) || /* Speaker mapping is something reasonable */
+          lsx_writew(ft, wFormatTag) ||
+          lsx_writebuf(ft, guids[!strcmp(ft->filetype, "amb")], (size_t)14) != 14)
+              write_error();
     }
     else
     /* if not PCM, we need to write out wExtSize even if wExtSize=0 */
     if (wFormatTag != WAVE_FORMAT_PCM)
-        lsx_writew(ft,wExtSize);
+        if (lsx_writew(ft,wExtSize))
+            write_error();
 
     switch (wFormatTag)
     {
         int i;
         case WAVE_FORMAT_IMA_ADPCM:
-        lsx_writew(ft, wSamplesPerBlock);
+        if (lsx_writew(ft, wSamplesPerBlock))
+            write_error();
         break;
         case WAVE_FORMAT_ADPCM:
-        lsx_writew(ft, wSamplesPerBlock);
-        lsx_writew(ft, 7); /* nCoefs */
+        if (lsx_writew(ft, wSamplesPerBlock) ||
+            lsx_writew(ft, 7)) /* nCoefs */
+                write_error();
         for (i=0; i<7; i++) {
-            lsx_writew(ft, (uint16_t)(lsx_ms_adpcm_i_coef[i][0]));
-            lsx_writew(ft, (uint16_t)(lsx_ms_adpcm_i_coef[i][1]));
+            if (lsx_writew(ft, (uint16_t)(lsx_ms_adpcm_i_coef[i][0])) ||
+                lsx_writew(ft, (uint16_t)(lsx_ms_adpcm_i_coef[i][1])))
+                    write_error();
         }
         break;
 #ifdef HAVE_GSM
         case WAVE_FORMAT_GSM610:
-        lsx_writew(ft, wSamplesPerBlock);
+        if (lsx_writew(ft, wSamplesPerBlock))
+            write_error();
         break;
 #endif
         default:
@@ -1487,13 +1497,15 @@ static int wavwritehdr(sox_format_t * ft, int second_header)
 
     /* if not PCM, write the 'fact' chunk */
     if (isExtensible || wFormatTag != WAVE_FORMAT_PCM){
-        lsx_writes(ft, "fact");
-        lsx_writedw(ft,dwFactSize);
-        lsx_writedw(ft,dwSamplesWritten);
+        if (lsx_writes(ft, "fact") ||
+            lsx_writedw(ft,dwFactSize) ||
+            lsx_writedw(ft,dwSamplesWritten))
+                write_error();
     }
 
-    lsx_writes(ft, "data");
-    lsx_writedw(ft, dwDataLength);               /* data chunk size */
+    if (lsx_writes(ft, "data") ||
+        lsx_writedw(ft, dwDataLength))               /* data chunk size */
+            write_error();
 
     if (!second_header) {
         lsx_debug("Writing Wave file: %s format, %d channel%s, %d samp/sec",
@@ -1582,12 +1594,14 @@ static int stopwrite(sox_format_t * ft)
         {
         case WAVE_FORMAT_IMA_ADPCM:
         case WAVE_FORMAT_ADPCM:
-            xxxAdpcmWriteBlock(ft);
+            if (xxxAdpcmWriteBlock(ft))
+                return SOX_EOF;
             break;
 
 #ifdef HAVE_GSM
         case WAVE_FORMAT_GSM610:
-            wavgsmstopwrite(ft);
+            if (wavgsmstopwrite(ft))
+                return SOX_EOF;
             break;
 #endif
 

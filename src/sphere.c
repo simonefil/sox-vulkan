@@ -127,9 +127,9 @@ static int start_read(sox_format_t * ft)
     /* Check first four bytes of data to see if it's shorten compressed. */
     char           shorten_check[4];
 
-    if (lsx_readchars(ft, shorten_check, sizeof(shorten_check)))
+    if (lsx_readchars(ft, shorten_check, sizeof(shorten_check)) ||
+        lsx_seeki(ft, -(off_t)sizeof(shorten_check), SEEK_CUR))
       return SOX_EOF;
-    lsx_seeki(ft, -(off_t)sizeof(shorten_check), SEEK_CUR);
 
     if (!memcmp(shorten_check, "ajkg", sizeof(shorten_check))) {
       lsx_fail_errno(ft, SOX_EFMT,

@@ -29,7 +29,10 @@ static int stopwrite(sox_format_t * ft)
   unsigned i = ft->olength % sector_num_samples;
 
   if (i) while (i++ < sector_num_samples)    /* Pad with silence to multiple */
-    lsx_writew(ft, 0);                       /* of 1/75th of a second. */
+    if (lsx_writew(ft, 0)) {                 /* of 1/75th of a second. */
+      lsx_fail_errno(ft, SOX_EOF, "write error");
+      return SOX_EOF;
+    }
   return SOX_SUCCESS;
 }
 

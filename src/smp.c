@@ -70,23 +70,26 @@ static char const *SVmagic = "SOUND SAMPLE DATA ", *SVvers = "2.1 ";
 
 /*
  * Read the SampleVision trailer structure.
- * Returns 1 if everything was read ok, 0 if there was an error.
+ * Returns SOX_SUCCESS if everything was read ok,
+ * SOX_EOF if there was an error.
  */
 static int readtrailer(sox_format_t * ft, struct smptrailer *trailer)
 {
         int i;
         uint16_t trash16;
 
-        lsx_readw(ft, &trash16); /* read reserved word */
+        if (lsx_readw(ft, &trash16)) /* read reserved word */
+                return(SOX_EOF);
         for(i = 0; i < 8; i++) {        /* read the 8 loops */
-                lsx_readdw(ft, &(trailer->loops[i].start));
+                if (lsx_readdw(ft, &(trailer->loops[i].start)) ||
+                    lsx_readdw(ft, &(trailer->loops[i].end)) ||
+                    lsx_readb(ft, &(trailer->loops[i].type)) ||
+                    lsx_readw(ft, &(trailer->loops[i].count)))
+                        return(SOX_EOF);
                 ft->oob.loops[i].start = trailer->loops[i].start;
-                lsx_readdw(ft, &(trailer->loops[i].end));
                 ft->oob.loops[i].length =
                         trailer->loops[i].end - trailer->loops[i].start;
-                lsx_readb(ft, &(trailer->loops[i].type));
                 ft->oob.loops[i].type = trailer->loops[i].type;
-                lsx_readw(ft, &(trailer->loops[i].count));
                 ft->oob.loops[i].count = trailer->loops[i].count;
         }
         for(i = 0; i < 8; i++) {        /* read the 8 markers */
@@ -96,12 +99,14 @@ static int readtrailer(sox_format_t * ft, struct smptrailer *trailer)
                     return(SOX_EOF);
                 }
                 trailer->markers[i].name[MARKERLEN] = 0;
-                lsx_readdw(ft, &(trailer->markers[i].position));
+                if (lsx_readdw(ft, &(trailer->markers[i].position)))
+                    return(SOX_EOF);
         }
-        lsx_readsb(ft, &(trailer->MIDInote));
-        lsx_readdw(ft, &(trailer->rate));
-        lsx_readdw(ft, &(trailer->SMPTEoffset));
-        lsx_readdw(ft, &(trailer->CycleSize));
+        if (lsx_readsb(ft, &(trailer->MIDInote)) ||
+            lsx_readdw(ft, &(trailer->rate)) ||
+            lsx_readdw(ft, &(trailer->SMPTEoffset)) ||
+            lsx_readdw(ft, &(trailer->CycleSize)))
+                return(SOX_EOF);
         return(SOX_SUCCESS);
 }
 
@@ -144,18 +149,21 @@ static void settrailer(sox_format_t * ft, struct smptrailer *trailer, sox_rate_t
 
 /*
  * Write the SampleVision trailer structure.
- * Returns 1 if everything was written ok, 0 if there was an error.
+ * Returns SOX_SUCCESS if everything was written ok,
+ *         SOX_EOF if there was an error.
  */
 static int writetrailer(sox_format_t * ft, struct smptrailer *trailer)
 {
         int i;
 
-        lsx_writew(ft, 0);                       /* write the reserved word */
+        if (lsx_writew(ft, 0))
+                return(SOX_EOF);
         for(i = 0; i < 8; i++) {        /* write the 8 loops */
-                lsx_writedw(ft, trailer->loops[i].start);
-                lsx_writedw(ft, trailer->loops[i].end);
-                lsx_writeb(ft, trailer->loops[i].type);
-                lsx_writew(ft, trailer->loops[i].count);
+                if (lsx_writedw(ft, trailer->loops[i].start) ||
+                    lsx_writedw(ft, trailer->loops[i].end) ||
+                    lsx_writeb(ft, trailer->loops[i].type) ||
+                    lsx_writew(ft, trailer->loops[i].count))
+                        return(SOX_EOF);
         }
         for(i = 0; i < 8; i++) {        /* write the 8 markers */
                 if (lsx_writes(ft, trailer->markers[i].name) == SOX_EOF)
@@ -163,12 +171,15 @@ static int writetrailer(sox_format_t * ft, struct smptrailer *trailer)
                     lsx_fail_errno(ft,SOX_EHDR,"EOF in SMP");
                     return(SOX_EOF);
                 }
-                lsx_writedw(ft, trailer->markers[i].position);
+                if (lsx_writedw(ft, trailer->markers[i].position))
+                    return(SOX_EOF);
         }
-        lsx_writeb(ft, (uint8_t)(trailer->MIDInote));
-        lsx_writedw(ft, trailer->rate);
-        lsx_writedw(ft, trailer->SMPTEoffset);
-        lsx_writedw(ft, trailer->CycleSize);
+        if (lsx_writeb(ft, (uint8_t)(trailer->MIDInote)) ||
+            lsx_writedw(ft, trailer->rate) ||
+            lsx_writedw(ft, trailer->SMPTEoffset) ||
+            lsx_writedw(ft, trailer->CycleSize))
+                return(SOX_EOF);
+
         return(SOX_SUCCESS);
 }
 
@@ -252,7 +263,10 @@ static int sox_smpstartread(sox_format_t * ft)
         sox_append_comments(&ft->oob.comments, smp->comment);
 
         /* Extract out the sample size (always intel format) */
-        lsx_readdw(ft, &dw);
+        if (lsx_readdw(ft, &dw)) {
+                lsx_fail_errno(ft,errno,"unable to read sample size");
+                return(SOX_EOF);
+        }
         smp->NoOfSamps = dw;
         /* mark the start of the sample data */
         samplestart = lsx_tell(ft);
@@ -264,7 +278,7 @@ static int sox_smpstartread(sox_format_t * ft)
                 lsx_fail_errno(ft,errno,"SMP unable to seek to trailer");
                 return(SOX_EOF);
         }
-        if (readtrailer(ft, &trailer))
+        if (readtrailer(ft, &trailer) != SOX_SUCCESS)
         {
                 lsx_fail_errno(ft,SOX_EHDR,"unexpected EOF in SMP trailer");
                 return(SOX_EOF);
@@ -331,11 +345,17 @@ static size_t sox_smpread(sox_format_t * ft, sox_sample_t *buf, size_t len)
         size_t done = 0;
 
         for(; done < len && smp->NoOfSamps; done++, smp->NoOfSamps--) {
-                lsx_readw(ft, &datum);
+                if (lsx_readw(ft, &datum))
+                        break;
                 /* scale signed up to long's range */
                 *buf++ = SOX_SIGNED_16BIT_TO_SAMPLE(datum,);
         }
         return done;
+}
+
+#define write_error() { \
+        lsx_fail_errno(ft, SOX_EOF, "write error"); \
+        return(SOX_EOF); \
 }
 
 static int sox_smpstartwrite(sox_format_t * ft)
@@ -363,7 +383,8 @@ static int sox_smpstartwrite(sox_format_t * ft)
             lsx_fail_errno(ft,errno,"SMP: Can't write header completely");
             return(SOX_EOF);
         }
-        lsx_writedw(ft, 0);      /* write as zero length for now, update later */
+        if (lsx_writedw(ft, 0))      /* write as zero length for now, update later */
+            write_error();
         smp->NoOfSamps = 0;
 
         return(SOX_SUCCESS);
@@ -378,7 +399,8 @@ static size_t sox_smpwrite(sox_format_t * ft, const sox_sample_t *buf, size_t le
         while(done < len) {
                 SOX_SAMPLE_LOCALS;
                 datum = (int) SOX_SAMPLE_TO_SIGNED_16BIT(*buf++, ft->clips);
-                lsx_writew(ft, (uint16_t)datum);
+                if (lsx_writew(ft, (uint16_t)datum))
+                        write_error();
                 smp->NoOfSamps++;
                 done++;
         }
@@ -393,13 +415,15 @@ static int sox_smpstopwrite(sox_format_t * ft)
 
         /* Assign the trailer data */
         settrailer(ft, &trailer, ft->signal.rate);
-        writetrailer(ft, &trailer);
+        if (writetrailer(ft, &trailer) != SOX_SUCCESS)
+                write_error();
         if (lsx_seeki(ft, (off_t)112, 0) == -1)
         {
                 lsx_fail_errno(ft,errno,"SMP unable to seek back to save size");
                 return(SOX_EOF);
         }
-        lsx_writedw(ft, smp->NoOfSamps > UINT_MAX ? UINT_MAX : (unsigned)smp->NoOfSamps);
+        if (lsx_writedw(ft, smp->NoOfSamps > UINT_MAX ? UINT_MAX : (unsigned)smp->NoOfSamps))
+                write_error();
 
         return(SOX_SUCCESS);
 }

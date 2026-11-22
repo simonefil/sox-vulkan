@@ -81,14 +81,16 @@ static int start_read(sox_format_t * ft)
   sox_encoding_t encoding;
   unsigned bits_per_sample;
 
-  lsx_readdw(ft, &file_size);
+  if (lsx_readdw(ft, &file_size))
+    return SOX_EOF;
   num_samples = file_size? file_size * 2 - HEADER_SIZE : SOX_UNSPEC;
 
   if (file_size >= 2 && ft->seekable) {
     int i, checksum = (file_size >> 16) + file_size;
     for (i = file_size - 2; i; --i) {
       int16_t int16;
-      lsx_readsw(ft, &int16);
+      if (lsx_readsw(ft, &int16))
+        return SOX_EOF;
       checksum += int16;
     }
     if (lsx_seeki(ft, (off_t)sizeof(file_size), SEEK_SET) != 0)
@@ -99,13 +101,14 @@ static int start_read(sox_format_t * ft)
 
   lsx_skipbytes(ft, (size_t)(2 + 4 + 6)); /* Checksum, version, time stamp. */
 
-  lsx_readchars(ft, read_id, sizeof(read_id));
-  if (memcmp(read_id, id, strlen(id))) {
-    lsx_fail_errno(ft, SOX_EHDR, "gsrt: invalid file name in header");
+  if (lsx_readchars(ft, read_id, sizeof(read_id)) ||
+      memcmp(read_id, id, strlen(id))) {
+    lsx_fail_errno(ft, SOX_EHDR, "gsrt: invalid/missing file name in header");
     return SOX_EOF;
   }
 
-  lsx_readsw(ft, &ft_encoding);
+  if (lsx_readsw(ft, &ft_encoding))
+    return SOX_EOF;
   encoding = sox_enc(ft_encoding, &bits_per_sample);
   if (encoding != SOX_ENCODING_ALAW &&
       encoding != SOX_ENCODING_ULAW)
@@ -167,11 +170,13 @@ static int stop_write(sox_format_t * ft)
     int16_t int16;
     int checksum;
     if (!lsx_seeki(ft, (off_t)sizeof(uint32_t), SEEK_SET)) {
-      lsx_readsw(ft, &int16);
+      if (lsx_readsw(ft, &int16))
+        return SOX_EOF;
       checksum = (file_size >> 16) + file_size - int16;
       if (!lsx_seeki(ft, (off_t)HEADER_SIZE, SEEK_SET)) {
         for (i = (num_samples + 1) >> 1; i; --i) {
-          lsx_readsw(ft, &int16);
+          if (lsx_readsw(ft, &int16))
+	    return SOX_EOF;
           checksum += int16;
         }
         if (!lsx_seeki(ft, (off_t)0, SEEK_SET)) {

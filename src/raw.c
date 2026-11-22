@@ -72,7 +72,8 @@ int lsx_rawstart(sox_format_t * ft, sox_bool default_rate,
   { \
     size_t n, nread; \
     SOX_SAMPLE_LOCALS; \
-    ctype *data = lsx_malloc(sizeof(ctype) * len); \
+    ctype *data; \
+    lsx_valloc(data, len); \
     LSX_USE_VAR(sox_macro_temp_sample), LSX_USE_VAR(sox_macro_temp_double); \
     nread = lsx_read_ ## type ## _buf(ft, (uctype *)data, len); \
     for (n = 0; n < nread; n++) \
@@ -100,7 +101,8 @@ READ_SAMPLES_FUNC(df, sizeof(double), su, double, double, SOX_FLOAT_64BIT_TO_SAM
   { \
     SOX_SAMPLE_LOCALS; \
     size_t n, nwritten; \
-    ctype *data = lsx_malloc(sizeof(ctype) * len); \
+    ctype *data; \
+    lsx_valloc(data, len); \
     LSX_USE_VAR(sox_macro_temp_sample), LSX_USE_VAR(sox_macro_temp_double); \
     for (n = 0; n < len; n++) \
       data[n] = cast(buf[n], ft->clips); \

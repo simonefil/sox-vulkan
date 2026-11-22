@@ -167,8 +167,7 @@ static int wav_ima_adpcm_fmt(sox_format_t *ft, uint32_t len)
     }
 
     wav->packet = lsx_malloc(wav->blockAlign);
-    wav->samples =
-        lsx_malloc(ft->signal.channels * wav->samplesPerBlock * sizeof(short));
+    lsx_valloc(wav->samples, ft->signal.channels * wav->samplesPerBlock);
 
     return SOX_SUCCESS;
 }
@@ -260,11 +259,10 @@ static int wav_ms_adpcm_fmt(sox_format_t *ft, uint32_t len)
     }
 
     wav->packet = lsx_malloc(wav->blockAlign);
-    wav->samples =
-        lsx_malloc(ft->signal.channels * wav->samplesPerBlock * sizeof(short));
+    lsx_valloc(wav->samples, ft->signal.channels * wav->samplesPerBlock);
 
     /* nCoefs, lsx_ms_adpcm_i_coefs used by adpcm.c */
-    wav->lsx_ms_adpcm_i_coefs = lsx_malloc(wav->nCoefs * 2 * sizeof(short));
+    lsx_valloc(wav->lsx_ms_adpcm_i_coefs, wav->nCoefs * 2);
     wav->ms_adpcm_data = lsx_ms_adpcm_alloc(ft->signal.channels);
 
     err = lsx_read_fields(ft, &len, "*h",
@@ -406,7 +404,7 @@ static int wavgsminit(sox_format_t * ft)
         return (SOX_EOF);
     }
 
-    wav->gsmsample=lsx_malloc(sizeof(gsm_signal)*160*2);
+    lsx_valloc(wav->gsmsample, 160*2);
     wav->gsmindex=0;
     return (SOX_SUCCESS);
 }
@@ -1169,7 +1167,7 @@ static int startwrite(sox_format_t * ft)
                 wav->state[ch] = 0;
             sbsize = ft->signal.channels * wav->samplesPerBlock;
             wav->packet = lsx_malloc((size_t)wav->blockAlign);
-            wav->samples = lsx_malloc(sbsize*sizeof(short));
+            lsx_valloc(wav->samples, sbsize);
             wav->sampleTop = wav->samples + sbsize;
             wav->samplePtr = wav->samples;
             break;

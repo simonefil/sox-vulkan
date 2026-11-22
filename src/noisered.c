@@ -36,7 +36,9 @@ static void FFT(unsigned NumSamples,
          const float *RealIn, float *ImagIn, float *RealOut, float *ImagOut)
 {
   unsigned i;
-  double * work = malloc(2 * NumSamples * sizeof(*work));
+  double * work;
+
+  lsx_valloc(work, 2 * NumSamples);
   for (i = 0; i < 2 * NumSamples; i += 2) {
     work[i] = RealIn[i >> 1];
     work[i + 1] = ImagIn? ImagIn[i >> 1] : 0;

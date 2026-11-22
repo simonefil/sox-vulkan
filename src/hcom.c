@@ -141,6 +141,11 @@ static int startread(sox_format_t * ft)
                 return (SOX_EOF);
         }
         lsx_readw(ft, &dictsize);
+        if (dictsize == 0 || dictsize > 511)
+        {
+                lsx_fail_errno(ft, SOX_EHDR, "Implausible dictionary size in HCOM header");
+                return SOX_EOF;
+        }
 
         /* Translate to sox parameters */
         ft->encoding.encoding = SOX_ENCODING_HCOM;

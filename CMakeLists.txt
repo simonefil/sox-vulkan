@@ -290,6 +290,10 @@ endif()
 # Find packages using pkg-config when available
 find_package(PkgConfig QUIET)
 
+# Each pkg_check_modules(<PREFIX> ...) below takes its modules from
+# <PREFIX>_PC_MODULES, which sox.pc also lists in Requires.private when
+# PkgConfig::<PREFIX> is what libsox links.
+
 # ===== External library detection =====
 
 # GSM library (check for external, otherwise use in-tree)
@@ -373,7 +377,8 @@ endif()
 # FLAC
 if(WITH_FLAC)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(FLAC IMPORTED_TARGET flac)
+        set(FLAC_PC_MODULES flac)
+        pkg_check_modules(FLAC IMPORTED_TARGET ${FLAC_PC_MODULES})
         if(FLAC_FOUND)
             set(FLAC_LIBRARIES PkgConfig::FLAC)
         endif()
@@ -406,8 +411,10 @@ endif()
 # over libogg.
 if(WITH_OGGVORBIS)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(VORBIS IMPORTED_TARGET vorbisenc vorbis)
-        pkg_check_modules(OGG IMPORTED_TARGET ogg)
+        set(VORBIS_PC_MODULES vorbisenc vorbis)
+        pkg_check_modules(VORBIS IMPORTED_TARGET ${VORBIS_PC_MODULES})
+        set(OGG_PC_MODULES ogg)
+        pkg_check_modules(OGG IMPORTED_TARGET ${OGG_PC_MODULES})
         if(VORBIS_FOUND)
             if(SOX_REQUIRE_STATIC_DEPENDENCIES AND (IS_LINUX OR IS_BSD))
                 set(VORBIS_LIBRARIES ${VORBIS_STATIC_LINK_LIBRARIES})
@@ -465,10 +472,11 @@ endif()
 # older libavcodec passes configure and fails at the call site.
 if(WITH_FFMPEG_CODECS)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(FFMPEG_CODECS IMPORTED_TARGET
+        set(FFMPEG_CODECS_PC_MODULES
             libavcodec>=61
             libavutil>=59
         )
+        pkg_check_modules(FFMPEG_CODECS IMPORTED_TARGET ${FFMPEG_CODECS_PC_MODULES})
         if(FFMPEG_CODECS_FOUND)
             set(FFMPEG_CODECS_LIBRARIES PkgConfig::FFMPEG_CODECS)
         endif()
@@ -600,7 +608,8 @@ endif()
 # WavPack
 if(WITH_WAVPACK)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(WAVPACK IMPORTED_TARGET wavpack)
+        set(WAVPACK_PC_MODULES wavpack)
+        pkg_check_modules(WAVPACK IMPORTED_TARGET ${WAVPACK_PC_MODULES})
         if(WAVPACK_FOUND)
             set(WAVPACK_LIBRARIES PkgConfig::WAVPACK)
         endif()
@@ -622,7 +631,8 @@ endif()
 # libsndfile
 if(WITH_SNDFILE)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(SNDFILE IMPORTED_TARGET sndfile)
+        set(SNDFILE_PC_MODULES sndfile)
+        pkg_check_modules(SNDFILE IMPORTED_TARGET ${SNDFILE_PC_MODULES})
         if(SNDFILE_FOUND)
             if(SOX_REQUIRE_STATIC_DEPENDENCIES AND (IS_LINUX OR IS_BSD))
                 set(SNDFILE_LIBRARIES ${SNDFILE_STATIC_LINK_LIBRARIES})
@@ -678,7 +688,8 @@ endif()
 # ALSA (Linux only)
 if(WITH_ALSA AND IS_LINUX)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(ALSA IMPORTED_TARGET alsa)
+        set(ALSA_PC_MODULES alsa)
+        pkg_check_modules(ALSA IMPORTED_TARGET ${ALSA_PC_MODULES})
         if(ALSA_FOUND)
             set(ALSA_LIBRARIES PkgConfig::ALSA)
         endif()
@@ -700,7 +711,8 @@ endif()
 # PulseAudio (Linux and FreeBSD)
 if(WITH_PULSEAUDIO AND (IS_LINUX OR IS_FREEBSD))
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(PULSEAUDIO IMPORTED_TARGET libpulse-simple)
+        set(PULSEAUDIO_PC_MODULES libpulse-simple)
+        pkg_check_modules(PULSEAUDIO IMPORTED_TARGET ${PULSEAUDIO_PC_MODULES})
         if(PULSEAUDIO_FOUND)
             set(PULSEAUDIO_LIBRARIES PkgConfig::PULSEAUDIO)
         endif()
@@ -803,7 +815,8 @@ endif()
 # libao
 if(WITH_AO)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(AO IMPORTED_TARGET ao)
+        set(AO_PC_MODULES ao)
+        pkg_check_modules(AO IMPORTED_TARGET ${AO_PC_MODULES})
         if(AO_FOUND)
             set(AO_LIBRARIES PkgConfig::AO)
         endif()
@@ -956,13 +969,3 @@ message(STATUS "  LADSPA:                ${HAVE_LADSPA_H}")
 message(STATUS "  OpenMP:                ${HAVE_OPENMP}")
 message(STATUS "  Vulkan FIR/DSD:        ${HAVE_VULKAN}")
 message(STATUS "")
-
-# pkg-config file
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/sox.pc.in
-    ${CMAKE_CURRENT_BINARY_DIR}/sox.pc
-    @ONLY
-)
-
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/sox.pc
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)

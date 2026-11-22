@@ -1345,6 +1345,159 @@ if(HAVE_WAVPACK AND CMAKE_SYSTEM_NAME MATCHES "FreeBSD|OpenBSD|NetBSD|DragonFly"
 endif()
 
 # =====================================================================
+# pkg-config metadata
+# =====================================================================
+
+# sox.pc describes what a static libsox needs at link time, taken from what
+# libsox links: a PkgConfig:: target becomes its modules in Requires.private,
+# anything else -L and -l (or -framework) entries in Libs.private.  Imported
+# and in-tree targets are followed through their link interfaces.
+function(sox_pc_collect items)
+    foreach(item IN LISTS items)
+        if(item MATCHES "^\\$<LINK_ONLY:(.*)>$")
+            set(item "${CMAKE_MATCH_1}")
+        endif()
+        if(item STREQUAL "" OR item MATCHES "\\$<")
+            continue()
+        endif()
+
+        if(TARGET "${item}")
+            if(item MATCHES "^PkgConfig::(.*)$")
+                set(modules "${CMAKE_MATCH_1}_PC_MODULES")
+                if(DEFINED ${modules})
+                    set_property(GLOBAL APPEND PROPERTY SOX_PC_REQUIRES ${${modules}})
+                    continue()
+                endif()
+            endif()
+
+            # A target is followed every time it is named, so that its
+            # libraries end up after the last library that needs them; the
+            # guard only stops a target from being followed inside itself.
+            get_property(visiting GLOBAL PROPERTY SOX_PC_VISITING)
+            if("${item}" IN_LIST visiting)
+                continue()
+            endif()
+            set_property(GLOBAL APPEND PROPERTY SOX_PC_VISITING "${item}")
+
+            get_target_property(aliased "${item}" ALIASED_TARGET)
+            get_target_property(type "${item}" TYPE)
+            get_target_property(imported "${item}" IMPORTED)
+            if(aliased)
+                sox_pc_collect("${aliased}")
+            elseif(imported)
+                if(NOT type STREQUAL "INTERFACE_LIBRARY")
+                    get_target_property(configs "${item}" IMPORTED_CONFIGURATIONS)
+                    set(location "")
+                    if(configs)
+                        if("RELEASE" IN_LIST configs)
+                            set(config RELEASE)
+                        else()
+                            list(GET configs 0 config)
+                        endif()
+                        get_target_property(location "${item}" IMPORTED_LOCATION_${config})
+                    endif()
+                    if(NOT location)
+                        get_target_property(location "${item}" IMPORTED_LOCATION)
+                    endif()
+                    if(location)
+                        sox_pc_collect("${location}")
+                    endif()
+                endif()
+            elseif(type STREQUAL "STATIC_LIBRARY")
+                get_target_property(name "${item}" OUTPUT_NAME)
+                if(NOT name)
+                    set(name "${item}")
+                endif()
+                set_property(GLOBAL APPEND PROPERTY SOX_PC_LIBS "-l${name}")
+            endif()
+            if(NOT aliased)
+                get_target_property(interface "${item}" INTERFACE_LINK_LIBRARIES)
+                if(interface)
+                    sox_pc_collect("${interface}")
+                endif()
+            endif()
+
+            get_property(visiting GLOBAL PROPERTY SOX_PC_VISITING)
+            list(REMOVE_ITEM visiting "${item}")
+            set_property(GLOBAL PROPERTY SOX_PC_VISITING "${visiting}")
+        elseif(item MATCHES "^-")
+            set_property(GLOBAL APPEND PROPERTY SOX_PC_LIBS "${item}")
+        elseif(IS_ABSOLUTE "${item}")
+            get_filename_component(dir "${item}" DIRECTORY)
+            get_filename_component(name "${item}" NAME_WE)
+            if(item MATCHES "\\.framework$")
+                set_property(GLOBAL APPEND PROPERTY SOX_PC_LIBS "-framework ${name}")
+                continue()
+            endif()
+            if(CMAKE_STATIC_LIBRARY_PREFIX AND name MATCHES "^${CMAKE_STATIC_LIBRARY_PREFIX}(.+)$")
+                set(name "${CMAKE_MATCH_1}")
+            endif()
+            if(NOT dir IN_LIST CMAKE_C_IMPLICIT_LINK_DIRECTORIES)
+                set_property(GLOBAL APPEND PROPERTY SOX_PC_DIRS "-L${dir}")
+            endif()
+            set_property(GLOBAL APPEND PROPERTY SOX_PC_LIBS "-l${name}")
+        else()
+            set_property(GLOBAL APPEND PROPERTY SOX_PC_LIBS "-l${item}")
+        endif()
+    endforeach()
+endfunction()
+
+# A shared libsox carries its own dependencies, so its private fields stay
+# empty and a consumer needs no .pc file of them.
+get_target_property(SOX_PC_TYPE libsox TYPE)
+if(SOX_PC_TYPE STREQUAL "STATIC_LIBRARY")
+    get_target_property(SOX_PC_LINK_DIRECTORIES libsox LINK_DIRECTORIES)
+    foreach(dir IN LISTS SOX_PC_LINK_DIRECTORIES)
+        set_property(GLOBAL APPEND PROPERTY SOX_PC_DIRS "-L${dir}")
+    endforeach()
+    get_target_property(SOX_PC_LINK_LIBRARIES libsox LINK_LIBRARIES)
+    sox_pc_collect("${SOX_PC_LINK_LIBRARIES}")
+    # The C++ sources (Monkey's Audio) need the C++ runtime that a C link of
+    # a static libsox does not add.
+    get_property(SOX_PC_LANGUAGES GLOBAL PROPERTY ENABLED_LANGUAGES)
+    if("CXX" IN_LIST SOX_PC_LANGUAGES)
+        foreach(lib IN LISTS CMAKE_CXX_IMPLICIT_LINK_LIBRARIES)
+            if(NOT lib IN_LIST CMAKE_C_IMPLICIT_LINK_LIBRARIES)
+                sox_pc_collect("${lib}")
+            endif()
+        endforeach()
+    endif()
+endif()
+
+get_property(SOX_PC_DIRS GLOBAL PROPERTY SOX_PC_DIRS)
+get_property(SOX_PC_LIBS GLOBAL PROPERTY SOX_PC_LIBS)
+get_property(SOX_PC_REQUIRES GLOBAL PROPERTY SOX_PC_REQUIRES)
+list(REMOVE_DUPLICATES SOX_PC_DIRS)
+# A static link resolves left to right, so a library named twice stays
+# where it is named last.
+list(REVERSE SOX_PC_LIBS)
+list(REMOVE_DUPLICATES SOX_PC_LIBS)
+list(REVERSE SOX_PC_LIBS)
+list(REMOVE_DUPLICATES SOX_PC_REQUIRES)
+string(REPLACE ";" " " SOX_PC_LIBS_PRIVATE "${SOX_PC_DIRS};${SOX_PC_LIBS}")
+string(STRIP "${SOX_PC_LIBS_PRIVATE}" SOX_PC_LIBS_PRIVATE)
+# pkg_check_modules takes "libavcodec>=61", a .pc file "libavcodec >= 61".
+list(TRANSFORM SOX_PC_REQUIRES REPLACE "^([^<>=!]+)([<>=!]+)(.+)$" "\\1 \\2 \\3")
+string(REPLACE ";" ", " SOX_PC_REQUIRES_PRIVATE "${SOX_PC_REQUIRES}")
+
+if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+    set(SOX_PC_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+else()
+    set(SOX_PC_LIBDIR "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")
+endif()
+if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+    set(SOX_PC_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+else()
+    set(SOX_PC_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+endif()
+
+configure_file(
+    ${PROJECT_SOURCE_DIR}/sox.pc.in
+    ${PROJECT_BINARY_DIR}/sox.pc
+    @ONLY
+)
+
+# =====================================================================
 # Installation
 # =====================================================================
 
@@ -1368,6 +1521,10 @@ endif()
 # Install header
 install(FILES sox.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(FILES ${PROJECT_BINARY_DIR}/sox.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )
 
 # Create symlinks for play/rec/soxi (Unix-like systems: Linux, macOS, BSD)

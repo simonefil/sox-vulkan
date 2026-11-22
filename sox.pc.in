@@ -1,12 +1,13 @@
-prefix=@prefix@
-exec_prefix=@exec_prefix@
-libdir=@libdir@
-includedir=@includedir@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=@SOX_PC_LIBDIR@
+includedir=@SOX_PC_INCLUDEDIR@
 
 Name: SoX
 Description: Audio file format and effects library
-Version: @VERSION@
+Version: @PROJECT_VERSION@
 URL: http://sox.sourceforge.net
+Requires.private: @SOX_PC_REQUIRES_PRIVATE@
 Libs: -L${libdir} -lsox
-Libs.private: @LIBS@
+Libs.private: @SOX_PC_LIBS_PRIVATE@
 Cflags: -I${includedir}

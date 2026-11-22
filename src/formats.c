@@ -699,7 +699,7 @@ static int xfclose(FILE * file, lsx_io_type io_type)
 {
   return
 #ifdef HAVE_POPEN
-    io_type != lsx_io_file? pclose(file) :
+    io_type != lsx_io_file? lsx_pclose(file) :
 #endif
     fclose(file);
 }
@@ -769,12 +769,26 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
   else if (is_url(identifier)) {
     FILE * f = NULL;
 #ifdef HAVE_POPEN
-    char const * const command_format = "wget --no-check-certificate -q -O- \"%s\"";
-    char * command = lsx_malloc(strlen(command_format) + strlen(identifier));
-    sprintf(command, command_format, identifier);
-    f = popen(command, POPEN_MODE);
+    char * command_argv[] = {
+      "wget", "--no-check-certificate", "-q", "-O-", NULL, NULL
+    };
+#ifdef _WIN32
+    /* The popen fallback quotes the URL for cmd.exe.  A raw double quote,
+     * which is not valid in a URL, would end that quoting and allow the
+     * remainder of a playlist entry to be interpreted as command syntax.
+     */
+    if (strchr(identifier, '"')) {
+      lsx_fail("URL contains an invalid double quote");
+      return NULL;
+    }
+#endif
+    command_argv[4] = (char *)identifier;
+    f = lsx_popen(command_argv, 'r', 4);
+    if (f == NULL) {
+      lsx_fail("cannot execute URL downloader `%s'", command_argv[0]);
+      return f;
+    }
     incr_pipe_size(f);
-    free(command);
     *io_type = lsx_io_url;
 #else
     lsx_fail("this build of SoX cannot open URLs");
@@ -1744,6 +1758,13 @@ int sox_parse_playlist(sox_playlist_callback_t callback, void * p, char const * 
       }
       if (begin != end) {
         char const * id = text + begin;
+
+        if (*id == '|') {
+          lsx_fail("piped commands are not permitted in playlist entries");
+          result = SOX_EOF;
+          c = EOF;
+          continue;
+        }
 
         if (!dirname[0] || is_url(id) || IS_ABSOLUTE(id))
           filename = lsx_strdup(id);

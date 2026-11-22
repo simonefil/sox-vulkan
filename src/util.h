@@ -250,3 +250,6 @@ extern int lsx_strncasecmp(char const *s1, char const *s2, size_t n);
 #define strcasecmp(s1, s2) lsx_strcasecmp((s1), (s2))
 #define strncasecmp(s1, s2, n) lsx_strncasecmp((s1), (s2), (n))
 #endif
+
+extern FILE *lsx_popen(char **argv, char type, int filename_index);
+extern int lsx_pclose(FILE *stream);

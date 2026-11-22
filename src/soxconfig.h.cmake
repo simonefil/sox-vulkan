@@ -79,10 +79,12 @@
 
 /* Functions */
 #cmakedefine HAVE_FMEMOPEN            1
+#cmakedefine HAVE_FORK                1
 #cmakedefine HAVE_FSEEKO              1
 #cmakedefine HAVE_GETTIMEOFDAY        1
 #cmakedefine HAVE_LRINT               1
 #cmakedefine HAVE_MKSTEMP             1
+#cmakedefine HAVE_PIPE                1
 #cmakedefine HAVE_POPEN               1
 #cmakedefine HAVE_STRCASECMP          1
 #cmakedefine HAVE_STRDUP              1

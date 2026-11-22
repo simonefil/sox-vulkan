@@ -302,3 +302,229 @@ void lsx_close_dllibrary(
   }
 #endif /* HAVE_LIBLTDL */
 }
+
+#if HAVE_PIPE && HAVE_FORK
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* Streams returned by fdopen() are not libc popen() streams. */
+typedef struct child_pipe {
+  FILE * stream;
+  pid_t pid;
+  struct child_pipe * next;
+} child_pipe;
+
+static child_pipe * child_pipes;
+#endif
+
+/* Our own version of popen() that doesn't use the shell, adapted from
+ * android.googlesource.com/platform/bionic/+/3884bfe/libc/unistd/popen.c
+ * derived from software written by Ken Arnold and published in
+ * UNIX Review, Vol. 6, No. 8.
+ */
+FILE * lsx_popen(char ** argv, char type,
+#if (HAVE_PIPE && HAVE_FORK) || !defined(HAVE_POPEN)
+UNUSED
+#endif
+                 int filename_index)
+{
+#if HAVE_PIPE && HAVE_FORK
+  FILE *iop;
+  int pdes[2], saved_errno, status;
+  pid_t pid;
+  child_pipe *child;
+#elif defined(HAVE_POPEN)
+  FILE *iop;
+  char *quoted_filename;
+  char *p, *q;
+  char *command;
+  char *filename = argv[filename_index];
+  size_t filename_len;
+  size_t nchars;
+  int i;
+#endif
+  char mode[3];
+
+  mode[0] = type;
+#ifdef _WIN32
+  mode[1] = 'b'; mode[2] = '\0';
+#else
+  mode[1] = '\0';
+#endif
+
+#if HAVE_PIPE && HAVE_FORK
+  if (type != 'r' && type != 'w') {
+    errno = EINVAL;
+    return NULL;
+  }
+  if (pipe(pdes) < 0)
+    return NULL;
+  child = lsx_malloc(sizeof(*child));
+  pid = fork();
+  switch (pid) {
+    int i;
+
+  case -1:      /* Error. */
+    saved_errno = errno;
+    close(pdes[0]);
+    close(pdes[1]);
+    free(child);
+    errno = saved_errno;
+    return NULL;
+
+  case 0:        /* Child. */
+    /* Close all other file descriptors except
+     * stdin, in case the input file is "-" and
+     * stderr in case the program spouts errors.
+     * stdout will be closed by dup2().
+     */
+    for (i = 3; ; i++) {
+      if (i == pdes[0] || i == pdes[1]) continue;
+      if (close(i) != 0) break;
+    }
+    if (type == 'r') {
+      close(pdes[0]);
+      if (pdes[1] != 1) {
+        dup2(pdes[1], 1);
+        close(pdes[1]);
+      }
+    } else {
+      close(pdes[1]);
+      if (pdes[0] != 0) {
+        dup2(pdes[0], 0);
+        close(pdes[0]);
+      }
+    }
+    execvp(argv[0], argv);
+    _exit(127);
+    /* NOTREACHED */
+  }
+  /* Parent: record the child before returning the stream. */
+  if (type == 'r') {
+    close(pdes[1]);
+    iop = fdopen(pdes[0], mode);
+    if (!iop) close(pdes[0]);
+  } else {
+    close(pdes[0]);
+    iop = fdopen(pdes[1], mode);
+    if (!iop) close(pdes[1]);
+  }
+  if (!iop) {
+    saved_errno = errno;
+    (void)kill(pid, SIGKILL);
+    do {
+      status = waitpid(pid, NULL, 0);
+    } while (status == -1 && errno == EINTR);
+    free(child);
+    errno = saved_errno;
+    return NULL;
+  }
+  child->stream = iop;
+  child->pid = pid;
+  child->next = child_pipes;
+  child_pipes = child;
+  return iop;
+
+#elif defined(HAVE_POPEN)
+
+  /* Quote special characters in the filename. */
+  /* On Unix, single quote the complete filename.  An embedded single quote
+   * needs four extra characters: close quote, escaped quote, open quote.
+   * Windows uses the existing escape syntax and can require one escape per
+   * input character. */
+  filename_len = strlen(filename);
+  if (filename_len > ((size_t)-1 - 3) / 4) {
+    errno = EOVERFLOW;
+    return NULL;
+  }
+  quoted_filename = lsx_malloc(filename_len * 4 + 3);
+#ifdef _WIN32
+  /* cmd.exe and then the child's C runtime both split the command line, and
+   * double quotes are understood by both, so quote the whole name.  A run of
+   * backslashes just before the closing quote would escape it, so those are
+   * doubled. */
+  q = quoted_filename;
+  *q++ = '"';
+  for (p = filename; *p; p++)
+    *q++ = *p;
+  for (p = filename + filename_len; p > filename && p[-1] == '\\'; p--)
+    *q++ = '\\';
+  *q++ = '"';
+  *q = '\0';
+#else
+  q = quoted_filename;
+  *q++ = '\'';
+  for (p = filename; *p; ++p) {
+    if (*p == '\'') {
+      *q++ = '\'';
+      *q++ = '\\';
+      *q++ = '\'';
+      *q++ = '\'';
+    } else
+      *q++ = *p;
+  }
+  *q++ = '\'';
+  *q = '\0';
+#endif
+
+  argv[filename_index] = quoted_filename;
+
+  /* Make a command-line from the argv list */
+  nchars = 1; /* the nul */
+  for (i = 0; argv[i]; i++) nchars += strlen(argv[i]) + 1;
+  command = lsx_malloc(nchars); *command = '\0';
+  for (i = 0; argv[i]; i++) {
+    if (i > 0) strcat(command, " ");
+    strcat(command, argv[i]);
+  }
+  free(quoted_filename);
+  iop = popen(command, mode);
+  free(command);
+  return iop;
+
+#else
+
+  lsx_fail("this build of SoX can't open programs on a pipe");
+  return NULL;
+
+#endif
+}
+
+/* Close a pipe created by lsx_popen(), or a libc popen() stream. */
+int lsx_pclose(FILE * stream)
+{
+#if HAVE_PIPE && HAVE_FORK
+  child_pipe ** link, * child = NULL;
+  pid_t pid;
+  int status = 0, close_error = 0, waited;
+
+  for (link = &child_pipes; *link; link = &(*link)->next) {
+    if ((*link)->stream == stream) {
+      child = *link;
+      *link = child->next;
+      break;
+    }
+  }
+
+  if (child) {
+    pid = child->pid;
+    free(child);
+    if (fclose(stream) != 0)
+      close_error = errno;
+    do {
+      waited = waitpid(pid, &status, 0);
+    } while (waited == -1 && errno == EINTR);
+    if (waited == -1 || close_error) {
+      if (close_error) errno = close_error;
+      return -1;
+    }
+    return status;
+  }
+#endif
+#ifdef HAVE_POPEN
+  return pclose(stream);
+#else
+  return fclose(stream);
+#endif
+}

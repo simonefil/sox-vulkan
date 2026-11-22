@@ -1632,34 +1632,26 @@ static char *fndup_with_count(const char *filename, size_t count)
         /* Look for %n. If found, replace with count.  Can specify an
          * option width of 1-9.
          */
-        if (*fn == '%')
+        if (fn[0] == '%' &&
+            (fn[1] == 'n' ||
+             (fn[1] >= '1' && fn[1] <= '9' && fn[2] == 'n')))
         {
             char width = 0;
+            char format[5];
+
             fn++;
             if (*fn >= '1' && *fn <= '9')
-            {
                 width = *fn++;
-            }
-            if (*fn == 'n')
-            {
-                char format[5];
+            /* *fn == 'n' */
+            found_marker = sox_true;
 
-                found_marker = sox_true;
-
-                if (width)
-                {
-					sprintf(format, "%%0%cd", width);
-                }
-				else
-				{
-                    strcpy(format, "%02d");
-				}
-
-                efn += sprintf(efn, format, count);
-                fn++;
-            }
+            if (width)
+                sprintf(format, "%%0%cd", width);
             else
-                *efn++ = *fn++;
+                strcpy(format, "%02d");
+
+            efn += sprintf(efn, format, count);
+            fn++;
         }
         else
             *efn++ = *fn++;

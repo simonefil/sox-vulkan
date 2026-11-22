@@ -712,7 +712,9 @@ static int consume_vulkan_resident(
 
   if (ensure_vulkan_resident(effp) != SOX_SUCCESS || !input_consumed || !input_clips || !obuf || !osamp || !active)
     return SOX_EOF;
-  capacity = *osamp;
+  /* Whole frames only: the room left in the output buffer need not be a
+   * multiple of the channel count. */
+  capacity = *osamp - *osamp % effp->out_signal.channels;
   *osamp = 0;
   *input_consumed = sox_false;
   *input_clips = 0;

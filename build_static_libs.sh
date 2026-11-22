@@ -1442,7 +1442,7 @@ main() {
 
     if [ "${LIBRARY}" = "ON" ]; then
         mkdir -p "${OUTPUT_DIR}"
-        cp "${SOX_BUILD_DIR}/src/liblibsox.a" "${OUTPUT_DIR}/libsox.a"
+        cp "${SOX_BUILD_DIR}/src/libsox.a" "${OUTPUT_DIR}/"
         cp "${SCRIPT_DIR}/src/sox.h" "${OUTPUT_DIR}/sox.h"
         log_info "Library mode keeps static_libs and build-library (including GSM/LPC10 dependencies)."
     else

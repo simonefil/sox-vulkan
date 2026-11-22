@@ -950,9 +950,14 @@ if(HAVE_VULKAN)
     endif()
 endif()
 
-# Set output name (produces libsox.so on Linux, libsox.lib on Windows)
+# The target name already carries "lib": without the platform prefix the
+# files are libsox.a, libsox.dylib and libsox.so.4 on Unix and libsox.lib and
+# libsox.dll on Windows (MSVC has no prefix, MinGW's import library becomes
+# libsox.dll.a).
 set_target_properties(libsox PROPERTIES
     OUTPUT_NAME libsox
+    PREFIX ""
+    IMPORT_PREFIX ""
     VERSION ${SOX_VERSION_MAJOR}.${SOX_VERSION_MINOR}.${SOX_VERSION_PATCH}
     SOVERSION ${SOX_VERSION_MAJOR}
 )

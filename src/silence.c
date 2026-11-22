@@ -630,8 +630,8 @@ static int sox_silence_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *os
     /* Only if in flush mode will there be possible samples to write
      * out during drain() call.
      */
-    if (silence->mode == SILENCE_COPY_FLUSH ||
-        silence->mode == SILENCE_COPY)
+    if ((silence->mode == SILENCE_COPY_FLUSH ||
+         silence->mode == SILENCE_COPY) && !silence->leave_silence)
     {
         nrOfTicks = min((silence->stop_holdoff_end -
                             silence->stop_holdoff_offset), *osamp);

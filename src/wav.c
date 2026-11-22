@@ -230,6 +230,12 @@ static int wav_ms_adpcm_fmt(sox_format_t *ft, uint32_t len)
     if (err)
         return SOX_EOF;
 
+    if (wav->samplesPerBlock < 2) {
+        lsx_fail_errno(ft, SOX_EOF, "format[%s]: samplesPerBlock(%d) must be >= 2",
+                       wav_format_str(wav->formatTag), wav->samplesPerBlock);
+        return SOX_EOF;
+    }
+
     bytesPerBlock = lsx_ms_adpcm_bytes_per_block(ft->signal.channels,
                                                  wav->samplesPerBlock);
 

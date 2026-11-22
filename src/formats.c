@@ -1046,6 +1046,7 @@ error:
   free(ft->filename);
   free(ft->filetype);
   free(ft->read_replay_buffer);
+  sox_delete_comments(&ft->oob.comments);
   free(ft);
   return NULL;
 }

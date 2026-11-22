@@ -229,7 +229,9 @@ static sf_count_t vio_get_filelen(void *user_data)
 
 static sf_count_t vio_seek(sf_count_t offset, int whence, void *user_data)
 {
-    return lsx_seeki((sox_format_t *)user_data, (off_t)offset, whence);
+    if (lsx_seeki((sox_format_t *)user_data, (off_t)offset, whence))
+       return -1;
+    return lsx_tell((sox_format_t *)user_data);
 }
 
 static sf_count_t vio_read(void *ptr, sf_count_t count, void *user_data)

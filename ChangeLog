@@ -4,6 +4,20 @@ Change History
 This file contains a list of all changes starting after the release of
 sox-11gamma, followed by a list of prior authors and features.
 
+Unreleased
+----------
+
+  o `sdm' without `-f' now uses `clans-4' at every rate, as sox_ng does.
+    From DSD64 to DSD256 it used `hq', a filter of the older safe/fast/hq
+    series that Mans Rullgard replaced with sdm-N and clans-N. Its 128x and
+    256x entries had the coefficients of `sdm-7' and were never reached: the
+    three `hq' entries were listed 64x first, and the lookup takes the first
+    entry whose rate does not exceed the output rate, so the DSD64 design
+    ran at every rate, even under `-f hq'. The `hq' filter is gone and
+    `-f hq' is now an invalid filter name; `-f sdm-7' is the 7th-order
+    choice, with the coefficients of the right rate. The automatic 1-bit
+    dither, which runs the default modulator, changes in the same way.
+
 SoX-16.2.1
 ----------
 

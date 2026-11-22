@@ -325,83 +325,77 @@ static int sox_ladspa_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sa
                            size_t *isamp, size_t *osamp)
 {
   priv_t * l_st = (priv_t *)effp->priv;
-  size_t i, len = min(*isamp, *osamp);
+  size_t i;
   size_t j;
   size_t h;
   const size_t total_input_count = l_st->input_count * l_st->handle_count;
   const size_t total_output_count = l_st->output_count * l_st->handle_count;
-  const size_t input_len = len / total_input_count;
-  size_t output_len = len / total_output_count;
+  const size_t channel_len = min(*isamp / total_input_count, *osamp / total_output_count + l_st->in_latency);
 
-  if (total_output_count < total_input_count)
-    output_len = input_len;
+  LADSPA_Data *buf = lsx_calloc(channel_len * total_input_count, sizeof(LADSPA_Data));
+  LADSPA_Data *outbuf = lsx_calloc(channel_len * total_output_count, sizeof(LADSPA_Data));
+  LADSPA_Handle handle;
+  unsigned long port, l;
+  SOX_SAMPLE_LOCALS;
 
-  *isamp = len;
+  *isamp = channel_len * total_input_count;
   *osamp = 0;
 
-  if (len) {
-    LADSPA_Data *buf = lsx_calloc(len, sizeof(LADSPA_Data));
-    LADSPA_Data *outbuf = lsx_calloc(len, sizeof(LADSPA_Data));
-    LADSPA_Handle handle;
-    unsigned long port, l;
-    SOX_SAMPLE_LOCALS;
-
-    /*
-     * prepare buffer for LADSPA input
-     * deinterleave sox samples and write non-interleaved data to
-     * input_port-specific buffer locations
-     */
-    for (i = 0; i < input_len; i++) {
-      for (j = 0; j < total_input_count; j++) {
-        const sox_sample_t s = *ibuf++;
-        buf[j * input_len + i] = SOX_SAMPLE_TO_LADSPA_DATA(s, effp->clips);
-      }
-    }
-
-    /* Connect the LADSPA input port(s) to the prepared buffers */
+  /*
+   * prepare buffer for LADSPA input
+   * deinterleave sox samples and write non-interleaved data to
+   * input_port-specific buffer locations
+   */
+  for (i = 0; i < channel_len; i++) {
     for (j = 0; j < total_input_count; j++) {
-      handle = l_st->handles[j / l_st->input_count];
-      port = l_st->inputs[j / l_st->handle_count];
-      l_st->desc->connect_port(handle, port, buf + j * input_len);
+      const sox_sample_t s = *ibuf++;
+      buf[j * channel_len + i] = SOX_SAMPLE_TO_LADSPA_DATA(s, effp->clips);
     }
-
-    /* Connect the LADSPA output port(s) if used */
-    for (j = 0; j < total_output_count; j++) {
-      handle = l_st->handles[j / l_st->output_count];
-      port = l_st->outputs[j / l_st->handle_count];
-      l_st->desc->connect_port(handle, port, outbuf + j * output_len);
-    }
-
-    /* Run the plugin for each handle */
-    for (h = 0; h < l_st->handle_count; h++)
-      l_st->desc->run(l_st->handles[h], input_len);
-
-    /* check the latency control port if we have one */
-    if (l_st->latency_control_port) {
-      lsx_debug("latency detected is %g", *l_st->latency_control_port);
-      l_st->in_latency = (unsigned long)floor(*l_st->latency_control_port);
-
-      /* we will need this later in sox_ladspa_drain */
-      l_st->out_latency = l_st->in_latency;
-
-      /* latency for plugins is constant, only compensate once */
-      l_st->latency_control_port = NULL;
-    }
-
-    /* Grab output if effect produces it, re-interleaving it */
-    l = min(output_len, l_st->in_latency);
-    for (i = l; i < output_len; i++) {
-      for (j = 0; j < total_output_count; j++) {
-        LADSPA_Data d = outbuf[j * output_len + i];
-        *obuf++ = LADSPA_DATA_TO_SOX_SAMPLE(d, effp->clips);
-        (*osamp)++;
-      }
-    }
-    l_st->in_latency -= l;
-
-    free(outbuf);
-    free(buf);
   }
+
+  /* Connect the LADSPA input port(s) to the prepared buffers */
+  for (j = 0; j < total_input_count; j++) {
+    handle = l_st->handles[j / l_st->input_count];
+    port = l_st->inputs[j / l_st->handle_count];
+    l_st->desc->connect_port(handle, port, buf + j * channel_len);
+  }
+
+  /* Connect the LADSPA output port(s) if used */
+  for (j = 0; j < total_output_count; j++) {
+    handle = l_st->handles[j / l_st->output_count];
+    port = l_st->outputs[j / l_st->handle_count];
+    l_st->desc->connect_port(handle, port, outbuf + j * channel_len);
+  }
+
+  /* Run the plugin for each handle */
+  for (h = 0; h < l_st->handle_count; h++)
+    l_st->desc->run(l_st->handles[h], channel_len);
+
+  /* check the latency control port if we have one */
+  if (l_st->latency_control_port) {
+    lsx_debug("latency detected is %g", *l_st->latency_control_port);
+    l_st->in_latency = (unsigned long)floor(*l_st->latency_control_port);
+
+    /* we will need this later in sox_ladspa_drain */
+    l_st->out_latency = l_st->in_latency;
+
+    /* latency for plugins is constant, only compensate once */
+    l_st->latency_control_port = NULL;
+  }
+
+  /* Grab output if effect produces it, re-interleaving it */
+  l = min(channel_len, l_st->in_latency);
+  for (i = l; i < channel_len; i++) {
+    for (j = 0; j < total_output_count; j++) {
+      LADSPA_Data d = outbuf[j * channel_len + i];
+      *obuf++ = LADSPA_DATA_TO_SOX_SAMPLE(d, effp->clips);
+      (*osamp)++;
+    }
+  }
+  l_st->in_latency -= l;
+
+  free(outbuf);
+  free(buf);
 
   return SOX_SUCCESS;
 }
@@ -413,7 +407,7 @@ static int sox_ladspa_flow(sox_effect_t * effp, const sox_sample_t *ibuf, sox_sa
 static int sox_ladspa_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *osamp)
 {
   priv_t * l_st = (priv_t *)effp->priv;
-  sox_sample_t *ibuf, *dbuf;
+  sox_sample_t *ibuf;
   size_t isamp, dsamp;
   int r;
 
@@ -424,18 +418,22 @@ static int sox_ladspa_drain(sox_effect_t * effp, sox_sample_t *obuf, size_t *osa
 
   /* feed some silence at the end to push the rest of the data out */
   isamp = l_st->out_latency * effp->in_signal.channels;
-  dsamp = l_st->out_latency * effp->out_signal.channels;
   ibuf = lsx_calloc(isamp, sizeof(sox_sample_t));
-  dbuf = lsx_calloc(dsamp, sizeof(sox_sample_t));
 
-  r = sox_ladspa_flow(effp, ibuf, dbuf, &isamp, &dsamp);
-  *osamp = min(dsamp, *osamp);
-  memcpy(obuf, dbuf, *osamp * sizeof(sox_sample_t));
+  do {
+    dsamp = min(l_st->out_latency * effp->out_signal.channels,
+                *osamp - (*osamp % effp->out_signal.channels));
+    isamp = l_st->out_latency * effp->in_signal.channels;
+    r = sox_ladspa_flow(effp, ibuf, obuf, &isamp, &dsamp);
+  }
+  while (r == SOX_SUCCESS && dsamp == 0);
+
+  *osamp = dsamp;
+  l_st->out_latency -= *osamp / effp->out_signal.channels;
 
   free(ibuf);
-  free(dbuf);
 
-  return r == SOX_SUCCESS ? SOX_EOF : 0;
+  return r == SOX_SUCCESS ? SOX_SUCCESS : SOX_EOF;
 }
 
 /*

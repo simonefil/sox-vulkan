@@ -150,7 +150,7 @@ const char *lsx_ms_adpcm_block_expand_i(
     top = obuff + n*chans;
 
     ch2 = 0;
-    while (op < top) { /*** N.B. Without int casts, crashes on 64-bit arch ***/
+    while (op + 1 < top) { /*** N.B. Without int casts, crashes on 64-bit arch ***/
       b = *ip++;
       tmp = op;
       *op++ = AdpcmDecode(b >> 4, state+ch2, tmp[-(int)chans], tmp[-(int)(2*chans)]);
@@ -158,6 +158,11 @@ const char *lsx_ms_adpcm_block_expand_i(
       tmp = op;
       *op++ = AdpcmDecode(b&0x0f, state+ch2, tmp[-(int)chans], tmp[-(int)(2*chans)]);
       if (++ch2 == chans) ch2 = 0;
+    }
+    if (op < top) {  /* final odd sample, write a single value */
+      b = *ip++;
+      tmp = op;
+      *op++ = AdpcmDecode(b >> 4, state+ch2, tmp[-(int)chans], tmp[-(int)(2*chans)]);
     }
   }
   return errmsg;

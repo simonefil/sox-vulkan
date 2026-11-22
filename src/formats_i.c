@@ -257,7 +257,7 @@ int lsx_seeki(sox_format_t * ft, off_t offset, int whence)
         } else
             lsx_fail_errno(ft,SOX_EPERM, "file not seekable");
     } else {
-        if (fseeko((FILE*)ft->fp, offset, whence) == -1)
+        if (fseeko((FILE*)ft->fp, offset, whence))
             lsx_fail_errno(ft,errno, "%s", strerror(errno));
         else
             ft->sox_errno = SOX_SUCCESS;

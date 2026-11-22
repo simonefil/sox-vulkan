@@ -2125,6 +2125,11 @@ static int start(sox_effect_t * effp)
   if (effp->in_signal.rate == out_rate)
     return SOX_EFF_NULL;
 
+  if ((size_t)effp->in_signal.rate == 0) {
+    lsx_fail("input sample rate is %g", effp->in_signal.rate);
+    return SOX_EOF;
+  }
+
   if (effp->in_signal.mult)
     *effp->in_signal.mult *= .705; /* 1/(2/sinc(pi/3)-1); see De Soras 4.1.2 */
 

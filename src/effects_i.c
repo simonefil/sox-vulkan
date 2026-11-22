@@ -209,8 +209,8 @@ static char const * parsesamples(sox_rate_t rate, const char *str0, uint64_t *sa
       if (*str == '.') {
         char * last_str = str;
         double part = strtod(str, &str);
-        if (str == last_str)
-          return NULL; /* error: empty fractional part */
+        if (str == last_str || !isfinite(part) || fabs(part) == HUGE_VAL)
+          return NULL; /* error: empty or infinite fractional part */
         samples_part += rate * part + .5;
       }
       if (*str == 't')
@@ -218,8 +218,8 @@ static char const * parsesamples(sox_rate_t rate, const char *str0, uint64_t *sa
     } else {
       char * last_str = str;
       double part = strtod(str, &str);
-      if (str == last_str)
-        return NULL; /* error: no sample count */
+      if (str == last_str || !isfinite(part) || fabs(part) == HUGE_VAL)
+        return NULL; /* error: no (or infinite) sample count */
       samples_part = part + .5;
       if (*str == 's')
         str++;
@@ -431,7 +431,7 @@ double lsx_parse_frequency_k(char const * text, char * * end_ptr, int key)
 
   if (*text == '%') {
     result = strtod(text + 1, end_ptr);
-    if (*end_ptr == text + 1)
+    if (*end_ptr == text + 1 || !isfinite(result) || fabs(result) == HUGE_VAL)
       return -1;
     return calc_note_freq(result, key);
   }
@@ -441,7 +441,7 @@ double lsx_parse_frequency_k(char const * text, char * * end_ptr, int key)
   }
   result = strtod(text, end_ptr);
   if (end_ptr) {
-    if (*end_ptr == text)
+    if (*end_ptr == text || !isfinite(result) || fabs(result) == HUGE_VAL)
       return -1;
     if (**end_ptr == 'k') {
       result *= 1000;

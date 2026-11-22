@@ -86,9 +86,13 @@ static int parse(sox_effect_t * effp, char **argv, sox_rate_t rate)
     if (next == NULL || *next != ',')
       break;
 
-    p->bends[i].cents = strtod(next + 1, (char **)&next);
-    if (p->bends[i].cents == 0 || *next != ',')
-      break;
+    {
+      const char *oldnext = next;
+      p->bends[i].cents = strtod(next + 1, (char **)&next);
+      if (next == oldnext || !isfinite(p->bends[i].cents) ||
+          fabs(p->bends[i].cents) == HUGE_VAL || *next != ',')
+        break;
+    }
 
     next = lsx_parseposition(rate, next + 1,
              argv ? NULL : &p->bends[i].duration, last_seen, in_length, '+');

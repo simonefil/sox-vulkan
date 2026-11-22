@@ -411,49 +411,52 @@ int lsx_aiffstartread(sox_format_t * ft)
   if (is_sowt)
     ft->encoding.reverse_bytes = !ft->encoding.reverse_bytes;
 
-  if (foundmark && !foundinstr) {
-    lsx_debug("Ignoring MARK chunk since no INSTR found.");
-    foundmark = 0;
-  }
   if (!foundmark && foundinstr) {
-    lsx_debug("Ignoring INSTR chunk since no MARK found.");
+    lsx_warn("Ignoring INST chunk since no MARKs found.");
     foundinstr = 0;
   }
   if (foundmark && foundinstr) {
     int i2;
-    int slbIndex = 0, sleIndex = 0;
-    int rlbIndex = 0, rleIndex = 0;
+    unsigned loop;
+    /* Marker indexes of the sustain loop [0] and of the release loop [1] */
+    int beginIndex[2] = {-1, -1}, endIndex[2] = {-1, -1};
 
     /* find our loop markers and save their marker indexes */
     for(i2 = 0; i2 < nmarks; i2++) {
       if(marks[i2].id == sustainLoopBegin)
-        slbIndex = i2;
+        beginIndex[0] = i2;
       if(marks[i2].id == sustainLoopEnd)
-        sleIndex = i2;
+        endIndex[0] = i2;
       if(marks[i2].id == releaseLoopBegin)
-        rlbIndex = i2;
+        beginIndex[1] = i2;
       if(marks[i2].id == releaseLoopEnd)
-        rleIndex = i2;
+        endIndex[1] = i2;
     }
 
+    /* Each loop stands on its own: one whose marks are missing is dropped
+     * without taking the other with it, and keeps its slot as a loop of type
+     * 0 so that a release loop stays the release loop.  The type can be 0
+     * (NoLooping: ignore the loop points during playback), 1 (ForwardLooping)
+     * or 2 (ForwardBackwardLooping). */
     ft->oob.instr.nloops = 0;
-    if (ft->oob.loops[0].type != 0) {
-      ft->oob.loops[0].start = marks[slbIndex].position;
-      ft->oob.loops[0].length =
-        marks[sleIndex].position - marks[slbIndex].position;
+    for (loop = 0; loop < 2; loop++) {
+      sox_loopinfo_t *l = &ft->oob.loops[loop];
+
+      if (beginIndex[loop] == -1 || endIndex[loop] == -1) {
+        if (l->type != 0)
+          lsx_warn("the %s loop of the instrument for MIDI note %d refers to missing marks",
+                   loop ? "release" : "sustain", ft->oob.instr.MIDInote);
+        l->type = 0;
+        l->start = l->length = 0;
+        continue;
+      }
+      l->start = marks[beginIndex[loop]].position;
+      l->length =
+        marks[endIndex[loop]].position - marks[beginIndex[loop]].position;
       /* really the loop count should be infinite */
-      ft->oob.loops[0].count = 1;
-      ft->oob.instr.loopmode = SOX_LOOP_SUSTAIN_DECAY | ft->oob.loops[0].type;
-      ft->oob.instr.nloops++;
-    }
-    if (ft->oob.loops[1].type != 0) {
-      ft->oob.loops[1].start = marks[rlbIndex].position;
-      ft->oob.loops[1].length =
-        marks[rleIndex].position - marks[rlbIndex].position;
-      /* really the loop count should be infinite */
-      ft->oob.loops[1].count = 1;
-      ft->oob.instr.loopmode = SOX_LOOP_SUSTAIN_DECAY | ft->oob.loops[1].type;
-      ft->oob.instr.nloops++;
+      l->count = 1;
+      ft->oob.instr.loopmode = SOX_LOOP_SUSTAIN_DECAY | l->type;
+      ft->oob.instr.nloops = loop + 1;
     }
   }
   reportInstrument(ft);
@@ -782,8 +785,9 @@ static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
                         return(SOX_EOF);
                 if (ft->oob.instr.nloops > 2)
                         ft->oob.instr.nloops = 2;
+                /* Two marks, the start and the end, for each loop */
                 if (lsx_writedw(ft, 2 + 16u*ft->oob.instr.nloops) ||
-                    lsx_writew(ft, ft->oob.instr.nloops))
+                    lsx_writew(ft, 2 * ft->oob.instr.nloops))
                         return(SOX_EOF);
 
                 for(i = 0; i < ft->oob.instr.nloops; i++) {
@@ -797,7 +801,7 @@ static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
                             lsx_writedw(ft, start) ||
                             lsx_writeb(ft, 0) ||
                             lsx_writeb(ft, 0) ||
-                            lsx_writew(ft, i*2 + 1) ||
+                            lsx_writew(ft, i + 3) ||   /* end marker, as INST refers to it */
                             lsx_writedw(ft, end) ||
                             lsx_writeb(ft, 0) ||
                             lsx_writeb(ft, 0))

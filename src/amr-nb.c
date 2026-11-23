@@ -89,7 +89,7 @@ static char const amrnb_magic[] = "#!AMR\n";
 #define AMR_OPENCORE_DESC "amr-nb OpenCore library"
 static const char* const amr_opencore_library_names[] =
 {
-#ifdef DL_AMRWB
+#ifdef DL_AMRNB
   "libopencore-amrnb",
   "libopencore-amrnb-0",
 #endif

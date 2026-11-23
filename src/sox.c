@@ -1424,9 +1424,14 @@ static int termwidth = 80;
 static void get_termwidth(int s)
 {
   struct winsize w;
+  int saved_errno = errno;
 
   if (!ioctl(2, TIOCGWINSZ, &w))
     termwidth = w.ws_col;
+  /* With stderr redirected the ioctl fails; its error must not reach a
+   * later message about reading a file, nor the code a SIGWINCH breaks
+   * into. */
+  errno = saved_errno;
 }
 #endif
 

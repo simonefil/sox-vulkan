@@ -122,6 +122,7 @@ static int startread(sox_format_t * ft)
     /*
      * We should now be pointing at start of raw sample data in file
      */
+    ft->data_start = lsx_tell(ft);
 
     /* Check to make sure we got a good filetype ID from file */
     lsx_debug("Found header filetype %s",filetype);
@@ -176,6 +177,7 @@ static int startread(sox_format_t * ft)
     ft->signal.channels = 1 ; /* not sure about stereo sample data yet ??? */
     ft->encoding.bits_per_sample = 12;
     ft->encoding.encoding = SOX_ENCODING_SIGN2;
+    ft->signal.length = num_samp_bytes / 3 * 2; /* 2 samples in 3 bytes */
 
     return(SOX_SUCCESS);
 }

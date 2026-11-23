@@ -242,6 +242,19 @@ check_function_exists(lrint HAVE_LRINT)
 check_function_exists(fseeko HAVE_FSEEKO)
 # MSVC's 64-bit fseeko/ftello, which util.h maps them to
 check_symbol_exists(_fseeki64 stdio.h HAVE__FSEEKI64)
+# Files past 2 GB need a 64-bit off_t.  Where off_t is narrower but
+# _FILE_OFFSET_BITS=64 widens it, as on MinGW, every source is built with it,
+# as autoconf's AC_SYS_LARGEFILE does.
+check_type_size(off_t SIZEOF_OFF_T)
+if(SIZEOF_OFF_T LESS 8)
+    cmake_push_check_state()
+    list(APPEND CMAKE_REQUIRED_DEFINITIONS -D_FILE_OFFSET_BITS=64)
+    check_type_size(off_t SIZEOF_OFF_T_FILE_OFFSET_BITS_64)
+    cmake_pop_check_state()
+    if(SIZEOF_OFF_T_FILE_OFFSET_BITS_64 EQUAL 8)
+        add_compile_definitions(_FILE_OFFSET_BITS=64)
+    endif()
+endif()
 # Heap allocation aligned for sdm's LSX_ALIGN(32) state
 check_function_exists(aligned_alloc HAVE_ALIGNED_ALLOC)
 check_function_exists(memalign HAVE_MEMALIGN)

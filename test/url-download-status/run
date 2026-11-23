@@ -4,6 +4,15 @@
 # mistake its broken pipe for an input failure.
 
 set -eu
+
+# The fake downloader below is a shell script, which a native Windows sox
+# cannot start.
+case "$(uname -s)" in
+MINGW*|MSYS*)
+  echo 'The fake downloader cannot run on native Windows' >&2
+  exit 254 ;;
+esac
+
 sox=${sox:-../../src/sox_ng}
 source_file=../../src/monkey.wav
 work=$(mktemp -d "${TMPDIR:-/tmp}/sox-url-status.XXXXXXXX") || exit 2
@@ -39,6 +48,10 @@ export SOX_TEST_INPUT SOX_TEST_MODE SOX_TEST_EXIT
 
 # A complete valid transfer succeeds.
 "$sox" -V1 -t wav http://example.invalid/test.wav "$work/ok.wav" 2> "$work/ok.err" || {
+  # A build without popen() has no URL input to test.
+  if grep -q 'cannot open URLs' "$work/ok.err"; then
+    echo "$sox cannot open URLs" >&2; exit 254
+  fi
   cat "$work/ok.err" >&2; exit 2;
 }
 test -s "$work/ok.wav"

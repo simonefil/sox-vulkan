@@ -170,14 +170,16 @@ static unsigned choose_channels(snd_pcm_t * pcm, snd_pcm_hw_params_t * params,
 }
 
 /* Places the signal's channels on the device's speakers, read from its
- * channel map or, without one, from ALSA's default order.  A device with
- * fewer channels than the signal is given the signal mixed, by the effect
- * that sox adds for a change of channels, to the most channels that have
- * speakers on it, or else to its channel count. */
+ * channel map or, without one, from ALSA's default order.  When the speakers
+ * do not take every channel, playback gets the signal mixed, by the effect
+ * that sox adds for a change of channels, to the largest of SoX's layouts up
+ * to the signal's (stereo for mono) that they take, the other device
+ * channels silent; failing that, to the device's channel count. */
 static void route_channels(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
   unsigned n = p->device_channels, i, m = 0;
+  sox_bool placed;
   snd_pcm_chmap_t * map = snd_pcm_get_chmap(p->pcm);
   lsx_speaker_t * speakers = lsx_calloc(n, sizeof(*speakers));
   sox_bool known = sox_true;
@@ -190,11 +192,12 @@ static void route_channels(sox_format_t * ft)
   free(map);
 
   p->route = lsx_malloc(n * sizeof(*p->route));
-  if (known && ft->mode == 'w' && n < ft->signal.channels)
-    for (m = n; m && !lsx_route_speakers(p->route, speakers, n, m, sox_true); --m);
+  placed = known && lsx_route_speakers(p->route, speakers, n, ft->signal.channels, ft->mode == 'w');
+  if (!placed && known && ft->mode == 'w')
+    for (m = max(min(ft->signal.channels, n), 2); m && !lsx_route_speakers(p->route, speakers, n, m, sox_true); --m);
   if (m)
     ft->signal.channels = m;
-  else if (!known || !lsx_route_speakers(p->route, speakers, n, ft->signal.channels, ft->mode == 'w')) {
+  else if (!placed) {
     if (n == ft->signal.channels)
       lsx_warn("no speaker positions for the %u channels on this device: they keep SoX's order", n);
     ft->signal.channels = n;

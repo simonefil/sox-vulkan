@@ -254,28 +254,30 @@ static void device_speakers(AudioObjectID adid, int is_input, unsigned n,
 }
 
 /* Places the signal's channels on the device's speakers, by the stereo pair
- * or else by the speaker layout.  A device with fewer channels than the
- * signal is given the signal mixed, by the effect that sox adds for a change
- * of channels, to the most channels that have speakers on it; any other
- * device without speakers for all of them is given the signal mixed to its
- * channel count.  A recording keeps the device's channel count and is only
- * put in SoX's order. */
+ * or else by the speaker layout.  When the speakers do not take every
+ * channel, playback gets the signal mixed, by the effect that sox adds for a
+ * change of channels, to the largest of SoX's layouts up to the signal's
+ * (stereo for mono) that they take, the other device channels silent;
+ * failing that, to the device's channel count.  A recording keeps the
+ * device's channel count and is only put in SoX's order. */
 static void route_channels(sox_format_t *ft, int is_input)
 {
   priv_t *ac = (priv_t *)ft->priv;
   unsigned n = ac->device_channels, i, m = 0;
+  sox_bool placed;
   lsx_speaker_t *stereo = lsx_malloc(n * sizeof(*stereo));
   lsx_speaker_t *layout = lsx_malloc(n * sizeof(*layout));
 
   device_speakers(ac->adid, is_input, n, stereo, layout);
   ac->route = lsx_malloc(n * sizeof(*ac->route));
-  if (!is_input && n < ft->signal.channels && lsx_speakers(ft->signal.channels))
-    for (m = n; m && !lsx_route_speakers(ac->route, stereo, n, m, sox_true) &&
-                     !lsx_route_speakers(ac->route, layout, n, m, sox_true); --m);
+  placed = !is_input && (lsx_route_speakers(ac->route, stereo, n, ft->signal.channels, sox_true) ||
+                         lsx_route_speakers(ac->route, layout, n, ft->signal.channels, sox_true));
+  if (!placed && !is_input && lsx_speakers(ft->signal.channels))
+    for (m = max(min(ft->signal.channels, n), 2); m && !lsx_route_speakers(ac->route, stereo, n, m, sox_true) &&
+                                                      !lsx_route_speakers(ac->route, layout, n, m, sox_true); --m);
   if (m)
     ft->signal.channels = m;
-  else if (is_input || (!lsx_route_speakers(ac->route, stereo, n, ft->signal.channels, sox_true) &&
-                        !lsx_route_speakers(ac->route, layout, n, ft->signal.channels, sox_true))) {
+  else if (!placed) {
     ft->signal.channels = n;
     if (!lsx_route_speakers(ac->route, stereo, n, n, !is_input) &&
         !lsx_route_speakers(ac->route, layout, n, n, !is_input))

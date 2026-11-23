@@ -1,0 +1,60 @@
+#! /bin/sh
+
+# Check that `channels' mixes down by speaker position with libswresample's
+# default matrix, for every reduction between SoX's layouts of 1 to 8
+# channels: each mix must equal `remix -m' with that matrix.  s is the -3 dB
+# gain of centre and surround, h is half; LFE is left out.
+
+s=0.7071067811865476
+h=0.5
+status=0
+
+rm -f in.f64 channels.f64 remix.f64
+
+while read n m spec
+do
+  ${sox:-sox} -D -n -t f64 -r 48000 -c $n in.f64 synth 0.1 \
+    sine 300 sine 500 sine 700 sine 1100 sine 1300 sine 1700 sine 1900 \
+    sine 2300 vol 0.1 || status=254
+  ${sox:-sox} -D -t f64 -r 48000 -c $n in.f64 -t f64 channels.f64 \
+    channels $m || status=254
+  eval "${sox:-sox} -D -t f64 -r 48000 -c $n in.f64 -t f64 remix.f64 \
+    remix -m $spec" || status=254
+  cmp -s channels.f64 remix.f64 || {
+    echo "FAIL $n to $m channels"
+    status=2
+  }
+done <<END
+8 7 1 2 3 4 5v$s,6v$s 7 8
+8 6 1 2 3 4 5,7v$s 6,8v$s
+8 5 1 2 3 5,7v$s 6,8v$s
+8 4 1,3v$s 2,3v$s 5,7v$s 6,8v$s
+8 3 1,5v$s,7v$s 2,6v$s,8v$s 3
+8 2 1,3v$s,5v$s,7v$s 2,3v$s,6v$s,8v$s
+8 1 1v$s,2v$s,3,5v$h,6v$h,7v$h,8v$h
+7 6 1 2 3 4 5v$s,6 5v$s,7
+7 5 1 2 3 5v$s,6 5v$s,7
+7 4 1,3v$s 2,3v$s 5v$s,6 5v$s,7
+7 3 1,5v$h,6v$s 2,5v$h,7v$s 3
+7 2 1,3v$s,5v$h,6v$s 2,3v$s,5v$h,7v$s
+7 1 1v$s,2v$s,3,5v$h,6v$h,7v$h
+6 5 1 2 3 5 6
+6 4 1,3v$s 2,3v$s 5 6
+6 3 1,5v$s 2,6v$s 3
+6 2 1,3v$s,5v$s 2,3v$s,6v$s
+6 1 1v$s,2v$s,3,5v$h,6v$h
+5 4 1,3v$s 2,3v$s 4 5
+5 3 1,4v$s 2,5v$s 3
+5 2 1,3v$s,4v$s 2,3v$s,5v$s
+5 1 1v$s,2v$s,3,4v$h,5v$h
+4 3 1,3v$s 2,4v$s 0
+4 2 1,3v$s 2,4v$s
+4 1 1v$s,2v$s,3v$h,4v$h
+3 2 1,3v$s 2,3v$s
+3 1 1v$s,2v$s,3
+2 1 1v$s,2v$s
+END
+
+rm -f in.f64 channels.f64 remix.f64
+
+exit $status

@@ -227,6 +227,69 @@ static int channels_create(sox_effect_t * effp, int argc, char * * argv)
   return SOX_SUCCESS;
 }
 
+/* The downmix between SoX's layouts of 1 to 8 channels by speaker position,
+ * with the default rules of swr_build_matrix in FFmpeg's libswresample:
+ * centre and surround at -3 dB, LFE left out, no normalisation.  m[o][i] is
+ * the gain of input channel i in output channel o. */
+static void position_matrix(double m[8][8], unsigned in_channels,
+    unsigned out_channels)
+{
+  lsx_speaker_t const * in = lsx_speakers(in_channels);
+  lsx_speaker_t const * out = lsx_speakers(out_channels);
+  int at[lsx_speaker_sr + 1];
+  sox_bool in_has[lsx_speaker_sr + 1] = {sox_false};
+  double const s = M_SQRT1_2, h = .5; /* -3 dB, and -3 dB twice */
+  unsigned i;
+
+  for (i = 0; i <= lsx_speaker_sr; ++i)
+    at[i] = -1;
+  for (i = 0; i < out_channels; ++i)
+    at[out[i]] = i;
+  for (i = 0; i < in_channels; ++i)
+    in_has[in[i]] = sox_true;
+  memset(m, 0, 8 * sizeof(*m));
+
+  #define _(x) lsx_speaker_##x
+  #define ADD(x, gain) m[at[x]][i] += gain
+  for (i = 0; i < in_channels; ++i) {
+    lsx_speaker_t sp = in[i];
+    sox_bool left = sp == _(fl) || sp == _(bl) || sp == _(sl);
+
+    if (at[sp] >= 0)
+      ADD(sp, 1);
+    else switch (sp) {
+      case _(fc):
+        ADD(_(fl), s), ADD(_(fr), s);
+        break;
+      case _(fl): case _(fr):
+        ADD(_(fc), s);
+        break;
+      case _(bc):
+        if (at[_(bl)] >= 0)      ADD(_(bl), s), ADD(_(br), s);
+        else if (at[_(sl)] >= 0) ADD(_(sl), s), ADD(_(sr), s);
+        else if (at[_(fl)] >= 0) ADD(_(fl), h), ADD(_(fr), h);
+        else                     ADD(_(fc), h);
+        break;
+      case _(bl): case _(br):
+        if (at[_(bc)] >= 0)      ADD(_(bc), s);
+        else if (at[_(sl)] >= 0) ADD(left? _(sl) : _(sr), in_has[_(sl)]? s : 1);
+        else if (at[_(fl)] >= 0) ADD(left? _(fl) : _(fr), s);
+        else                     ADD(_(fc), h);
+        break;
+      case _(sl): case _(sr):
+        if (at[_(bl)] >= 0)      ADD(left? _(bl) : _(br), in_has[_(bl)]? s : 1);
+        else if (at[_(bc)] >= 0) ADD(_(bc), s);
+        else if (at[_(fl)] >= 0) ADD(left? _(fl) : _(fr), s);
+        else                     ADD(_(fc), h);
+        break;
+      default: /* LFE */
+        break;
+    }
+  }
+  #undef ADD
+  #undef _
+}
+
 static int channels_start(sox_effect_t * effp)
 {
   priv_t * p = (priv_t *)effp->priv;
@@ -238,7 +301,29 @@ static int channels_start(sox_effect_t * effp)
   if (effp->in_signal.channels == num_out_channels)
     return SOX_EFF_NULL;
 
-  if (effp->in_signal.channels > num_out_channels) {
+  if (effp->in_signal.channels > num_out_channels &&
+      lsx_speakers(effp->in_signal.channels) != NULL) {
+    double m[8][8], max_sum = 0;
+
+    position_matrix(m, effp->in_signal.channels, num_out_channels);
+    for (j = 0; j < num_out_channels; j++) {
+      double sum = 0;
+
+      lsx_valloc(p->out_specs[j].in_specs, effp->in_signal.channels);
+      for (i = 0; i < effp->in_signal.channels; ++i)
+        if (m[j][i] != 0) {
+          struct in_spec * in_spec =
+              &p->out_specs[j].in_specs[p->out_specs[j].num_in_channels++];
+          in_spec->channel_num = i;
+          in_spec->multiplier = m[j][i];
+          sum += m[j][i];
+        }
+      max_sum = max(max_sum, sum);
+    }
+    if (effp->in_signal.mult && max_sum > 1)
+      *effp->in_signal.mult /= max_sum;
+  }
+  else if (effp->in_signal.channels > num_out_channels) {
     for (j = 0; j < num_out_channels; j++) {
       unsigned in_per_out = (effp->in_signal.channels +
           num_out_channels - 1 - j) / num_out_channels;

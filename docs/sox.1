@@ -1857,11 +1857,54 @@ See http://en.wikipedia.org/wiki/Digital_biquad_filter (where a0 = 1).
 This effect supports the \fB\-\-plot\fR global option.
 .TP
 \fBchannels \fICHANNELS\fR
-Invoke a simple algorithm to change the number of channels in
-the audio signal to the given number
+Change the number of channels in the audio signal to the given number
 .IR CHANNELS :
 mixing if decreasing the number of channels or duplicating if
 increasing the number of channels.
+.SP
+From 8 channels or fewer the mix goes by speaker position, with the
+default matrix of FFmpeg's libswresample.  The speakers are those of
+SoX's channel order: 1 front centre; 2 front left and right; 3 these
+three; 4 front and back pairs; 5 front left, right and centre with the
+back pair; 6 the same with LFE; 7 front left, right and centre, LFE,
+back centre and the side pair; 8 front left, right and centre, LFE,
+back pair and side pair.  A channel whose speaker is also in the
+output goes there unchanged.  The others go to the nearest speakers
+that the output has:
+front centre to front left and right at \-3\ dB each;
+front left and right to front centre at \-3\ dB each;
+back centre to the back pair or else the side pair at \-3\ dB each,
+or else to front left and right at \-6\ dB each;
+the back pair to back centre at \-3\ dB each, or else to the side pair;
+the side pair to the back pair, or else to back centre at \-3\ dB each;
+a side or back pair moved onto the other pair keeps its level when that
+pair has no channel of its own in the input, and is at \-3\ dB when it has;
+with neither pair nor back centre in the output, a surround channel goes
+to the front speaker on its side at \-3\ dB, or to a lone front centre at
+\-6\ dB.
+LFE is dropped.  Each output channel is the plain sum of its
+contributions, so a mix of loud channels can clip: \fBgain\fR, \fBnorm\fR
+and the \fB\-G\fR option leave room for it.  For example, 5.1 to stereo
+gives
+.EX
+	left  = FL + 0.707 FC + 0.707 BL
+	right = FR + 0.707 FC + 0.707 BR
+.EE
+and stereo to mono gives 0.707 (left + right).  From more than 8
+channels, output channel
+.I n
+is the mean of input channels
+.IR n ,
+.IR n + CHANNELS ,
+.IR n +2\(mu CHANNELS ,
+and so on.
+.SP
+When increasing the number of channels, output channel
+.I n
+copies input channel
+.I n
+(counting from 1), cycling through the input channels again when they
+run out.
 .SP
 The
 .B channels
@@ -1881,7 +1924,10 @@ be ordered arbitrarily.
 .SP
 See also
 .B remix
-for an effect that allows channels to be mixed/selected arbitrarily.
+for an effect that allows channels to be mixed/selected arbitrarily,
+including the mix by channel number:
+.B remix \-a 1,3,5 2,4,6
+takes 6 channels to 2 by averaging alternate channels.
 .TP
 \fBchorus [\fB\-n\fR\^|\^\fBl\fR\^|\^\fBq\fR] [\fB\-s\fR\^|\^\fBt\fR] [\fIgain-in [gain-out\fR {\fIdelay [decay [speed [depth [\fB\-s\fR\^|\^\fBt\fR]]]]}]]
 Add a chorus effect to the audio.  This can make a single voice sound

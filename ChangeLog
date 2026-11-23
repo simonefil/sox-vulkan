@@ -25,6 +25,16 @@ Unreleased
     crashed. The bound is on the ratio only: MHz rates convert as before.
   o The AIFC writer stores the instrument loops (MARK and INST chunks)
     as the AIFF writer does, so loops survive a conversion to AIFC.
+  o `channels', and so `-c' and the audio drivers when a device has fewer
+    channels than the signal, mixes down by speaker position between SoX's
+    layouts of 1 to 8 channels, with the default matrix of FFmpeg's
+    libswresample: centre and surround at -3 dB, LFE dropped, each output
+    the plain sum of its contributions. 5.1 to stereo is FL + 0.707 FC +
+    0.707 BL on the left and the mirror on the right; stereo to mono is
+    0.707 (L + R). It used to average every n-th channel, which put the
+    centre on the left only and the LFE on the right. `remix' gives that
+    mix, or any other: `remix -a 1,3,5 2,4,6' for 6 to 2 channels. Above 8
+    channels, and when adding channels, `channels' works as before.
 
 SoX-16.2.1
 ----------

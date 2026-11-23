@@ -1,13 +1,14 @@
 #! /bin/sh
 
-# Check 50:50 mix is a no-op for -c 1
+# Check that -c 1 mixes stereo to mono as libswresample does: each channel
+# at -3 dB, so two identical channels come out 3 dB louder than either
 
-rm -f sweep.wav sweep2.wav out.wav
+rm -f sweep.wav sweep2.wav out.wav louder.wav
 
 status=0
 
-# Generate a swept sine wave
-${sox:-sox} -D -n -b 16 -e signed sweep.wav synth 10 sine 27.5/14080 || status=254
+# Generate a swept sine wave, 6 dB down so that the mix does not clip
+${sox:-sox} -D -n -b 16 -e signed sweep.wav synth 10 sine 27.5/14080 vol 0.5 || status=254
 
 # Make a stereo version of it
 ${sox:-sox} -D -M sweep.wav sweep.wav sweep2.wav || status=254
@@ -15,8 +16,11 @@ ${sox:-sox} -D -M sweep.wav sweep.wav sweep2.wav || status=254
 # Mix it with itself with --combine mix
 ${sox:-sox} -D sweep2.wav -c 1 out.wav || status=254
 
-cmp -s sweep.wav out.wav || status=2
+# The sweep at +3 dB: 1/sqrt(2) twice
+${sox:-sox} -D sweep.wav louder.wav vol 1.4142135623730951 || status=254
 
-rm -f sweep.wav sweep2.wav out.wav
+cmp -s louder.wav out.wav || status=2
+
+rm -f sweep.wav sweep2.wav out.wav louder.wav
 
 exit $status

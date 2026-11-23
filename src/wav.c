@@ -950,8 +950,14 @@ static int startread(sox_format_t *ft)
     if (wav->numSamples * wav->blockAlign == qwDataLength * ft->signal.channels)
         wav->numSamples /= ft->signal.channels;
 
-    if (qwDataLength == UINT32_MAX || qwDataLength == LAME_UNSPEC ||
-        qwDataLength == MS_UNSPEC) {
+    /* A fact chunk still gives the length of PCM data of unspecified size;
+     * compressed data takes it from the data size, as when that is known */
+    if (qwDataLength == MS_UNSPEC ||
+        ((qwDataLength == UINT32_MAX || qwDataLength == LAME_UNSPEC) &&
+         (!wav->numSamples ||
+          wav->formatTag == WAVE_FORMAT_ADPCM ||
+          wav->formatTag == WAVE_FORMAT_IMA_ADPCM ||
+          wav->formatTag == WAVE_FORMAT_GSM610))) {
         /* This is to be expected when reading from a pipe */
         if (ft->seekable)
             lsx_warn("data length is unspecified; taking it from the file length");

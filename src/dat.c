@@ -10,6 +10,7 @@
  */
 
 #include "sox_i.h"
+#include <ctype.h>
 
 /* Maximum length of a header comment line */
 #define LINEWIDTH (size_t)256
@@ -125,10 +126,10 @@ static int sox_datstartwrite(sox_format_t * ft)
 /* Read a textual number and deposit it in *dp.
  *
  * The number may be preceded by whitespace and is terminated by
- * a whitespace character or a \r\n sequence.
+ * a whitespace character, a \r\n sequence or the end of the file.
  * We leave the terminating character in the input stream.
  *
- * Returns SOX_SUCCESS if we got a number followed by whitespace or [\r]\n
+ * Returns SOX_SUCCESS if we got a number followed by whitespace, [\r]\n or EOF;
  * SOX_EOF if EOF, if we get nonnumeric chars or if [\r]\n is found before
  * a number is found..
  */
@@ -162,7 +163,7 @@ static int read_number(sox_format_t * ft, double *dp)
         return SOX_EOF;
       case '0': case '1': case '2': case '3': case '4':
       case '5': case '6': case '7': case '8': case '9':
-      case '.': case '-':
+      case '.': case '-': case '+':
         goto got_start_of_number; /* Alas, poor "break" */
       default:
         lsx_fail("couldn't find a number on line %u of `%s'",
@@ -185,10 +186,9 @@ got_start_of_number:
 
     text[nchars++] = sc;
     do {
-      if (lsx_readb(ft, &sc)) {
-        lsx_fail_errno(ft, SOX_EOF, "found end of data file when expecting a number");
-        return SOX_EOF;
-      }
+      /* The last number of a file without a final newline ends at EOF */
+      if (lsx_readb(ft, &sc))
+        goto got_end_of_number;
       switch (sc) {
 
       /* Look for terminator char */
@@ -284,7 +284,7 @@ read_frame:
         if (ft->sox_errno) return SOX_EOF;
         return done;
       }
-      if (lsx_readb(ft, &sc) || sc != ' ') {
+      if (lsx_readb(ft, &sc) || !isblank(sc)) {
            lsx_warn("tempo with no sample data at line %u", p->line_no);
            return done;
       }
@@ -294,6 +294,11 @@ read_frame:
         SOX_SAMPLE_LOCALS;
 
         if (read_number(ft, &sampval) == SOX_EOF) {
+          /* At EOF the last line is incomplete: keep the complete frames */
+          if (lsx_eof(ft)) {
+            done -= chan;
+            goto got_eof;
+          }
           /* read_number() will already have printed an error message */
           return 0;
         }
@@ -301,14 +306,14 @@ read_frame:
         *buf++ = SOX_FLOAT_64BIT_TO_SAMPLE(sampval, ft->clips);
 
         /* Read the terminating character that read_number() left us
-         * in the pending characters buffer.
+         * in the pending characters buffer, or EOF if the number ended there.
          */
         if (lsx_readb(ft, &sc)) {
-          /* If EOF, return the sample frames that we managed to read
-           * but not any samples in a half-complete current one.
-           * Actually, this can't happen bcos lsx_unreadb() never fails
-           * so lsx_readb is guaranteed to return something.
-           */
+          /* EOF after the last channel completes the frame; elsewhere,
+           * return the sample frames that we managed to read but not any
+           * samples in a half-complete current one. */
+          if (chan == ft->signal.channels - 1)
+            return done + 1;
           done -= chan;
           goto got_eof;
         }
@@ -316,9 +321,10 @@ read_frame:
 
         /* Was this the last channel of one line? */
         if (chan == ft->signal.channels - 1) {
-          /* Yes. Eat trailing spaces, optional CR and newline */
-          while (sc == ' ') if (lsx_readb(ft, &sc)) goto got_eof;
-          if (sc == '\r') if (lsx_readb(ft, &sc)) goto got_eof;
+          /* Yes. Eat trailing blanks, optional CR and newline:
+           * EOF among them ends a complete last line */
+          while (isblank(sc)) if (lsx_readb(ft, &sc)) return done + 1;
+          if (sc == '\r') if (lsx_readb(ft, &sc)) return done + 1;
           if (sc == '\n') {
             p->line_no++;
             done++;
@@ -329,7 +335,7 @@ read_frame:
             ;
         } else {
           /* We read either a tempo or a sample that's not the last channel */
-          if (sc != ' ') {
+          if (!isblank(sc)) {
             lsx_warn("missing channel data on line %u of `%s'",
                       p->line_no, ft->filename);
             /* Return the whole sample frames completed so far */

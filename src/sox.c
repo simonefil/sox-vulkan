@@ -382,7 +382,9 @@ static char const * size_and_bitrate(sox_format_t * ft, char const * * text)
   off_t size = lsx_filelength(ft);
   if (ft->signal.length && ft->signal.channels && ft->signal.rate && text) {
     double secs = ft->signal.length / ft->signal.channels / ft->signal.rate;
-    *text = lsx_sigfigs3(8. * (size - ft->data_start) / secs);
+    /* lsx_filelength() is 0 for a pipe, which has no header size to subtract */
+    off_t audio = (uint64_t)size > ft->data_start? size - (off_t)ft->data_start : 0;
+    *text = lsx_sigfigs3(8. * audio / secs);
   }
   return lsx_sigfigs3((double)size);
 }

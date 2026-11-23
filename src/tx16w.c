@@ -266,7 +266,7 @@ static int startwrite(sox_format_t * ft)
 }
 
 /* Scale to twelve bits, round halves toward +inf, clip: a double can sit past
- * full scale. */
+ * full scale.  d is evaluated more than once. */
 #define TX16W_SAMPLE_TO_12BIT(d, clips) \
   ((int)((d) >= 1.0 ? (++(clips), 2047) : \
          (d) < -1.0 ? (++(clips), -2048) : floor((d) * 2048. + .5)))
@@ -284,10 +284,10 @@ static size_t write_samples(sox_format_t * ft, const sox_sample_t *buf, size_t l
       w1 = sk->odd;
       sk->odd_flag = sox_false;
     }
-    else w1 = TX16W_SAMPLE_TO_12BIT(*buf++, ft->clips), ++i;
+    else w1 = TX16W_SAMPLE_TO_12BIT(*buf, ft->clips), ++buf, ++i;
 
     if (i < len) {
-      w2 = TX16W_SAMPLE_TO_12BIT(*buf++, ft->clips), ++i;
+      w2 = TX16W_SAMPLE_TO_12BIT(*buf, ft->clips), ++buf, ++i;
       if (lsx_writesb(ft, (w1 >> 4) & 0xFF) ||
           lsx_writesb(ft, (((w1 & 0x0F) << 4) | (w2 & 0x0F)) & 0xFF) ||
           lsx_writesb(ft, (w2 >> 4) & 0xFF)) {

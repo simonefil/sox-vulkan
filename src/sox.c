@@ -3260,7 +3260,6 @@ int main(int argc, char **argv)
     size_t j = sox_mode == sox_rec ? input_count - 1 - i : i;
     file_t * f = files[j];
 
-
     /* When mixing audio, default to input side volume adjustments that will
      * make sure no clipping will occur.  Users probably won't be happy with
      * this, and will override it, possibly causing clipping to occur. */

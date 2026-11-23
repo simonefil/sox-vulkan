@@ -188,9 +188,18 @@ struct lsx_sdm_vulkan {
    * would need a different shader. */
   lsx_vulkan_resident_format_t resident_input_format;
   sox_bool resident_input_format_known;
-  /* Latched when the final producer slice is accepted.  The modulator may
-   * still owe a padded terminal batch for resident_pending_frames, which
-   * _resident_active exposes to the scheduler. */
+  /* A slice taken in parts: how many of its frames are already appended,
+   * and which slice it is, so a different one cannot be mistaken for its
+   * remainder.  The count is zero between slices. */
+  uint32_t resident_input_taken;
+  lsx_vulkan_buffer_t const *resident_input_buffer;
+  VkDeviceSize resident_input_offset;
+  uint64_t resident_input_frame_offset;
+  size_t resident_input_slice_frames;
+  /* Latched when the last part of the final producer slice is taken.  The
+   * modulator may still owe a padded terminal batch for
+   * resident_pending_frames, which _resident_active exposes to the
+   * scheduler. */
   sox_bool resident_final;
 
   /* Prefix-scan geometry, computed from the batch size.  The scan is
@@ -492,6 +501,7 @@ static int create_resident_pipeline(lsx_sdm_vulkan_t *context, lsx_vulkan_reside
   };
   uint32_t index;
   VkDeviceSize input_sample_size = resident_sample_size(input_format);
+  VkDeviceSize max_frames;
   uint32_t const *shader;
   size_t shader_size;
 
@@ -521,6 +531,15 @@ static int create_resident_pipeline(lsx_sdm_vulkan_t *context, lsx_vulkan_reside
       shader_size = sdm_vulkan_resident_spv_size;
       break;
   }
+  /* The batch was sized from the producer's block before its format was
+   * known.  It is cut here, to whole FSM blocks, so that the ingest buffer
+   * in this format fits one storage descriptor; a producer slice larger than
+   * the room left is then taken in parts. */
+  max_frames = context->vulkan->properties.limits.maxStorageBufferRange /
+      ((VkDeviceSize)context->channels * input_sample_size) /
+      SDM_VULKAN_BLOCK_SAMPLES * SDM_VULKAN_BLOCK_SAMPLES;
+  if (max_frames && context->input_frames > max_frames)
+    context->input_frames = (uint32_t)max_frames;
   context->resident_input_format = input_format;
   context->resident_input_format_known = sox_true;
   if (lsx_vulkan_buffer_create(
@@ -1438,7 +1457,7 @@ int lsx_sdm_vulkan_consume_resident(
   uint32_t input_frames;
   uint32_t capacity;
   uint32_t first;
-  uint32_t remaining;
+  uint32_t frames;
   double started;
 
   if (!context || !input_consumed || !output_ready || !channel_bytes || !bytes_per_channel || !channel_stride)
@@ -1473,31 +1492,46 @@ int lsx_sdm_vulkan_consume_resident(
       lsx_fail("empty resident Vulkan DSD input is not final");
       return SOX_EOF;
     }
-    if (input->valid_elements > context->input_frames) {
-      lsx_fail(
-          "resident Vulkan DSD input exceeds the modulator batch "
-          "(%u > %u frames)",
-          (unsigned)input->valid_elements,
-          context->input_frames);
+    if (context->resident_input_taken &&
+        (input->buffer != context->resident_input_buffer ||
+         input->offset != context->resident_input_offset ||
+         input->frame_offset != context->resident_input_frame_offset ||
+         input->valid_elements != context->resident_input_slice_frames)) {
+      lsx_fail("resident Vulkan DSD input was handed a new slice before the last was taken");
       return SOX_EOF;
     }
     if (ensure_resident_pipeline(context, input->format, input->domain) != SOX_SUCCESS)
       return SOX_EOF;
     lsx_debug_more(
-        "resident Vulkan DSD input: valid=%u block=%u state=%u pending=%u",
-        (unsigned)input->valid_elements,
+        "resident Vulkan DSD input: valid=%u taken=%u block=%u state=%u pending=%u",
+        (unsigned)input->valid_elements, context->resident_input_taken,
         (unsigned)input->block_elements, (unsigned)input->state,
         context->resident_pending_frames);
+    /*
+     * The slice is taken as far as the batch has room, as a classic flow
+     * takes what fits of its input.  A full batch is modulated at once, and
+     * the rest of the slice waits for the next call, which presents it
+     * again: one batch per call, since the packed output is handed out from
+     * the one download buffer.
+     */
     input_frames = (uint32_t)input->valid_elements;
     capacity = context->input_frames;
-    first = min(input_frames, capacity - context->resident_pending_frames);
-    if (append_resident_input(context, input, 0, first) != SOX_SUCCESS)
+    first = context->resident_input_taken;
+    frames = min(input_frames - first, capacity - context->resident_pending_frames);
+    if (append_resident_input(context, input, first, frames) != SOX_SUCCESS)
       return SOX_EOF;
-    context->resident_pending_frames += first;
-    remaining = input_frames - first;
-    *input_consumed = sox_true;
-    if (input->state == lsx_vulkan_resident_final)
-      context->resident_final = sox_true;
+    context->resident_pending_frames += frames;
+    context->resident_input_taken += frames;
+    context->resident_input_buffer = input->buffer;
+    context->resident_input_offset = input->offset;
+    context->resident_input_frame_offset = input->frame_offset;
+    context->resident_input_slice_frames = input->valid_elements;
+    if (context->resident_input_taken == input_frames) {
+      context->resident_input_taken = 0;
+      *input_consumed = sox_true;
+      if (input->state == lsx_vulkan_resident_final)
+        context->resident_final = sox_true;
+    }
     if (context->resident_pending_frames == capacity) {
       if (process_resident_pending(
           context, capacity, channel_bytes,
@@ -1506,11 +1540,6 @@ int lsx_sdm_vulkan_consume_resident(
       context->resident_pending_frames = 0;
       *output_ready = sox_true;
       ++context->process_calls;
-    }
-    if (remaining) {
-      if (append_resident_input(context, input, first, remaining) != SOX_SUCCESS)
-        return SOX_EOF;
-      context->resident_pending_frames = remaining;
     }
   }
   /* Producer slices are accumulated into a large GPU batch, since a batch
@@ -1535,11 +1564,13 @@ int lsx_sdm_vulkan_consume_resident(
   return SOX_SUCCESS;
 }
 
-/* Whether a final drain is still owed: the stream has ended but frames remain
+/* Whether further calls are owed: a slice is only partly taken, so the
+ * caller presents it again, or the stream has ended but frames remain
  * buffered, so a further call with no input is needed to flush them. */
 sox_bool lsx_sdm_vulkan_resident_active(lsx_sdm_vulkan_t const *context)
 {
-  return context && context->resident_final && context->resident_pending_frames != 0;
+  return context && (context->resident_input_taken ||
+      (context->resident_final && context->resident_pending_frames != 0));
 }
 
 uint64_t lsx_sdm_vulkan_resident_clips(lsx_sdm_vulkan_t const *context)

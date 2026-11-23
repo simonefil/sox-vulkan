@@ -42,7 +42,9 @@ sox_bool lsx_sdm_vulkan_dsd_rate_supported(unsigned rate);
 /*
  * batch_frames is the largest block the producer will hand over.  The
  * backend reserves one partial FSM block beyond it to preserve continuity
- * between slices; zero asks for the default host-side batch.
+ * between slices; zero asks for the default host-side batch.  The batch
+ * is cut, when the producer's format is known, to what one storage
+ * descriptor can bind.
  */
 lsx_sdm_vulkan_t *lsx_sdm_vulkan_create(
     lsx_vulkan_context_t *vulkan, unsigned rate, unsigned channels,
@@ -70,7 +72,9 @@ int lsx_sdm_vulkan_process(
  * Consume one slice from a resident producer.  Any of the four resident
  * formats is accepted in either domain, so the profile picked for the chain
  * reaches the modulator unchanged.  A NULL input drains what is buffered
- * once the final slice has been seen.
+ * once the final slice has been seen.  A slice larger than the room left in
+ * the batch is taken in parts: *input_consumed turns true with the last, and
+ * until then the caller presents the same slice again.
  */
 int lsx_sdm_vulkan_consume_resident(
     lsx_sdm_vulkan_t *context,
@@ -78,8 +82,9 @@ int lsx_sdm_vulkan_consume_resident(
     sox_bool *input_consumed, sox_bool *output_ready,
     uint8_t const **channel_bytes,
     size_t *bytes_per_channel, size_t *channel_stride);
-/* Whether a further drain is owed: the stream has ended but frames are still
- * buffered, so the caller must call again with a NULL input. */
+/* Whether further calls are owed: a slice is only partly taken, and the
+ * caller must present it again, or the stream has ended but frames are
+ * still buffered, and the caller must call again with a NULL input. */
 sox_bool lsx_sdm_vulkan_resident_active(lsx_sdm_vulkan_t const *context);
 
 /* Samples outside full scale, counted on the device by the ingest.

@@ -156,6 +156,21 @@ size_t lsx_writebuf(sox_format_t * ft, void const *buf, size_t len);
 int lsx_reads(sox_format_t * ft, char *c, size_t len);
 int lsx_writes(sox_format_t * ft, char const * c);
 void lsx_set_signal_defaults(sox_format_t * ft);
+
+/* Loudspeaker positions, for the device drivers.  SoX's channel order for 1
+ * to 8 channels is canonical_layout's in ffmpeg-codec.c, the order of
+ * WAVE_FORMAT_EXTENSIBLE. */
+typedef enum {
+  lsx_speaker_none, lsx_speaker_fl, lsx_speaker_fr, lsx_speaker_fc,
+  lsx_speaker_lfe, lsx_speaker_bl, lsx_speaker_br, lsx_speaker_bc,
+  lsx_speaker_sl, lsx_speaker_sr
+} lsx_speaker_t;
+/* What a device channel plays: a channel of the signal times gain, or
+ * silence when channel is -1. */
+typedef struct {int channel; double gain;} lsx_route_t;
+lsx_speaker_t const * lsx_speakers(unsigned channels); /* NULL beyond 1-8 */
+sox_bool lsx_route_speakers(lsx_route_t * route, lsx_speaker_t const * device,
+    unsigned device_channels, unsigned channels, sox_bool mix);
 #define lsx_writechars(ft, chars, len) (lsx_writebuf(ft, chars, len) == len? SOX_SUCCESS : SOX_EOF)
 
 size_t lsx_read_3_buf(sox_format_t * ft, sox_uint24_t *buf, size_t len);

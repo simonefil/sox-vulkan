@@ -23,6 +23,9 @@ typedef struct {
   snd_pcm_t          * pcm;
   char               * buf;
   unsigned int       format;
+  unsigned int       device_channels;
+  lsx_route_t        * route;   /* NULL when the channels go as they are */
+  sox_sample_t       * frames;  /* buf_len samples in the device's order */
 } priv_t;
 
 static const
@@ -99,6 +102,110 @@ static int select_format(
   return 0;
 }
 
+/* ALSA's order for a device without a channel map: snd_pcm_std_chmaps' in
+ * the kernel, which the pulse and pipewire plugins and speaker-test follow. */
+static lsx_speaker_t const * default_speakers(unsigned channels)
+{
+  #define _(x) lsx_speaker_##x
+  static lsx_speaker_t const speakers[4][8] = {
+    {_(fl), _(fr)},
+    {_(fl), _(fr), _(bl), _(br)},
+    {_(fl), _(fr), _(bl), _(br), _(fc), _(lfe)},
+    {_(fl), _(fr), _(bl), _(br), _(fc), _(lfe), _(sl), _(sr)}};
+  #undef _
+  return channels >= 2 && channels <= 8 && !(channels & 1)?
+    speakers[channels / 2 - 1] : NULL;
+}
+
+static void chmap_speakers(snd_pcm_chmap_t const * map, lsx_speaker_t * speakers)
+{
+  unsigned i;
+
+  for (i = 0; i < map->channels; ++i)
+    switch (map->pos[i] & SND_CHMAP_POSITION_MASK) {
+      case SND_CHMAP_MONO:
+      case SND_CHMAP_FC:  speakers[i] = lsx_speaker_fc;   break;
+      case SND_CHMAP_FL:  speakers[i] = lsx_speaker_fl;   break;
+      case SND_CHMAP_FR:  speakers[i] = lsx_speaker_fr;   break;
+      case SND_CHMAP_LFE: speakers[i] = lsx_speaker_lfe;  break;
+      case SND_CHMAP_RL:  speakers[i] = lsx_speaker_bl;   break;
+      case SND_CHMAP_RR:  speakers[i] = lsx_speaker_br;   break;
+      case SND_CHMAP_RC:  speakers[i] = lsx_speaker_bc;   break;
+      case SND_CHMAP_SL:  speakers[i] = lsx_speaker_sl;   break;
+      case SND_CHMAP_SR:  speakers[i] = lsx_speaker_sr;   break;
+      default:            speakers[i] = lsx_speaker_none; break;
+    }
+}
+
+/* The fewest device channels that have a speaker for each of the signal's,
+ * among the channel maps the device offers or, if it offers none, ALSA's
+ * default ones; 0 if there are none. */
+static unsigned choose_channels(snd_pcm_t * pcm, snd_pcm_hw_params_t * params,
+    unsigned channels, sox_bool mix)
+{
+  snd_pcm_chmap_query_t ** maps = snd_pcm_query_chmaps(pcm);
+  lsx_speaker_t speakers[64];
+  lsx_route_t route[64];
+  unsigned best = 0, n, i;
+
+  for (i = 0; maps? maps[i] != NULL : i < 4; ++i) {
+    if (maps) {
+      n = maps[i]->map.channels;
+      if (n > 64)
+        continue;
+      chmap_speakers(&maps[i]->map, speakers);
+    }
+    else {
+      n = 2 * (i + 1);
+      memcpy(speakers, default_speakers(n), n * sizeof(*speakers));
+    }
+    if ((!best || n < best) &&
+        lsx_route_speakers(route, speakers, n, channels, mix) &&
+        snd_pcm_hw_params_test_channels(pcm, params, n) == 0)
+      best = n;
+  }
+  if (maps)
+    snd_pcm_free_chmaps(maps);
+  return best;
+}
+
+/* Places the signal's channels on the device's speakers, read from its
+ * channel map or, without one, from ALSA's default order.  A device with too
+ * few speakers for the signal is given the signal mixed to its channel count,
+ * as before, by the effect that sox adds for a change of channels. */
+static void route_channels(sox_format_t * ft)
+{
+  priv_t * p = (priv_t *)ft->priv;
+  unsigned n = p->device_channels, i;
+  snd_pcm_chmap_t * map = snd_pcm_get_chmap(p->pcm);
+  lsx_speaker_t * speakers = lsx_calloc(n, sizeof(*speakers));
+  sox_bool known = sox_true;
+
+  if (map && map->channels == n)
+    chmap_speakers(map, speakers);
+  else if (default_speakers(n))
+    memcpy(speakers, default_speakers(n), n * sizeof(*speakers));
+  else known = sox_false;
+  free(map);
+
+  p->route = lsx_malloc(n * sizeof(*p->route));
+  if (!known || !lsx_route_speakers(p->route, speakers, n, ft->signal.channels, ft->mode == 'w')) {
+    if (n == ft->signal.channels)
+      lsx_warn("no speaker positions for the %u channels on this device: they keep SoX's order", n);
+    ft->signal.channels = n;
+    if (!known || !lsx_route_speakers(p->route, speakers, n, n, ft->mode == 'w'))
+      for (i = 0; i < n; ++i)
+        p->route[i].channel = i, p->route[i].gain = 1;
+  }
+  free(speakers);
+
+  for (i = 0; i < n && p->route[i].channel == (int)i && p->route[i].gain == 1; ++i);
+  if (i == n && n == ft->signal.channels)
+    free(p->route), p->route = NULL;
+  for (i = 0; p->route && i < n; ++i)
+    lsx_debug("device channel %u plays channel %d", i, p->route[i].channel);
+}
+
 #define _(x,y) do {if ((err = x y) < 0) {lsx_fail_errno(ft, SOX_EPERM, #x " error: %s", snd_strerror(err)); goto error;} } while (0)
 static int setup(sox_format_t * ft)
 {
@@ -127,9 +234,16 @@ static int setup(sox_format_t * ft)
   _(snd_pcm_hw_params_set_rate_near, (p->pcm, params, &n, 0));
   ft->signal.rate = n;
 
-  n = ft->signal.channels;                          /* Set channels: */
-  _(snd_pcm_hw_params_set_channels_near, (p->pcm, params, &n));
-  ft->signal.channels = n;
+  /* Set channels: from 3 to 8 placed by speaker, the others as they are */
+  n = ft->signal.channels >= 3 && ft->signal.channels <= 8?
+    choose_channels(p->pcm, params, ft->signal.channels, ft->mode == 'w') : 0;
+  if (n)
+    _(snd_pcm_hw_params_set_channels, (p->pcm, params, n));
+  else {
+    n = ft->signal.channels;
+    _(snd_pcm_hw_params_set_channels_near, (p->pcm, params, &n));
+  }
+  p->device_channels = n;
 
   /* Get number of significant bits: */
   if ((err = snd_pcm_hw_params_get_sbits(params)) > 0)
@@ -139,7 +253,7 @@ static int setup(sox_format_t * ft)
 
   /* Set buf_len > > sox_globals.bufsiz for no underrun: */
   p->buf_len = sox_globals.bufsiz * 8 / formats[p->format].bytes /
-      ft->signal.channels;
+      p->device_channels;
   _(snd_pcm_hw_params_get_buffer_size_min, (params, &min));
   _(snd_pcm_hw_params_get_buffer_size_max, (params, &max));
   p->period = range_limit(p->buf_len, min, max) / 8;
@@ -154,8 +268,13 @@ static int setup(sox_format_t * ft)
   _(snd_pcm_hw_params, (p->pcm, params));           /* Configure ALSA */
   snd_pcm_hw_params_free(params), params = NULL;
   _(snd_pcm_prepare, (p->pcm));
-  p->buf_len *= ft->signal.channels;                /* No longer in `frames' */
+  if (ft->signal.channels >= 3 && ft->signal.channels <= 8)
+    route_channels(ft);
+  else ft->signal.channels = p->device_channels;
+  p->buf_len *= p->device_channels;                 /* No longer in `frames' */
   p->buf = lsx_malloc(p->buf_len * formats[p->format].bytes);
+  if (p->route)
+    p->frames = lsx_malloc(p->buf_len * sizeof(*p->frames));
   return SOX_SUCCESS;
 
 error:
@@ -182,48 +301,52 @@ static int recover(sox_format_t * ft, snd_pcm_t * pcm, int err)
 static size_t read_(sox_format_t * ft, sox_sample_t * buf, size_t len)
 {
   priv_t             * p = (priv_t *)ft->priv;
-  snd_pcm_sframes_t  i, n;
-  size_t             done;
+  snd_pcm_sframes_t  i, n, f;
+  size_t             done, frames;
+  unsigned           channels = ft->signal.channels, c;
+  sox_sample_t       * out;
 
-  len = min(len, p->buf_len);
-  for (done = 0; done < len; done += n) {
+  frames = min(len / channels, p->buf_len / p->device_channels);
+  len = frames * channels;
+  for (done = 0; done < len; done += n * channels) {
     do {
-      n = snd_pcm_readi(p->pcm, p->buf, (len - done) / ft->signal.channels);
+      n = snd_pcm_readi(p->pcm, p->buf, frames - done / channels);
       if (n < 0 && recover(ft, p->pcm, (int)n) < 0)
         return 0;
     } while (n <= 0);
 
-    i = n *= ft->signal.channels;
+    i = n * p->device_channels;
+    out = p->route? p->frames : buf + done;
     switch (formats[p->format].alsa_fmt) {
       case SND_PCM_FORMAT_S8: {
         int8_t * buf1 = (int8_t *)p->buf;
-        while (i--) *buf++ = SOX_SIGNED_8BIT_TO_SAMPLE(*buf1++,);
+        while (i--) *out++ = SOX_SIGNED_8BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_U8: {
         uint8_t * buf1 = (uint8_t *)p->buf;
-        while (i--) *buf++ = SOX_UNSIGNED_8BIT_TO_SAMPLE(*buf1++,);
+        while (i--) *out++ = SOX_UNSIGNED_8BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_S16: {
         int16_t * buf1 = (int16_t *)p->buf;
         if (ft->encoding.reverse_bytes) while (i--)
-          *buf++ = SOX_SIGNED_16BIT_TO_SAMPLE(lsx_swapw(*buf1++),);
+          *out++ = SOX_SIGNED_16BIT_TO_SAMPLE(lsx_swapw(*buf1++),);
         else
-          while (i--) *buf++ = SOX_SIGNED_16BIT_TO_SAMPLE(*buf1++,);
+          while (i--) *out++ = SOX_SIGNED_16BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_U16: {
         uint16_t * buf1 = (uint16_t *)p->buf;
         if (ft->encoding.reverse_bytes) while (i--)
-          *buf++ = SOX_UNSIGNED_16BIT_TO_SAMPLE(lsx_swapw(*buf1++),);
+          *out++ = SOX_UNSIGNED_16BIT_TO_SAMPLE(lsx_swapw(*buf1++),);
         else
-          while (i--) *buf++ = SOX_UNSIGNED_16BIT_TO_SAMPLE(*buf1++,);
+          while (i--) *out++ = SOX_UNSIGNED_16BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_S24: {
         sox_int24_t * buf1 = (sox_int24_t *)p->buf;
-        while (i--) *buf++ = SOX_SIGNED_24BIT_TO_SAMPLE(*buf1++,);
+        while (i--) *out++ = SOX_SIGNED_24BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_S24_3LE: {
@@ -233,28 +356,33 @@ static size_t read_(sox_format_t * ft, sox_sample_t * buf, size_t len)
           temp  = *buf1++;
           temp |= *buf1++ << 8;
           temp |= *buf1++ << 16;
-          *buf++ = SOX_SIGNED_24BIT_TO_SAMPLE((sox_int24_t)temp,);
+          *out++ = SOX_SIGNED_24BIT_TO_SAMPLE((sox_int24_t)temp,);
         }
         break;
       }
       case SND_PCM_FORMAT_U24: {
         sox_uint24_t * buf1 = (sox_uint24_t *)p->buf;
-        while (i--) *buf++ = SOX_UNSIGNED_24BIT_TO_SAMPLE(*buf1++,);
+        while (i--) *out++ = SOX_UNSIGNED_24BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_S32: {
         int32_t * buf1 = (int32_t *)p->buf;
-        while (i--) *buf++ = SOX_SIGNED_32BIT_TO_SAMPLE(*buf1++,);
+        while (i--) *out++ = SOX_SIGNED_32BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       case SND_PCM_FORMAT_U32: {
         uint32_t * buf1 = (uint32_t *)p->buf;
-        while (i--) *buf++ = SOX_UNSIGNED_32BIT_TO_SAMPLE(*buf1++,);
+        while (i--) *out++ = SOX_UNSIGNED_32BIT_TO_SAMPLE(*buf1++,);
         break;
       }
       default: lsx_fail_errno(ft, SOX_EFMT, "invalid format");
         return 0;
     }
+    for (f = 0; p->route && f < n; ++f)  /* from the device's order */
+      for (c = 0; c < p->device_channels; ++c)
+        if (p->route[c].channel >= 0)
+          buf[done + f * channels + p->route[c].channel] =
+            p->frames[f * p->device_channels + c];
   }
   return len;
 }
@@ -262,48 +390,63 @@ static size_t read_(sox_format_t * ft, sox_sample_t * buf, size_t len)
 static size_t write_(sox_format_t * ft, sox_sample_t const * buf, size_t len)
 {
   priv_t             * p = (priv_t *)ft->priv;
-  size_t             done, i, n;
+  size_t             done, i, n, frames, f;
+  unsigned           channels = ft->signal.channels, c;
   snd_pcm_sframes_t  actual;
+  sox_sample_t const * in;
   SOX_SAMPLE_LOCALS;
 
-  for (done = 0; done < len; done += n) {
-    i = n = min(len - done, p->buf_len);
+  for (done = 0; done < len; done += frames * channels) {
+    frames = min((len - done) / channels, p->buf_len / p->device_channels);
+    if (!frames)
+      break;
+    in = buf + done;
+    if (p->route) {                     /* to the device's order */
+      sox_sample_t * out = p->frames;
+
+      for (f = 0; f < frames; ++f, in += channels)
+        for (c = 0; c < p->device_channels; ++c)
+          *out++ = p->route[c].channel < 0? 0 :
+            in[p->route[c].channel] * p->route[c].gain;
+      in = p->frames;
+    }
+    i = n = frames * p->device_channels;
     switch (formats[p->format].alsa_fmt) {
       case SND_PCM_FORMAT_S8: {
         int8_t * buf1 = (int8_t *)p->buf;
-        while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_8BIT(*buf++, ft->clips);
+        while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_8BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_U8: {
         uint8_t * buf1 = (uint8_t *)p->buf;
-        while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_8BIT(*buf++, ft->clips);
+        while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_8BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_S16: {
         int16_t * buf1 = (int16_t *)p->buf;
         if (ft->encoding.reverse_bytes) while (i--)
-          *buf1++ = lsx_swapw(SOX_SAMPLE_TO_SIGNED_16BIT(*buf++, ft->clips));
+          *buf1++ = lsx_swapw(SOX_SAMPLE_TO_SIGNED_16BIT(*in++, ft->clips));
         else
-          while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_16BIT(*buf++, ft->clips);
+          while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_16BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_U16: {
         uint16_t * buf1 = (uint16_t *)p->buf;
         if (ft->encoding.reverse_bytes) while (i--)
-          *buf1++ = lsx_swapw(SOX_SAMPLE_TO_UNSIGNED_16BIT(*buf++, ft->clips));
+          *buf1++ = lsx_swapw(SOX_SAMPLE_TO_UNSIGNED_16BIT(*in++, ft->clips));
         else
-          while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_16BIT(*buf++, ft->clips);
+          while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_16BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_S24: {
         sox_int24_t * buf1 = (sox_int24_t *)p->buf;
-        while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_24BIT(*buf++, ft->clips);
+        while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_24BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_S24_3LE: {
         unsigned char *buf1 = (unsigned char *)p->buf;
         while (i--) {
-          uint32_t temp = (uint32_t)SOX_SAMPLE_TO_SIGNED_24BIT(*buf++, ft->clips);
+          uint32_t temp = (uint32_t)SOX_SAMPLE_TO_SIGNED_24BIT(*in++, ft->clips);
           *buf1++ = (temp & 0x000000FF);
           *buf1++ = (temp & 0x0000FF00) >> 8;
           *buf1++ = (temp & 0x00FF0000) >> 16;
@@ -312,26 +455,26 @@ static size_t write_(sox_format_t * ft, sox_sample_t const * buf, size_t len)
       }
       case SND_PCM_FORMAT_U24: {
         sox_uint24_t * buf1 = (sox_uint24_t *)p->buf;
-        while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_24BIT(*buf++, ft->clips);
+        while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_24BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_S32: {
         int32_t * buf1 = (int32_t *)p->buf;
-        while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_32BIT(*buf++, ft->clips);
+        while (i--) *buf1++ = SOX_SAMPLE_TO_SIGNED_32BIT(*in++, ft->clips);
         break;
       }
       case SND_PCM_FORMAT_U32: {
         uint32_t * buf1 = (uint32_t *)p->buf;
-        while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_32BIT(*buf++, ft->clips);
+        while (i--) *buf1++ = SOX_SAMPLE_TO_UNSIGNED_32BIT(*in++, ft->clips);
         break;
       }
       default: lsx_fail_errno(ft, SOX_EFMT, "invalid format");
         return 0;
     }
-    for (i = 0; i < n; i += actual * ft->signal.channels) do {
+    for (i = 0; i < n; i += actual * p->device_channels) do {
       actual = snd_pcm_writei(p->pcm,
           p->buf + i * formats[p->format].bytes,
-          (n - i) / ft->signal.channels);
+          (n - i) / p->device_channels);
       if (errno == EAGAIN)     /* Happens naturally; don't report it: */
         errno = 0;
       if (actual < 0 && recover(ft, p->pcm, (int)actual) < 0)
@@ -346,6 +489,8 @@ static int stop(sox_format_t * ft)
   priv_t * p = (priv_t *)ft->priv;
   snd_pcm_close(p->pcm);
   free(p->buf);
+  free(p->route);
+  free(p->frames);
   return SOX_SUCCESS;
 }
 

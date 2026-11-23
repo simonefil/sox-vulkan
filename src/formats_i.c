@@ -53,6 +53,76 @@ void lsx_set_signal_defaults(sox_format_t * ft)
     ft->encoding.encoding = SOX_ENCODING_SIGN2;
 }
 
+lsx_speaker_t const * lsx_speakers(unsigned channels)
+{
+  #define _(x) lsx_speaker_##x
+  static lsx_speaker_t const speakers[8][8] = {
+    {_(fc)},
+    {_(fl), _(fr)},
+    {_(fl), _(fr), _(fc)},
+    {_(fl), _(fr), _(bl), _(br)},
+    {_(fl), _(fr), _(fc), _(bl), _(br)},
+    {_(fl), _(fr), _(fc), _(lfe), _(bl), _(br)},
+    {_(fl), _(fr), _(fc), _(lfe), _(bc), _(sl), _(sr)},
+    {_(fl), _(fr), _(fc), _(lfe), _(bl), _(br), _(sl), _(sr)}};
+  #undef _
+  return channels && channels <= 8? speakers[channels - 1] : NULL;
+}
+
+/* Places each channel of a signal of `channels' channels in SoX's order on
+ * the device channel with its speaker; device channels left over stay
+ * silent.  Back and side pairs stand in for each other when the device lacks
+ * the exact pair, and with `mix' a back centre with no speaker of its own goes
+ * to both back speakers at -3 dB.  False if a channel has no place, or the
+ * device names a speaker twice. */
+sox_bool lsx_route_speakers(lsx_route_t * route, lsx_speaker_t const * device,
+    unsigned device_channels, unsigned channels, sox_bool mix)
+{
+  static lsx_speaker_t const alternative[] = {
+    lsx_speaker_none, lsx_speaker_none, lsx_speaker_none, lsx_speaker_none,
+    lsx_speaker_none, lsx_speaker_sl, lsx_speaker_sr, lsx_speaker_none,
+    lsx_speaker_bl, lsx_speaker_br};
+  lsx_speaker_t const * speakers = lsx_speakers(channels);
+  unsigned i, j, pass;
+
+  if (!speakers)
+    return sox_false;
+  for (i = 0; i < device_channels; ++i) {
+    route[i].channel = -1;
+    route[i].gain = 1;
+    for (j = 0; j < i; ++j)
+      if (device[i] != lsx_speaker_none && device[j] == device[i])
+        return sox_false;
+  }
+  for (j = 0; j < channels; ++j) {
+    sox_bool placed = sox_false;
+
+    for (pass = 0; pass < 2 && !placed; ++pass) {
+      lsx_speaker_t want = pass? alternative[speakers[j]] : speakers[j];
+
+      for (i = 0; i < device_channels && !placed; ++i)
+        if (want != lsx_speaker_none && device[i] == want && route[i].channel < 0)
+          route[i].channel = j, placed = sox_true;
+    }
+    if (!placed && mix && speakers[j] == lsx_speaker_bc) {
+      unsigned bl = device_channels, br = device_channels;
+
+      for (i = 0; i < device_channels; ++i) {
+        if (device[i] == lsx_speaker_bl && route[i].channel < 0) bl = i;
+        if (device[i] == lsx_speaker_br && route[i].channel < 0) br = i;
+      }
+      if (bl < device_channels && br < device_channels) {
+        route[bl].channel = route[br].channel = j;
+        route[bl].gain = route[br].gain = 1 / M_SQRT2;
+        placed = sox_true;
+      }
+    }
+    if (!placed)
+      return sox_false;
+  }
+  return sox_true;
+}
+
 int lsx_check_read_params(sox_format_t * ft, unsigned channels,
     sox_rate_t rate, sox_encoding_t encoding, unsigned bits_per_sample,
     uint64_t num_samples, sox_bool check_length)

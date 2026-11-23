@@ -802,7 +802,7 @@ if(WITH_COREAUDIO AND IS_MACOS)
     find_library(COREAUDIO_FRAMEWORK CoreAudio)
     if(COREAUDIO_FRAMEWORK)
         set(HAVE_COREAUDIO TRUE)
-        set(COREAUDIO_LIBRARIES "-framework CoreAudio")
+        set(COREAUDIO_LIBRARIES "-framework CoreAudio" "-framework AudioToolbox")
     endif()
 endif()
 

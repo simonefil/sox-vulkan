@@ -6,6 +6,7 @@
 #include "sox_i.h"
 
 #include <CoreAudio/CoreAudio.h>
+#include <AudioToolbox/AudioToolbox.h>
 #include <pthread.h>
 
 #define Buffactor 4
@@ -20,6 +21,10 @@ typedef struct {
   size_t bufwr;
   size_t bufrdavail;
   float *buf;
+  unsigned device_channels;
+  lsx_route_t *route;       /* NULL when the channels go as they are */
+  sox_sample_t *frame;      /* playback: a frame of the signal being gathered */
+  unsigned filled;
 } priv_t;
 
 static OSStatus PlaybackIOProc(AudioDeviceID inDevice UNUSED,
@@ -175,6 +180,111 @@ static size_t device_channels(AudioObjectID adid, int is_input)
   return channels;
 }
 
+/* The speakers of the device's channels, as the user set them in Audio MIDI
+ * Setup: stereo[] from the stereo pair, layout[] from the speaker layout, each
+ * all lsx_speaker_none when the device does not tell. */
+static void device_speakers(AudioObjectID adid, int is_input, unsigned n,
+    lsx_speaker_t *stereo, lsx_speaker_t *layout)
+{
+  AudioObjectPropertyAddress address = {
+    kAudioDevicePropertyPreferredChannelsForStereo,
+    is_input? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput,
+    kAudioObjectPropertyElementMain
+  };
+  UInt32 pair[2], size = sizeof(pair), i, count;
+  AudioChannelLayout *acl = NULL, *full = NULL;
+  AudioChannelDescription const *d;
+  sox_bool rear_pair = sox_false;
+
+  for (i = 0; i < n; ++i)
+    stereo[i] = layout[i] = lsx_speaker_none;
+  if (AudioObjectGetPropertyData(adid, &address, 0, NULL, &size, pair) == noErr &&
+      pair[0] && pair[1] && pair[0] != pair[1] && pair[0] <= n && pair[1] <= n) {
+    stereo[pair[0] - 1] = lsx_speaker_fl;
+    stereo[pair[1] - 1] = lsx_speaker_fr;
+  }
+
+  address.mSelector = kAudioDevicePropertyPreferredChannelLayout;
+  if (AudioObjectGetPropertyDataSize(adid, &address, 0, NULL, &size) != noErr)
+    return;
+  acl = lsx_malloc(size);
+  if (AudioObjectGetPropertyData(adid, &address, 0, NULL, &size, acl) == noErr) {
+    /* A layout given as a tag or a bitmap is spelt out as descriptions. */
+    if (acl->mChannelLayoutTag != kAudioChannelLayoutTag_UseChannelDescriptions) {
+      AudioFormatPropertyID id = kAudioFormatProperty_ChannelLayoutForTag;
+      void const *spec = &acl->mChannelLayoutTag;
+      UInt32 spec_size = sizeof(acl->mChannelLayoutTag);
+
+      if (acl->mChannelLayoutTag == kAudioChannelLayoutTag_UseChannelBitmap) {
+        id = kAudioFormatProperty_ChannelLayoutForBitmap;
+        spec = &acl->mChannelBitmap;
+        spec_size = sizeof(acl->mChannelBitmap);
+      }
+      if (AudioFormatGetPropertyInfo(id, spec_size, spec, &size) == noErr) {
+        full = lsx_malloc(size);
+        if (AudioFormatGetProperty(id, spec_size, spec, &size, full) != noErr)
+          full->mNumberChannelDescriptions = 0;
+      }
+    }
+    else full = acl, acl = NULL;
+  }
+  count = full? min(full->mNumberChannelDescriptions, n) : 0;
+  for (i = 0, d = full? full->mChannelDescriptions : NULL; i < count; ++i)
+    rear_pair |= d[i].mChannelLabel == kAudioChannelLabel_RearSurroundLeft;
+  /* Ls/Rs are the back pair, unless the layout also has Rls/Rrs: then they
+   * are the side pair, as in 7.1 */
+  for (i = 0; i < count; ++i)
+    switch (d[i].mChannelLabel) {
+      case kAudioChannelLabel_Left:                layout[i] = lsx_speaker_fl;  break;
+      case kAudioChannelLabel_Right:               layout[i] = lsx_speaker_fr;  break;
+      case kAudioChannelLabel_Mono:
+      case kAudioChannelLabel_Center:              layout[i] = lsx_speaker_fc;  break;
+      case kAudioChannelLabel_LFEScreen:           layout[i] = lsx_speaker_lfe; break;
+      case kAudioChannelLabel_LeftSurround:        layout[i] = rear_pair? lsx_speaker_sl : lsx_speaker_bl; break;
+      case kAudioChannelLabel_RightSurround:       layout[i] = rear_pair? lsx_speaker_sr : lsx_speaker_br; break;
+      case kAudioChannelLabel_RearSurroundLeft:    layout[i] = lsx_speaker_bl;  break;
+      case kAudioChannelLabel_RearSurroundRight:   layout[i] = lsx_speaker_br;  break;
+      case kAudioChannelLabel_CenterSurround:      layout[i] = lsx_speaker_bc;  break;
+      case kAudioChannelLabel_LeftSurroundDirect:  layout[i] = lsx_speaker_sl;  break;
+      case kAudioChannelLabel_RightSurroundDirect: layout[i] = lsx_speaker_sr;  break;
+      default: break;
+    }
+  free(acl);
+  free(full);
+}
+
+/* Places the signal's channels on the device's speakers, by the stereo pair
+ * or else by the speaker layout.  A device without speakers for all of them
+ * is given the signal mixed to its channel count, as before, by the effect
+ * that sox adds for a change of channels; a recording keeps the device's
+ * channel count and is only put in SoX's order. */
+static void route_channels(sox_format_t *ft, int is_input)
+{
+  priv_t *ac = (priv_t *)ft->priv;
+  unsigned n = ac->device_channels, i;
+  lsx_speaker_t *stereo = lsx_malloc(n * sizeof(*stereo));
+  lsx_speaker_t *layout = lsx_malloc(n * sizeof(*layout));
+
+  device_speakers(ac->adid, is_input, n, stereo, layout);
+  ac->route = lsx_malloc(n * sizeof(*ac->route));
+  if (is_input || (!lsx_route_speakers(ac->route, stereo, n, ft->signal.channels, sox_true) &&
+                   !lsx_route_speakers(ac->route, layout, n, ft->signal.channels, sox_true))) {
+    ft->signal.channels = n;
+    if (!lsx_route_speakers(ac->route, stereo, n, n, !is_input) &&
+        !lsx_route_speakers(ac->route, layout, n, n, !is_input))
+      for (i = 0; i < n; ++i)
+        ac->route[i].channel = i, ac->route[i].gain = 1;
+  }
+  free(stereo);
+  free(layout);
+
+  for (i = 0; i < n && ac->route[i].channel == (int)i && ac->route[i].gain == 1; ++i);
+  if (i == n && n == ft->signal.channels)
+    free(ac->route), ac->route = NULL;
+  for (i = 0; ac->route && i < n; ++i)
+    lsx_debug("device channel %u is channel %d", i, ac->route[i].channel);
+}
+
 static int setup(sox_format_t *ft, int is_input)
 {
   priv_t *ac = (priv_t *)ft->priv;
@@ -255,13 +365,18 @@ static int setup(sox_format_t *ft, int is_input)
     return SOX_EOF;
   }
 
-  /* An input counts the channels of all its streams, of which the stream
-   * format may describe only one. */
-  ft->signal.channels = is_input? device_channels(ac->adid, is_input) : 0;
-  if (!ft->signal.channels)
-    ft->signal.channels = stream_desc.mChannelsPerFrame;
-  if (!ft->signal.channels)
-    ft->signal.channels = 2;
+  /* The channels of all the device's streams, of which the stream format may
+   * describe only one; they make up each frame the IOProcs pass. */
+  ac->device_channels = device_channels(ac->adid, is_input);
+  if (!ac->device_channels)
+    ac->device_channels = stream_desc.mChannelsPerFrame;
+  if (!ac->device_channels)
+    ac->device_channels = 2;
+  if (is_input || !ft->signal.channels)
+    ft->signal.channels = ac->device_channels;
+  route_channels(ft, is_input);
+  if (ac->route && !is_input)
+    ac->frame = lsx_malloc(ft->signal.channels * sizeof(*ac->frame));
   ft->signal.rate = 44100;
   ft->encoding.bits_per_sample = 32;
 
@@ -269,9 +384,9 @@ static int setup(sox_format_t *ft, int is_input)
    * be set to the stream's rate and channel count, that should be preferred
    * to resampling and mixing. */
 
-  if (is_input && stream_desc.mChannelsPerFrame != ft->signal.channels)
+  if (stream_desc.mChannelsPerFrame != ac->device_channels)
     lsx_debug("stream format reports %d channels but stream configuration reports %d channels",
-              (int)stream_desc.mChannelsPerFrame, (int)ft->signal.channels);
+              (int)stream_desc.mChannelsPerFrame, (int)ac->device_channels);
 
   if (stream_desc.mSampleRate != ft->signal.rate)
   {
@@ -341,9 +456,15 @@ static size_t read_samples(sox_format_t *ft, sox_sample_t *buf, size_t nsamp)
     while (ac->bufrdavail == 0)
         pthread_cond_wait(&ac->cond, &ac->mutex);
 
+    /* The ring holds whole frames; in SoX's order when routed. */
+    if (ac->route)
+        nsamp -= nsamp % ac->device_channels;
     len = 0;
     while(len < nsamp && ac->bufrdavail > 0){
-        buf[len] = SOX_FLOAT_32BIT_TO_SAMPLE(ac->buf[ac->bufrd], ft->clips);
+        size_t at = ac->route? len - len % ac->device_channels +
+            ac->route[len % ac->device_channels].channel : len;
+
+        buf[at] = SOX_FLOAT_32BIT_TO_SAMPLE(ac->buf[ac->bufrd], ft->clips);
         len++;
         ac->bufrd++;
         if(ac->bufrd == ac->bufsize)
@@ -365,6 +486,7 @@ static int stopread(sox_format_t * ft)
   pthread_cond_destroy(&ac->cond);
   pthread_mutex_destroy(&ac->mutex);
   free(ac->buf);
+  free(ac->route);
 
   return SOX_SUCCESS;
 }
@@ -394,16 +516,30 @@ static size_t write_samples(sox_format_t *ft, const sox_sample_t *buf, size_t ns
         ac->device_started = 1;
     }
 
-    /* ac->bufsize, bufwr and bufrdavail count float samples. */
+    /* ac->bufsize, bufwr and bufrdavail count float samples.  Routed,
+     * each frame of the signal is gathered and given as a device frame. */
     for(i = 0; i < nsamp; i++){
-        while(ac->bufrdavail == ac->bufsize - 1)
-            pthread_cond_wait(&ac->cond, &ac->mutex);
+        unsigned c, n = 1;
 
-        ac->buf[ac->bufwr] = SOX_SAMPLE_TO_FLOAT_32BIT(buf[i], ft->clips);
-        ac->bufwr++;
-        if(ac->bufwr == ac->bufsize)
-            ac->bufwr = 0;
-        ac->bufrdavail++;
+        if (ac->route) {
+            ac->frame[ac->filled++] = buf[i];
+            if (ac->filled < ft->signal.channels)
+                continue;
+            ac->filled = 0;
+            n = ac->device_channels;
+        }
+        for (c = 0; c < n; ++c) {
+            while(ac->bufrdavail == ac->bufsize - 1)
+                pthread_cond_wait(&ac->cond, &ac->mutex);
+
+            ac->buf[ac->bufwr] = !ac->route? SOX_SAMPLE_TO_FLOAT_32BIT(buf[i], ft->clips) :
+                ac->route[c].channel < 0? 0 : SOX_SAMPLE_TO_FLOAT_32BIT(
+                    ac->frame[ac->route[c].channel] * ac->route[c].gain, ft->clips);
+            ac->bufwr++;
+            if(ac->bufwr == ac->bufsize)
+                ac->bufwr = 0;
+            ac->bufrdavail++;
+        }
     }
 
     pthread_mutex_unlock(&ac->mutex);
@@ -430,6 +566,8 @@ static int stopwrite(sox_format_t * ft)
     pthread_cond_destroy(&ac->cond);
     pthread_mutex_destroy(&ac->mutex);
     free(ac->buf);
+    free(ac->route);
+    free(ac->frame);
 
     return SOX_SUCCESS;
 }

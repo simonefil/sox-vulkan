@@ -210,6 +210,7 @@ static int startread(sox_format_t * ft)
   ft->signal.channels = 1;
   ft->signal.length = ft->signal.length != SOX_IGNORE_LENGTH && ft->seekable?
     (size_t)(amr_duration_frames(ft) * .02 * ft->signal.rate +.5) : SOX_UNSPEC;
+  ft->data_start = sizeof(amr_magic) - 1;
   return SOX_SUCCESS;
 }
 

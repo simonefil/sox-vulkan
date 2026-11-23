@@ -172,6 +172,7 @@ static int startread(sox_format_t * ft)
         ft->signal.rate = rate;
         ft->encoding.encoding = SOX_ENCODING_SIGN2;
         ft->encoding.bits_per_sample = 8;
+        ft->data_start = p->ch0_pos;
 
         return(SOX_SUCCESS);
 }

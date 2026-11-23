@@ -89,6 +89,7 @@ do_break:
     }
 
     ft->encoding.encoding = SOX_ENCODING_FLOAT_TEXT;
+    ft->data_start = lsx_tell(ft);
 
     return (SOX_SUCCESS);
 

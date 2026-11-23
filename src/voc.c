@@ -243,6 +243,8 @@ static int startread(sox_format_t * ft)
       return (SOX_EOF);
     }
 
+  ft->data_start = lsx_tell(ft);
+
   v->rate = -1;
   v->format = -1;
   v->channels = -1;

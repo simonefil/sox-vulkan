@@ -256,6 +256,13 @@ static int start_read(sox_format_t * const ft)
     return SOX_EOF;
   }
 
+  {
+    FLAC__uint64 position;
+
+    if (FLAC__stream_decoder_get_decode_position(p->decoder, &position))
+      ft->data_start = position;
+  }
+
   /* Frame senza STREAMINFO, come dopo un seek del server: si decodifica il primo
    * frame, che dà il formato e resta da leggere come avanzo */
   if (!p->sample_rate) {

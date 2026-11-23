@@ -67,7 +67,8 @@ static int start_read(sox_format_t * ft)
   priv_t * p = (priv_t *)ft->priv;
   char msg[80];
 
-  p->codec = WavpackOpenFileInputEx(&io_fns, ft, NULL, msg, OPEN_NORMALIZE, 0);
+  p->codec = WavpackOpenFileInputEx(&io_fns, ft, NULL, msg,
+                                    OPEN_NORMALIZE | OPEN_WRAPPER, 0);
   if (!p->codec) {
     lsx_fail_errno(ft, SOX_EHDR, "%s", msg);
     return SOX_EOF;
@@ -81,6 +82,10 @@ static int start_read(sox_format_t * ft)
   ft->signal.length = (uint64_t)WavpackGetNumSamples(p->codec) * ft->signal.channels;
   ft->encoding.encoding = (WavpackGetMode(p->codec) & MODE_FLOAT)?
     SOX_ENCODING_WAVPACKF : SOX_ENCODING_WAVPACK;
+
+  if (ft->seekable) WavpackSeekTrailingWrapper(p->codec);
+  ft->data_start = WavpackGetWrapperBytes(p->codec);
+
   return SOX_SUCCESS;
 }
 
@@ -110,6 +115,7 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t * buf, size_t len)
 static int stop_read(sox_format_t * ft)
 {
   priv_t * p = (priv_t *)ft->priv;
+  WavpackFreeWrapper(p->codec);
   WavpackCloseFile(p->codec);
   return SOX_SUCCESS;
 }

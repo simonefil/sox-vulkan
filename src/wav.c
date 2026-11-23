@@ -896,6 +896,7 @@ static int startread(sox_format_t *ft)
 
             qwDataLength = clen;
             wav->dataStart = lsx_tell(ft);
+            ft->data_start = wav->dataStart;
 
             if (qwDataLength == UINT32_MAX || qwDataLength == MS_UNSPEC)
                 break;

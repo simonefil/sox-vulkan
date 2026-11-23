@@ -381,7 +381,7 @@ static char const * size_and_bitrate(sox_format_t * ft, char const * * text)
   off_t size = lsx_filelength(ft);
   if (ft->signal.length && ft->signal.channels && ft->signal.rate && text) {
     double secs = ft->signal.length / ft->signal.channels / ft->signal.rate;
-    *text = lsx_sigfigs3(8. * size / secs);
+    *text = lsx_sigfigs3(8. * (size - ft->data_start) / secs);
   }
   return lsx_sigfigs3((double)size);
 }

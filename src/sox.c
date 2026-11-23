@@ -3253,7 +3253,6 @@ int main(int argc, char **argv)
   if (ofile->signal.length != SOX_UNSPEC)
     usage("--ignore-length can be given only for an input file");
 
-  setsig(SIGINT, SIG_IGN); /* So child pipes aren't killed by track skip */
   for (i = 0; i < input_count; i++) {
     size_t j = input_count - 1 - i; /* Open in reverse order 'cos of rec (below) */
     file_t * f = files[j];
@@ -3300,8 +3299,6 @@ int main(int argc, char **argv)
 
   for (i = 0; i < input_count; i++)
     set_replay_gain(files[i]->ft->oob.comments, files[i]);
-
-  setsig(SIGINT, SIG_DFL);
 
   /* Loop through the rest of the arguments looking for effects */
   add_eff_chain();

@@ -543,6 +543,8 @@ build_ffmpeg() {
         extract_archive "$archive" "$SRC_DIR"
     fi
 
+    apply_patches "$src" "ffmpeg"
+
     case "${PLATFORM}" in
         FreeBSD|NetBSD|OpenBSD|DragonFly)
             check_command "gmake"
@@ -625,6 +627,8 @@ build_lame() {
         extract_archive "$archive" "$SRC_DIR"
     fi
 
+    apply_patches "$src" "lame"
+
     cd "$src"
 
     ./configure $(get_common_flags) \
@@ -650,6 +654,8 @@ build_twolame() {
     if [ ! -d "$src" ]; then
         extract_archive "$archive" "$SRC_DIR"
     fi
+
+    apply_patches "$src" "twolame"
 
     cd "$src"
 

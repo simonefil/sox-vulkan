@@ -129,7 +129,7 @@ sudo pacman -S vulkan-icd-loader vulkan-headers shaderc glslang
 
 **Required:**
 ```bash
-# Install Xcode Command Line Tools (they include patch)
+# Install Xcode Command Line Tools
 xcode-select --install
 
 # Install Homebrew (if not installed)
@@ -138,6 +138,8 @@ xcode-select --install
 # Install dependencies
 brew install cmake pkgconf
 ```
+
+`patch` is part of macOS (`/usr/bin/patch`).
 
 **Required by the full static build:**
 ```bash

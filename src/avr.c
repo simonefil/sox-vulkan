@@ -186,7 +186,7 @@ static int startwrite(sox_format_t * ft)
   }
   else {
     lsx_fail_errno(ft,SOX_EFMT,"AVR: number of channels not supported");
-    return(0);
+    return SOX_EOF;
   }
 
   /* rez */

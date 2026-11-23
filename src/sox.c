@@ -1273,7 +1273,8 @@ static void add_effects(sox_effects_chain_t *chain)
    * add it only if its not there from a previous run.  */
   if (chain->length == 0) {
     effp = sox_create_effect(input_combiner_effect_fn());
-    sox_add_effect(chain, effp, &signal, &ofile->ft->signal);
+    if (sox_add_effect(chain, effp, &signal, &ofile->ft->signal) != SOX_SUCCESS)
+      exit(2);
     free(effp);
   }
 

@@ -207,6 +207,8 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
   }
   if (ret != SOX_SUCCESS) {
     free(eff0.priv);
+    free(effp->priv);
+    free(effp);
     return SOX_EOF;
   }
 #if HAVE_VULKAN
@@ -215,6 +217,11 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
 
     if (fused < 0) {
       free(eff0.priv);
+      effp->handler.stop(effp);
+      if (effp->handler.kill)
+        effp->handler.kill(effp);
+      free(effp->priv);
+      free(effp);
       return SOX_EOF;
     }
     if (fused > 0) {
@@ -262,6 +269,7 @@ int sox_add_effect(sox_effects_chain_t * chain, sox_effect_t * effp, sox_signali
     chain->effects[chain->length][f].priv = lsx_memdup(eff0.priv, eff0.handler.priv_size);
     if (start(&chain->effects[chain->length][f]) != SOX_SUCCESS) {
       free(eff0.priv);
+      free(effp);
       return SOX_EOF;
     }
   }

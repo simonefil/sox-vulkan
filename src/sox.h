@@ -2369,6 +2369,7 @@ sox_delete_effects_chain(
 /**
 Client API:
 Adds an effect to the effects chain, returns SOX_SUCCESS if successful.
+On failure the effect is freed, so it must not be used or freed again.
 @returns SOX_SUCCESS if successful.
 */
 int

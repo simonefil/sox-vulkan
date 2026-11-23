@@ -83,9 +83,60 @@ static void fail(sox_format_t* ft, unsigned code, const char* context)
     lsx_fail_errno(ft, SOX_EOF, "WaveAudio %s failed with unrecognized MMSYSERR code: %d", context, (int)code);
 }
 
+/* Output completion events are per buffer, not per device. */
+static int drain_output(sox_format_t *ft, priv_t *priv)
+{
+  double queued_bytes = 0, bytes_per_second, millis;
+  DWORD start, max_wait;
+  unsigned i;
+
+  for (i = 0; i < num_buffers; ++i)
+    if ((priv->headers[i].dwFlags & WHDR_INQUEUE) &&
+        !(priv->headers[i].dwFlags & WHDR_DONE))
+      queued_bytes += priv->headers[i].dwBufferLength;
+  if (!queued_bytes) return SOX_SUCCESS;
+  if (!priv->block_finished_event) {
+    lsx_fail_errno(ft, SOX_EOF, "waveOut completion event is unavailable");
+    return SOX_EOF;
+  }
+
+  bytes_per_second = ft->signal.rate * ft->signal.channels *
+      (1u << priv->sample_shift);
+  millis = bytes_per_second > 0 ?
+      5000. + 1000. * queued_bytes / bytes_per_second : 60000.;
+  max_wait = (DWORD)(millis < 60000. ? millis : 60000.);
+  start = GetTickCount();
+
+  for (;;) {
+    DWORD elapsed, waited;
+    int queued = 0;
+    for (i = 0; i < num_buffers; ++i)
+      if ((priv->headers[i].dwFlags & WHDR_INQUEUE) &&
+          !(priv->headers[i].dwFlags & WHDR_DONE))
+        queued = 1;
+    if (!queued) return SOX_SUCCESS;
+
+    /* Unsigned subtraction is safe across a GetTickCount() wraparound. */
+    elapsed = GetTickCount() - start;
+    if (elapsed >= max_wait) {
+      lsx_fail_errno(ft, SOX_EOF, "waveOut playback did not drain before deadline");
+      return SOX_EOF;
+    }
+    waited = WaitForSingleObject(priv->block_finished_event, max_wait - elapsed);
+    if (waited == WAIT_OBJECT_0 || waited == WAIT_TIMEOUT)
+      continue;
+    if (waited == WAIT_FAILED)
+      fail(ft, GetLastError(), "WaitForSingleObject(waveOut)");
+    else
+      lsx_fail_errno(ft, SOX_EOF, "unexpected waveOut completion wait result");
+    return SOX_EOF;
+  }
+}
+
 static int stop(sox_format_t* ft)
 {
   priv_t *priv = (priv_t*)ft->priv;
+  int result = SOX_SUCCESS;
   if (priv == NULL) return SOX_EOF;
 
   if (priv->hin)
@@ -93,9 +144,12 @@ static int stop(sox_format_t* ft)
     waveInReset(priv->hin);
     waveInClose(priv->hin);
   }
-  
+
   if (priv->hout)
   {
+    if (drain_output(ft, priv) != SOX_SUCCESS)
+      result = SOX_EOF;
+    /* Reset returns buffers even after a failed or timed-out drain. */
     waveOutReset(priv->hout);
     waveOutClose(priv->hout);
   }
@@ -106,7 +160,7 @@ static int stop(sox_format_t* ft)
   if (priv->data)
     free(priv->data);
 
-  return SOX_SUCCESS;
+  return result;
 }
 
 static unsigned check_format(

@@ -29,16 +29,11 @@
   #include <unistd.h>
 #endif
 
-#ifndef HAVE_MKSTEMP
-  #ifdef _WIN32
-    /* The template is UTF-8 like every file name on Windows */
-    #define mkstemp(t) lsx_mkstemp(t)
-  #else
-    #include <fcntl.h>
-    #include <sys/types.h>
-    #include <sys/stat.h>
-    #define mkstemp(t) open(mktemp(t), O_RDWR|O_TRUNC|O_CREAT, S_IREAD|S_IWRITE)
-  #endif
+#if !defined(_WIN32) && !defined(HAVE_MKSTEMP)
+  #include <fcntl.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #define mkstemp(t) open(mktemp(t), O_RDWR|O_TRUNC|O_CREAT, S_IREAD|S_IWRITE)
   #define FAKE_MKSTEMP "fake "
 #else
   #define FAKE_MKSTEMP
@@ -106,12 +101,16 @@ FILE * lsx_tmpfile(void)
     int fildes;
     strcpy(name, path);
     strcat(name, end);
+#ifdef _WIN32
+    /* The template is UTF-8 like every file name on Windows, and an open
+     * file cannot be unlinked there: lsx_mkstemp opens it to be deleted on
+     * close. */
+    fildes = lsx_mkstemp(name);
+    lsx_debug("lsx_mkstemp, name=%s (O_TEMPORARY)", name);
+#else
     fildes = mkstemp(name);
-#ifdef HAVE_UNISTD_H
     lsx_debug(FAKE_MKSTEMP "mkstemp, name=%s (unlinked)", name);
     lsx_unlink(name);
-#else
-    lsx_debug(FAKE_MKSTEMP "mkstemp, name=%s (O_TEMPORARY)", name);
 #endif
     free(name);
     return fildes == -1? NULL : fdopen(fildes, "w+b");

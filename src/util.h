@@ -262,6 +262,9 @@ static inline void *sox_aligned_alloc_m(size_t align, size_t size)
 #ifndef M_SQRT2
 #define M_SQRT2  sqrt(2.)
 #endif
+#ifndef M_SQRT1_2
+#define M_SQRT1_2  0.70710678118654752440  /* 1/sqrt(2) */
+#endif
 
 #define sqr(a) ((a) * (a))
 #define sign(x) ((x) < 0? -1 : 1)

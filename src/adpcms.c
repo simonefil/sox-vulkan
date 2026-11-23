@@ -68,7 +68,7 @@ int lsx_adpcm_decode(int code, adpcm_t * p)
 {
   int s;
   if (p->setup.shift == 2) {
-    /* IMA e OKI: somma dei pezzi del passo, ognuno arrotondato come nelle specifiche */
+    /* IMA and OKI: sum of the pieces of the step, each rounded as in the specifications */
     int step = p->setup.steps[p->step_index];
     s = (step >> 3) & p->setup.mask;
     if (code & 4) s += step;

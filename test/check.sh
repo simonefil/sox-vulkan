@@ -103,9 +103,10 @@ do
 		continue
 	    fi
 	    # cfarm185 takes 3m09 to run CVE-2019-8357 so max 4m.
-	    # ulimit -t does not stop a process on macOS, so with perl the
-	    # test runs in its own process group, killed as a whole after
-	    # four minutes of wall time with the same status as ulimit's kill.
+	    # ulimit -t limits CPU time only, so it never stops a test that
+	    # blocks without using the CPU; with perl the test runs in its own
+	    # process group, killed as a whole after four minutes of wall time
+	    # with the same status as ulimit's kill.
 	    if command -v perl > /dev/null 2>&1
 	    then
 		perl -e '

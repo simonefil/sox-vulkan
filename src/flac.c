@@ -161,7 +161,7 @@ static FLAC__StreamDecoderWriteStatus decoder_write_callback(FLAC__StreamDecoder
 
   (void) flac;
 
-  /* senza STREAMINFO il formato viene dal primo frame */
+  /* Without STREAMINFO the format comes from the first frame */
   if (!p->sample_rate) {
     p->bits_per_sample = frame->header.bits_per_sample;
     p->channels = frame->header.channels;
@@ -263,8 +263,8 @@ static int start_read(sox_format_t * const ft)
       ft->data_start = position;
   }
 
-  /* Frame senza STREAMINFO, come dopo un seek del server: si decodifica il primo
-   * frame, che dà il formato e resta da leggere come avanzo */
+  /* A stream of frames without STREAMINFO: decode the first frame, which
+   * gives the format and is kept to be read as leftover samples */
   if (!p->sample_rate) {
     p->req_buffer = NULL;
     p->number_of_requested_samples = 0;

@@ -398,8 +398,8 @@ static int start(sox_effect_t * effp)
   if (effp->in_signal.precision <= p->prec || p->prec > 24)
     return SOX_EFF_NULL;   /* Dithering not needed at this resolution */
 
-  /* Con -G il guadagno a valle si calcola sulla precisione d'ingresso, come in sox_ng;
-   * verso DSD la precisione resta 1, se no ostart dimezza l'uscita */
+  /* With -G the gain downstream is computed on the input precision, as in
+   * sox_ng; towards DSD the precision stays 1, or ostart halves the output */
   effp->out_signal.precision = p->prec == 1? p->prec : effp->in_signal.precision;
 
   if (p->prec == 1) {

@@ -3,13 +3,21 @@
 # Test for globbing to match files whose names contain UTF8 characters
 # Identified and fixed by Marcrosoft
 
-wine > /dev/null 2>&1
-status=$?
-case $status in
-0|1) : OK ;;
-*) echo "You don't seem to have wine installed" 1>&2
-   exit 254 ;;
+# On native Windows sox runs as it is; elsewhere it needs wine
+case "`uname -s`" in
+MINGW*|MSYS*) wine= ;;
+*) wine=wine ;;
 esac
+
+test -n "$wine" && {
+  wine > /dev/null 2>&1
+  status=$?
+  case $status in
+  0|1) : OK ;;
+  *) echo "You don't seem to have wine installed" 1>&2
+     exit 254 ;;
+  esac
+}
 
 sox=${sox:-../../win32.exe}
 
@@ -21,14 +29,18 @@ test -f "$sox" || {
   exit 254
 }
 
-file "$sox" | grep -q 'Windows' || {
-  echo "$sox is not a Windows eecutable" 1>&2
-  exit 254
+test -n "$wine" && {
+  file "$sox" | grep -q 'Windows' || {
+    echo "$sox is not a Windows eecutable" 1>&2
+    exit 254
+  }
 }
 
 rm -f monk*.wav
-cp ../../src/monkey.wav monkæ.wav
-wine "$sox" 'monk*.wav' -n
+# 日 is outside the ANSI code pages of Western Windows, where æ would
+# be found even by a sox that does not handle UTF-8
+cp ../../src/monkey.wav monk日.wav
+$wine "$sox" 'monk*.wav' -n
 status=$?
 
 rm -f monk*.wav

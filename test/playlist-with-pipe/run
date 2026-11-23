@@ -4,13 +4,21 @@
 # to avoid command injection by a malicious playlist.
 # Identified and fixed by breakingbad from PJSK CTF.
 
-wine > /dev/null 2>&1
-status=$?
-case $status in
-0|1) : OK ;;
-*) echo "You don't seem to have wine installed" 1>&2
-   exit 254 ;;
+# On native Windows sox runs as it is; elsewhere it needs wine
+case "`uname -s`" in
+MINGW*|MSYS*) wine= ;;
+*) wine=wine ;;
 esac
+
+test -n "$wine" && {
+  wine > /dev/null 2>&1
+  status=$?
+  case $status in
+  0|1) : OK ;;
+  *) echo "You don't seem to have wine installed" 1>&2
+     exit 254 ;;
+  esac
+}
 
 sox=${sox:-../../win32.exe}
 
@@ -22,14 +30,16 @@ test -f "$sox" || {
   exit 254
 }
 
-file "$sox" | grep -q 'Windows' || {
-  echo "$sox is not a Windows eecutable" 1>&2
-  exit 254
+test -n "$wine" && {
+  file "$sox" | grep -q 'Windows' || {
+    echo "$sox is not a Windows eecutable" 1>&2
+    exit 254
+  }
 }
 
 rm -f PLAYLIST_MARKER.txt
 status=0
-wine "$sox" malicious.m3u -n
+$wine "$sox" malicious.m3u -n
 test -f PLAYLIST_MARKER.txt && {
   status=2
   rm -f PLAYLIST_MARKER.txt

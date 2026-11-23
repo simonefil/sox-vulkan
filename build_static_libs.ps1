@@ -812,7 +812,9 @@ function Find-MsysBash {
 #
 # MSYS2_PATH_TYPE=inherit keeps the Developer PowerShell PATH, and cl.exe with
 # it. Paths are converted with cygpath and passed through environment
-# variables, so spaces or quotes cannot break the script text.
+# variables, so spaces or quotes cannot break the script text.  The prefix is
+# written as C:/..., because it ends up in libavcodec.pc, where a pkg-config
+# outside MSYS2 and CMake must read it.
 #
 # The component selection must match build_static_libs.sh: libavcodec's
 # codecs and parsers only, since the containers are SoX's own.
@@ -862,7 +864,7 @@ command -v pkg-config >/dev/null ||
 
 src="$(cygpath -u "$SOX_FFMPEG_SRC")"
 build="$(cygpath -u "$SOX_FFMPEG_BUILD")"
-prefix="$(cygpath -u "$SOX_STATIC_PREFIX")"
+prefix="$(cygpath -m "$SOX_STATIC_PREFIX")"
 
 set --
 if [ "$SOX_FFMPEG_TARGET_ARCH" = "arm64" ]; then

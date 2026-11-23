@@ -100,6 +100,7 @@ typedef struct {
   /* Per-channel work area */
   int        WORK;  /* Start of work area is marked by this dummy variable. */
   uint64_t   skip;
+  double     start_time;        /* seconds skipped by -S */
   int        dft_size;
   int        step_size;
   int        block_steps;
@@ -358,7 +359,6 @@ static int start(sox_effect_t *effp)
   priv_t *p = effp->priv;
   double actual;
   double duration = 0.0;
-  double start_time = 0.0;
   double pixels_per_sec = p->pixels_per_sec;
   uint64_t d;
 
@@ -379,7 +379,7 @@ static int start(sox_effect_t *effp)
       return SOX_EOF;
     }
 
-    start_time = d / effp->in_signal.rate;
+    p->start_time = d / effp->in_signal.rate;
     p->skip = d;
   }
 
@@ -394,7 +394,7 @@ static int start(sox_effect_t *effp)
     if (!duration && effp->in_signal.length != SOX_UNKNOWN_LEN) {
       duration = effp->in_signal.length /
         (effp->in_signal.rate * effp->in_signal.channels);
-      duration -= start_time;
+      duration -= p->start_time;
       if (duration <= 0)
         duration = 1;
       continue;
@@ -795,7 +795,7 @@ static int stop(sox_effect_t *effp) /* only called, by end(), on flow 0 */
   int         tick_len = 3 - p->no_axes;
   char        text[200];
   char       *prefix;
-  double      limit;
+  double      limit, start;
   float       autogain = 0.0;	/* Is changed if the -n flag was supplied */
 
   free(p->shared);
@@ -867,13 +867,16 @@ static int stop(sox_effect_t *effp) /* only called, by end(), on flow 0 */
     if (strlen(p->comment) * font_X < cols + 1)     /* Footer comment */
       print_at(1, font_y, Text, p->comment);
 
-    /* X-axis */
+    /* X-axis, labelled from where -S started the image: the labels are
+     * multiples of step, as tenths of the prefix's unit, from the first one
+     * at or after the start. */
     step = axis(secs(p->cols), p->cols / (font_X * 9 / 2), &limit, &prefix);
     sprintf(text, "Time (%.1ss)", prefix);               /* Axis label */
     print_at(left + (p->cols - font_X * strlen(text)) / 2, 24, Text, text);
 
-    for (i = 0; i <= limit; i += step) {
-      int x = limit ? (double)i / limit * p->cols + .5 : 0;
+    start = p->cols? p->start_time * limit / secs(p->cols) : 0;
+    for (i = (int)ceil(start / step - 1e-9) * step; i <= start + limit + 1e-9; i += step) {
+      int x = limit ? (i - start) / limit * p->cols + .5 : 0;
       int y;
 
       for (y = 0; y < tick_len; ++y)                     /* Ticks */

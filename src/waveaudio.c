@@ -219,6 +219,10 @@ static unsigned check_format(
   /* GUID: KSDATAFORMAT_SUBTYPE_PCM */
   static unsigned char const SubformatPcm[] =
       "\x01\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xAA\x00\x38\x9B\x71";
+  /* The speakers of SoX's channel order (canonical_layout in ffmpeg-codec.c)
+   * for 1 to 8 channels; beyond that no positions (KSAUDIO_SPEAKER_DIRECTOUT) */
+  static DWORD const masks[] =
+      {0, 0x4, 0x3, 0x7, 0x33, 0x37, 0x3F, 0x70F, 0x63F};
 
   const unsigned bytewidth = width > 16 ? 4 : width > 8 ? 2 : 1;
   const int extend = channels > 2 || width > 16;
@@ -232,7 +236,7 @@ static unsigned check_format(
   pfmt->Format.wBitsPerSample = bytewidth * 8;
   pfmt->Format.cbSize = extend ? 22 : 0;
   pfmt->Samples.wValidBitsPerSample = width;
-  pfmt->dwChannelMask = 0;
+  pfmt->dwChannelMask = channels < sizeof(masks) / sizeof(*masks)? masks[channels] : 0;
   memcpy(&pfmt->SubFormat, SubformatPcm, 16);
 
   if (recording)

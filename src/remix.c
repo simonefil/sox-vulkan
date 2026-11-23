@@ -227,10 +227,11 @@ static int channels_create(sox_effect_t * effp, int argc, char * * argv)
   return SOX_SUCCESS;
 }
 
-/* The downmix between SoX's layouts of 1 to 8 channels by speaker position,
+/* The mix between SoX's layouts of 1 to 8 channels by speaker position,
  * with the default rules of swr_build_matrix in FFmpeg's libswresample:
- * centre and surround at -3 dB, LFE left out, no normalisation.  m[o][i] is
- * the gain of input channel i in output channel o. */
+ * centre and surround at -3 dB, LFE left out, speakers the input lacks left
+ * silent, no normalisation; mono to stereo goes to both at full level.
+ * m[o][i] is the gain of input channel i in output channel o. */
 static void position_matrix(double m[8][8], unsigned in_channels,
     unsigned out_channels)
 {
@@ -258,9 +259,11 @@ static void position_matrix(double m[8][8], unsigned in_channels,
     if (at[sp] >= 0)
       ADD(sp, 1);
     else switch (sp) {
-      case _(fc):
-        ADD(_(fl), s), ADD(_(fr), s);
+      case _(fc): {
+        double g = in_channels == 1 && out_channels == 2? 1 : s;
+        ADD(_(fl), g), ADD(_(fr), g);
         break;
+      }
       case _(fl): case _(fr):
         ADD(_(fc), s);
         break;
@@ -296,13 +299,14 @@ static int channels_start(sox_effect_t * effp)
   unsigned num_out_channels = p->num_out_channels != 0 ?
       p->num_out_channels : effp->out_signal.channels;
   unsigned i, j;
+  sox_bool non_integer = sox_false;
 
   p->out_specs = lsx_calloc(num_out_channels, sizeof(*p->out_specs));
   if (effp->in_signal.channels == num_out_channels)
     return SOX_EFF_NULL;
 
-  if (effp->in_signal.channels > num_out_channels &&
-      lsx_speakers(effp->in_signal.channels) != NULL) {
+  if (lsx_speakers(effp->in_signal.channels) != NULL &&
+      lsx_speakers(num_out_channels) != NULL) {
     double m[8][8], max_sum = 0;
 
     position_matrix(m, effp->in_signal.channels, num_out_channels);
@@ -317,6 +321,7 @@ static int channels_start(sox_effect_t * effp)
           in_spec->channel_num = i;
           in_spec->multiplier = m[j][i];
           sum += m[j][i];
+          non_integer |= floor(m[j][i]) != m[j][i];
         }
       max_sum = max(max_sum, sum);
     }
@@ -342,8 +347,9 @@ static int channels_start(sox_effect_t * effp)
     p->out_specs[j].in_specs[0].multiplier = 1;
   }
   effp->out_signal.channels = p->num_out_channels = num_out_channels;
-  effp->out_signal.precision = (effp->in_signal.channels > num_out_channels) ?
-    SOX_SAMPLE_PRECISION : effp->in_signal.precision;
+  effp->out_signal.precision =
+      effp->in_signal.channels > num_out_channels || non_integer ?
+      SOX_SAMPLE_PRECISION : effp->in_signal.precision;
   show(p);
   return SOX_SUCCESS;
 }

@@ -34,7 +34,15 @@ Unreleased
     0.707 (L + R). It used to average every n-th channel, which put the
     centre on the left only and the LFE on the right. `remix' gives that
     mix, or any other: `remix -a 1,3,5 2,4,6' for 6 to 2 channels. Above 8
-    channels, and when adding channels, `channels' works as before.
+    channels `channels' works as before.
+  o `channels' adds channels by speaker position too, with the same matrix:
+    each channel goes to its own speaker and the others stay silent, so
+    stereo to 5.1 plays on the front pair only. A channel without a speaker
+    of its own goes to its neighbours at -3 dB: 3.0 to quad puts the centre
+    on front left and right, 6.1 to 7.1 the back centre on the back pair.
+    Mono to stereo copies the channel to both at full level. It used to
+    copy the input channels over and over (3 to 4 channels gave back left =
+    centre and back right = front left); beyond 8 channels it still does.
 
 SoX-16.2.1
 ----------

@@ -1858,12 +1858,10 @@ This effect supports the \fB\-\-plot\fR global option.
 .TP
 \fBchannels \fICHANNELS\fR
 Change the number of channels in the audio signal to the given number
-.IR CHANNELS :
-mixing if decreasing the number of channels or duplicating if
-increasing the number of channels.
+.IR CHANNELS .
 .SP
-From 8 channels or fewer the mix goes by speaker position, with the
-default matrix of FFmpeg's libswresample.  The speakers are those of
+Between 1 and 8 channels the mix goes by speaker position, with the
+default matrix of FFmpeg's libswresample, in both directions.  The speakers are those of
 SoX's channel order: 1 front centre; 2 front left and right; 3 these
 three; 4 front and back pairs; 5 front left, right and centre with the
 back pair; 6 the same with LFE; 7 front left, right and centre, LFE,
@@ -1899,7 +1897,12 @@ is the mean of input channels
 .IR n +2\(mu CHANNELS ,
 and so on.
 .SP
-When increasing the number of channels, output channel
+When increasing the number of channels, each input channel goes to its
+own speaker and the speakers the input lacks stay silent; a channel with
+no speaker of its own in the output follows the rules above, so 3 to 4
+channels puts front centre on front left and right at \-3\ dB, and 7 to
+8 puts back centre on the back pair at \-3\ dB.  Mono to stereo copies
+the channel to both at full level.  Beyond 8 channels, output channel
 .I n
 copies input channel
 .I n

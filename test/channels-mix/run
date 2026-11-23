@@ -1,9 +1,10 @@
 #! /bin/sh
 
-# Check that `channels' mixes down by speaker position with libswresample's
-# default matrix, for every reduction between SoX's layouts of 1 to 8
-# channels: each mix must equal `remix -m' with that matrix.  s is the -3 dB
-# gain of centre and surround, h is half; LFE is left out.
+# Check that `channels' mixes by speaker position with libswresample's
+# default matrix, for every change between SoX's layouts of 1 to 8 channels:
+# each mix must equal `remix -m' with that matrix.  s is the -3 dB gain of
+# centre and surround, h is half; LFE is left out of a downmix, and speakers
+# the input lacks stay silent.  Mono to stereo goes to both at full level.
 
 s=0.7071067811865476
 h=0.5
@@ -53,6 +54,34 @@ done <<END
 3 2 1,3v$s 2,3v$s
 3 1 1v$s,2v$s,3
 2 1 1v$s,2v$s
+1 2 1 1
+1 3 0 0 1
+1 4 1v$s 1v$s 0 0
+1 5 0 0 1 0 0
+1 6 0 0 1 0 0 0
+1 7 0 0 1 0 0 0 0
+1 8 0 0 1 0 0 0 0 0
+2 3 1 2 0
+2 4 1 2 0 0
+2 5 1 2 0 0 0
+2 6 1 2 0 0 0 0
+2 7 1 2 0 0 0 0 0
+2 8 1 2 0 0 0 0 0 0
+3 4 1,3v$s 2,3v$s 0 0
+3 5 1 2 3 0 0
+3 6 1 2 3 0 0 0
+3 7 1 2 3 0 0 0 0
+3 8 1 2 3 0 0 0 0 0
+4 5 1 2 0 3 4
+4 6 1 2 0 0 3 4
+4 7 1 2 0 0 3v$s,4v$s 0 0
+4 8 1 2 0 0 3 4 0 0
+5 6 1 2 3 0 4 5
+5 7 1 2 3 0 4v$s,5v$s 0 0
+5 8 1 2 3 0 4 5 0 0
+6 7 1 2 3 4 5v$s,6v$s 0 0
+6 8 1 2 3 4 5 6 0 0
+7 8 1 2 3 4 5v$s 5v$s 6 7
 END
 
 rm -f in.f64 channels.f64 remix.f64

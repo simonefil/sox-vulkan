@@ -339,6 +339,7 @@ static int open_read(sox_format_t * ft, void * v, lsx_codec_params_t * params, c
       information = sox_true;
   }
   p->first = p->pos + (information? length : 0);
+  ft->data_start = p->first; /* after the tag and the information frame */
   if (!information)
     p->taken = 0;
   params->delay = p->delay;

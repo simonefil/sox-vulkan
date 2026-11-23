@@ -304,7 +304,9 @@ static int open_read(sox_format_t * ft, void * v, lsx_codec_params_t * params, c
   if (lsx_ebml_read_size(ft, &size) != SOX_SUCCESS || read_ebml_header(ft, size) != SOX_SUCCESS)
     return SOX_EOF;
   for (;;) {
-    if (have_track && p->segment_end != EBML_UNKNOWN_SIZE && (sox_uint64_t)lsx_tell(ft) >= p->segment_end)
+    off_t element_start = lsx_tell(ft);
+
+    if (have_track && p->segment_end != EBML_UNKNOWN_SIZE && (sox_uint64_t)element_start >= p->segment_end)
       return SOX_SUCCESS;
     if (lsx_ebml_read_id(ft, &id) != SOX_SUCCESS) {
       if (have_track && !ft->sox_errno)
@@ -328,8 +330,10 @@ static int open_read(sox_format_t * ft, void * v, lsx_codec_params_t * params, c
         }
         break;
       case MKV_ID_CLUSTER:
-        if (have_track)
+        if (have_track) {
+          ft->data_start = element_start; /* the audio starts with the first cluster */
           return SOX_SUCCESS;
+        }
         lsx_fail_errno(ft, SOX_EHDR, "audio data comes before the track list");
         return SOX_EOF;
     }

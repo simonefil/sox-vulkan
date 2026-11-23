@@ -762,6 +762,13 @@ static int open_read(sox_format_t * ft, void * v, lsx_codec_params_t * params, c
       status = read_moov(ft, p, moov, params, codec_name);
       free(data);
       p->box_end = box.end;
+      /* The audio starts at the first sample, or with the first fragment
+       * when the samples are listed fragment by fragment; a moov box after
+       * the audio is counted with it, as tags at the end are elsewhere. */
+      if (p->count)
+        ft->data_start = p->samples[0].offset;
+      else if (box.end != UNKNOWN_SIZE)
+        ft->data_start = box.end;
       return status;
     }
     if (!memcmp(box.type, "mdat", 4) && !ft->seekable) {

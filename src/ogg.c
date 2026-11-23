@@ -479,6 +479,8 @@ static int open_read(sox_format_t * ft, void * v, lsx_codec_params_t * params, c
   if (select_stream(ft, p, &page, start, lsx_container_requested(ft->filetype), &tag) != SOX_SUCCESS ||
       read_headers(ft, p, tag, params, sox_true) != SOX_SUCCESS)
     return SOX_EOF;
+  /* The audio starts on the page after the last header packet's. */
+  ft->data_start = p->pos;
   *codec_name = tag->codec;
   return SOX_SUCCESS;
 }

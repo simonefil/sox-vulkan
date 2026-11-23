@@ -659,7 +659,7 @@ static sox_bool is_seekable(sox_format_t const * ft)
   {
     struct stat st;
 
-    if (fstat(fileno(ft->fp), &st) || (st.st_mode & S_IFMT) != S_IFREG)
+    if (fstat(fileno((FILE *)ft->fp), &st) || (st.st_mode & S_IFMT) != S_IFREG)
       return sox_false;
   }
 #endif
@@ -1591,7 +1591,7 @@ int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed)
   sox_bool pipe_input = ft->mode == 'r' &&
       (ft->io_type == lsx_io_pipe || ft->io_type == lsx_io_url);
   sox_bool read_error = pipe_input && ft->fp &&
-      (ft->sox_errno != SOX_SUCCESS || ferror(ft->fp));
+      (ft->sox_errno != SOX_SUCCESS || ferror((FILE *)ft->fp));
 
   if (pipe_failed) *pipe_failed = sox_false;
   if (ft->mode == 'r')
@@ -1634,8 +1634,8 @@ int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed)
     sox_bool abandoned, cancel;
     int close_result;
     /* Format stop handlers may report errors unrelated to the pipe child. */
-    if (pipe_input && ferror(ft->fp)) read_error = sox_true;
-    abandoned = pipe_input && !read_error && !feof(ft->fp);
+    if (pipe_input && ferror((FILE *)ft->fp)) read_error = sox_true;
+    abandoned = pipe_input && !read_error && !feof((FILE *)ft->fp);
     cancel = abandoned && !read_finished &&
         !(ft->signal.length && ft->olength >= ft->signal.length);
     close_result = xfclose(ft->fp, ft->io_type, cancel);

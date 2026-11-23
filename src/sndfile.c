@@ -448,6 +448,7 @@ static int startwrite(sox_format_t * ft)
 
     if (!sf->sf_format_check(sf->sf_info)) {
       lsx_fail("cannot find a usable output encoding");
+      stop(ft);
       return SOX_EOF;
     }
     if ((sf->sf_info->format & SF_FORMAT_TYPEMASK) != SF_FORMAT_RAW)
@@ -460,7 +461,7 @@ static int startwrite(sox_format_t * ft)
   if (sf->sf_file == NULL) {
     memset(ft->sox_errstr, 0, sizeof(ft->sox_errstr));
     strncpy(ft->sox_errstr, sf->sf_strerror(sf->sf_file), sizeof(ft->sox_errstr)-1);
-    free(sf->sf_file);
+    stop(ft);
     return SOX_EOF;
   }
 

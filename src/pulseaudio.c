@@ -22,7 +22,33 @@ static int setup(sox_format_t *ft, int is_input)
   char *app_str;
   char *dev;
   pa_sample_spec spec;
+  pa_channel_map map;
   int error;
+  /* SoX's channel order, the one canonical_layout in ffmpeg-codec.c gives
+   * the codecs; beyond 8 channels the order is the file's, and unknown. */
+  static pa_channel_position_t const positions[9][8] = {
+    {PA_CHANNEL_POSITION_INVALID},
+    {PA_CHANNEL_POSITION_MONO},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+     PA_CHANNEL_POSITION_FRONT_CENTER},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+     PA_CHANNEL_POSITION_REAR_LEFT, PA_CHANNEL_POSITION_REAR_RIGHT},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+     PA_CHANNEL_POSITION_FRONT_CENTER,
+     PA_CHANNEL_POSITION_REAR_LEFT, PA_CHANNEL_POSITION_REAR_RIGHT},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+     PA_CHANNEL_POSITION_FRONT_CENTER, PA_CHANNEL_POSITION_LFE,
+     PA_CHANNEL_POSITION_REAR_LEFT, PA_CHANNEL_POSITION_REAR_RIGHT},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+     PA_CHANNEL_POSITION_FRONT_CENTER, PA_CHANNEL_POSITION_LFE,
+     PA_CHANNEL_POSITION_REAR_CENTER,
+     PA_CHANNEL_POSITION_SIDE_LEFT, PA_CHANNEL_POSITION_SIDE_RIGHT},
+    {PA_CHANNEL_POSITION_FRONT_LEFT, PA_CHANNEL_POSITION_FRONT_RIGHT,
+     PA_CHANNEL_POSITION_FRONT_CENTER, PA_CHANNEL_POSITION_LFE,
+     PA_CHANNEL_POSITION_REAR_LEFT, PA_CHANNEL_POSITION_REAR_RIGHT,
+     PA_CHANNEL_POSITION_SIDE_LEFT, PA_CHANNEL_POSITION_SIDE_RIGHT}
+  };
 
   /* TODO: If user specified device of type "server:dev" then
    * break up and override server.
@@ -64,8 +90,19 @@ static int setup(sox_format_t *ft, int is_input)
   spec.rate = ft->signal.rate;
   spec.channels = ft->signal.channels;
 
+  if (spec.channels <= 8) {
+    pa_channel_map_init(&map);
+    map.channels = spec.channels;
+    memcpy(map.map, positions[spec.channels], sizeof(positions[0]));
+  }
+  else if (pa_channel_map_init_auto(&map, spec.channels, PA_CHANNEL_MAP_AUX) == NULL)
+  {
+    lsx_fail_errno(ft, SOX_EINVAL, "can not map %u channels to Pulse Audio", spec.channels);
+    return SOX_EOF;
+  }
+
   pa->pasp = pa_simple_new(server, "SoX", dir, dev, app_str, &spec,
-                          NULL, NULL, &error);
+                          &map, NULL, &error);
 
   if (pa->pasp == NULL)
   {

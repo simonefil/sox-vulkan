@@ -5,6 +5,10 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 static void usage(void)
 {
@@ -17,6 +21,11 @@ main(int argc, char **argv)
 {
     int bits = 16;
     int i;
+
+#ifdef _WIN32
+    /* The samples are binary: a text-mode stdout turns 0a into 0d 0a */
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
 
     if (argv[1][0] == '-') switch (argv[1][1]) {
     case 'b':	/* Number of bits per sample */

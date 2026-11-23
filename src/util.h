@@ -145,18 +145,6 @@
 #define HAVE_FSEEKO 1
 #endif
 
-#elif defined(__MINGW32__)
-
-#if !defined(HAVE_FSEEKO)
-#undef off_t
-#define fseeko fseeko64
-#define fstat _fstati64
-#define ftello ftello64
-#define off_t off64_t
-#define stat _stati64
-#define HAVE_FSEEKO 1
-#endif
-
 #endif
 
 #if defined(DOS) || defined(_WIN32) || defined(__NT__) || defined(__DJGPP__) || defined(__OS2__)

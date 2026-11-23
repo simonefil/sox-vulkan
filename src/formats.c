@@ -37,6 +37,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#if HAVE_PIPE && HAVE_FORK
+  #include <signal.h>
+  #include <sys/wait.h>
+#endif
+
 #ifdef HAVE_IO_H
   #include <io.h>
 #endif
@@ -1626,14 +1631,24 @@ int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed)
   } else if (ft->fp) {
     /* A decoder may reach logical EOF without reaching stream EOF. An
      * earlier close (e.g. trim or soxi) abandons the producer's input. */
-    sox_bool cancel;
+    sox_bool abandoned, cancel;
     int close_result;
     /* Format stop handlers may report errors unrelated to the pipe child. */
     if (pipe_input && ferror(ft->fp)) read_error = sox_true;
-    cancel = pipe_input && !read_error && !read_finished &&
-        !(ft->signal.length && ft->olength >= ft->signal.length) &&
-        !feof(ft->fp);
+    abandoned = pipe_input && !read_error && !feof(ft->fp);
+    cancel = abandoned && !read_finished &&
+        !(ft->signal.length && ft->olength >= ft->signal.length);
     close_result = xfclose(ft->fp, ft->io_type, cancel);
+#if HAVE_PIPE && HAVE_FORK
+    /* A decoder that ends before the stream does (e.g. at the end of a WAV
+     * data chunk followed by other chunks) closes the pipe on a producer
+     * that is still writing, and SIGPIPE is how that producer ends: killed
+     * by it, or, through a shell that does not exec it, with status 141. */
+    if (abandoned && close_result != -1 &&
+        ((WIFSIGNALED(close_result) && WTERMSIG(close_result) == SIGPIPE) ||
+         (WIFEXITED(close_result) && WEXITSTATUS(close_result) == 128 + SIGPIPE)))
+      close_result = SOX_SUCCESS;
+#endif
     if (close_result && ft->mode == 'w' && ft->io_type == lsx_io_file && result == SOX_SUCCESS) {
       lsx_fail("error writing `%s': %s", ft->filename, strerror(errno));
       result = SOX_EOF;

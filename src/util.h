@@ -17,6 +17,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#ifndef SOX_UTIL_H
+#define SOX_UTIL_H
+
 #include <stdio.h>
 #include <stdlib.h>
 #include "soxconfig.h"
@@ -286,3 +289,5 @@ extern int lsx_sscanf(const char *str, const char *format, ...);
 extern FILE *lsx_popen(char **argv, char type, int filename_index);
 extern int lsx_pclose(FILE *stream, sox_bool cancel);
 int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed);
+
+#endif

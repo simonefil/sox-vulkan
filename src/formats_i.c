@@ -436,10 +436,13 @@ int lsx_read ## type(sox_format_t * ft, ctype * datum) { \
   if (lsx_read_ ## type ## _buf(ft, datum, (size_t)1) == 1) \
     return SOX_SUCCESS; \
   if (!lsx_error(ft)) \
-    lsx_fail_errno(ft, errno, premature_eof); \
+    lsx_fail_errno(ft, SOX_SUCCESS, premature_eof); \
   return SOX_EOF; \
 }
 
+/* A premature EOF is not an error of the stream: fread leaves errno as it
+ * found it, so the message goes with no code, and whether reading the file
+ * counts as failed does not depend on what failed earlier in the process. */
 static char const premature_eof[] = "premature EOF";
 
 READ1_FUNC(b,  uint8_t)
@@ -456,7 +459,7 @@ int lsx_readchars(sox_format_t * ft, char * chars, size_t len)
   if (ret == len)
     return SOX_SUCCESS;
   if (!lsx_error(ft))
-    lsx_fail_errno(ft, errno, premature_eof);
+    lsx_fail_errno(ft, SOX_SUCCESS, premature_eof);
   return SOX_EOF;
 }
 

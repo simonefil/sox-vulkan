@@ -140,8 +140,14 @@ void lsx_load_samples(double * const dest, sox_sample_t const * const src,
 #define lsx_swapw(x) _byteswap_ushort(x)
 #define lsx_swapdw(x) _byteswap_ulong(x)
 #else
-#define lsx_swapw(uw) (((uw >> 8) | (uw << 8)) & 0xffff)
-#define lsx_swapdw(udw) ((udw >> 24) | ((udw >> 8) & 0xff00) | ((udw << 8) & 0xff0000) | (udw << 24))
+static inline sox_uint16_t lsx_swapw(sox_uint16_t uw)
+{
+  return (sox_uint16_t)((uw >> 8) | (uw << 8));
+}
+static inline sox_uint32_t lsx_swapdw(sox_uint32_t udw)
+{
+  return (udw >> 24) | ((udw >> 8) & 0xff00) | ((udw << 8) & 0xff0000) | (udw << 24);
+}
 #endif
 
 

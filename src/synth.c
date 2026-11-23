@@ -580,7 +580,8 @@ static int flow(sox_effect_t * effp, const sox_sample_t * ibuf, sox_sample_t * o
           break;
 
         case synth_tpdfnoise:
-          synth_out = .5 * (DRANQD1 + DRANQD1);
+          synth_out = DRANQD1;
+          synth_out = .5 * (synth_out + DRANQD1);
           break;
 
         case synth_pinknoise: { /* "Paul Kellet's refined method" */

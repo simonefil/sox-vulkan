@@ -74,6 +74,10 @@ static int getopts(sox_effect_t * effp, int argc, char **argv)
     lsx_fail("error while parsing window size");
     return lsx_usage(effp);
   }
+  if (p->window < 1) {
+    lsx_fail("the minimum window size is one millisecond");
+    return SOX_EOF;
+  }
 
   if (argc > 2) {
     switch (argv[2][0]) {
@@ -312,7 +316,7 @@ const sox_effect_handler_t *lsx_stretch_effect_fn(void)
   static const sox_effect_handler_t handler = {
     "stretch",
     "factor [window fade shift fading]\n"
-    "       (expansion, frame in ms, lin/..., unit<1.0, unit<0.5)\n"
+    "       (expansion, frame in ms >= 1, lin/..., unit<1.0, unit<0.5)\n"
     "       (defaults: 1.0 20 lin ...)",
     SOX_EFF_LENGTH,
     getopts, start, flow, drain, stop, NULL, sizeof(priv_t)

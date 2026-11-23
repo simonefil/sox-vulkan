@@ -36,7 +36,40 @@ static OSStatus PlaybackIOProc(AudioDeviceID inDevice UNUSED,
 
     pthread_mutex_lock(&ac->mutex);
 
-    for(buf = outOutputData->mBuffers;
+    /* An output split across several buffers, usually not interleaved, is
+     * given the ring's frames one at a time, so that each buffer takes its
+     * own channels of every frame. */
+    if (outOutputData->mNumberBuffers > 1) {
+        size_t channels = 0, frames = SIZE_MAX, frame, ch;
+        UInt32 i;
+
+        for (i = 0; i < outOutputData->mNumberBuffers; ++i) {
+            AudioBuffer const *b = &outOutputData->mBuffers[i];
+
+            if (b->mNumberChannels) {
+                frames = min(frames, b->mDataByteSize / (sizeof(float) * b->mNumberChannels));
+                channels += b->mNumberChannels;
+            }
+        }
+        frames = channels? min(frames, ac->bufrdavail / channels) : 0;
+        for (i = 0; i < outOutputData->mNumberBuffers; ++i)
+            outOutputData->mBuffers[i].mDataByteSize =
+                (UInt32)(frames * outOutputData->mBuffers[i].mNumberChannels * sizeof(float));
+        for (frame = 0; frame < frames; ++frame)
+            for (i = 0; i < outOutputData->mNumberBuffers; ++i) {
+                AudioBuffer *b = &outOutputData->mBuffers[i];
+                float *dst = b->mData? (float *)b->mData + frame * b->mNumberChannels : NULL;
+
+                for (ch = 0; ch < b->mNumberChannels; ++ch) {
+                    if (dst)
+                        dst[ch] = ac->buf[ac->bufrd];
+                    if (++ac->bufrd == ac->bufsize)
+                        ac->bufrd = 0;
+                    --ac->bufrdavail;
+                }
+            }
+    }
+    else for(buf = outOutputData->mBuffers;
         buf != outOutputData->mBuffers + outOutputData->mNumberBuffers;
         buf++){
 
@@ -76,44 +109,70 @@ static OSStatus RecIOProc(AudioDeviceID inDevice UNUSED,
                           void *inClientData)
 {
     priv_t *ac = (priv_t *)((sox_format_t*)inClientData)->priv;
-    AudioBuffer const *buf;
-    size_t nfree, copylen, avail;
+    size_t channels = 0, frames = SIZE_MAX, frame, ch, nfree;
+    UInt32 i;
 
     pthread_mutex_lock(&ac->mutex);
 
-    for(buf = inInputData->mBuffers;
-        buf != inInputData->mBuffers + inInputData->mNumberBuffers;
-        buf++){
+    /* Input may come split across several buffers, usually not interleaved:
+     * each frame is put together in the ring from all of them in turn. */
+    for (i = 0; i < inInputData->mNumberBuffers; ++i) {
+        AudioBuffer const *b = &inInputData->mBuffers[i];
 
-        if(buf->mData == NULL)
-            continue;
-
-        copylen = buf->mDataByteSize / sizeof(float);
+        if (b->mData && b->mNumberChannels) {
+            frames = min(frames, b->mDataByteSize / (sizeof(float) * b->mNumberChannels));
+            channels += b->mNumberChannels;
+        }
+    }
+    if (channels) {
         nfree = ac->bufsize - ac->bufrdavail - 1;
         if(nfree == 0)
             lsx_warn("coreaudio: unhandled buffer overrun.  Data discarded.");
+        frames = min(frames, nfree / channels);
+        for (frame = 0; frame < frames; ++frame)
+            for (i = 0; i < inInputData->mNumberBuffers; ++i) {
+                AudioBuffer const *b = &inInputData->mBuffers[i];
+                float const *src;
 
-        if(copylen > nfree)
-            copylen = nfree;
-
-        avail = ac->bufsize - ac->bufwr;
-        if(copylen > avail){
-            memcpy(ac->buf + ac->bufwr, buf->mData, avail * sizeof(float));
-            memcpy(ac->buf, (float*)buf->mData + avail, (copylen - avail) * sizeof(float));
-        }else{
-            memcpy(ac->buf + ac->bufwr, buf->mData, copylen * sizeof(float));
-        }
-
-        ac->bufwr += copylen;
-        if(ac->bufwr >= ac->bufsize)
-            ac->bufwr -= ac->bufsize;
-        ac->bufrdavail += copylen;
+                if (!b->mData || !b->mNumberChannels)
+                    continue;
+                src = (float const *)b->mData + frame * b->mNumberChannels;
+                for (ch = 0; ch < b->mNumberChannels; ++ch) {
+                    ac->buf[ac->bufwr] = src[ch];
+                    if (++ac->bufwr == ac->bufsize)
+                        ac->bufwr = 0;
+                    ++ac->bufrdavail;
+                }
+            }
     }
 
     pthread_cond_signal(&ac->cond);
     pthread_mutex_unlock(&ac->mutex);
 
     return kAudioHardwareNoError;
+}
+
+/* The channels of all the device's streams in one direction, which the
+ * stream format, describing a single stream, may not count all of. */
+static size_t device_channels(AudioObjectID adid, int is_input)
+{
+  AudioObjectPropertyAddress address = {
+    kAudioDevicePropertyStreamConfiguration,
+    is_input? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput,
+    kAudioObjectPropertyElementWildcard
+  };
+  UInt32 size = 0, i;
+  AudioBufferList *list;
+  size_t channels = 0;
+
+  if (AudioObjectGetPropertyDataSize(adid, &address, 0, NULL, &size) != kAudioHardwareNoError)
+    return 0;
+  list = lsx_malloc(size);
+  if (AudioObjectGetPropertyData(adid, &address, 0, NULL, &size, list) == kAudioHardwareNoError)
+    for (i = 0; i < list->mNumberBuffers; ++i)
+      channels += list->mBuffers[i].mNumberChannels;
+  free(list);
+  return channels;
 }
 
 static int setup(sox_format_t *ft, int is_input)
@@ -189,27 +248,30 @@ static int setup(sox_format_t *ft, int is_input)
     return SOX_EOF;
   }
 
-  if (!(stream_desc.mFormatFlags & kLinearPCMFormatFlagIsFloat))
+  if (!(stream_desc.mFormatFlags & kLinearPCMFormatFlagIsFloat) ||
+      stream_desc.mBitsPerChannel != 32)
   {
-    lsx_fail_errno(ft, SOX_EPERM, "audio device does not accept floats");
+    lsx_fail_errno(ft, SOX_EPERM, "audio device does not accept float32 samples");
     return SOX_EOF;
   }
 
-  /* OS X effectively only supports these values. */
-  ft->signal.channels = 2;
+  /* An input counts the channels of all its streams, of which the stream
+   * format may describe only one. */
+  ft->signal.channels = is_input? device_channels(ac->adid, is_input) : 0;
+  if (!ft->signal.channels)
+    ft->signal.channels = stream_desc.mChannelsPerFrame;
+  if (!ft->signal.channels)
+    ft->signal.channels = 2;
   ft->signal.rate = 44100;
   ft->encoding.bits_per_sample = 32;
 
-  /* TODO: only float at a fixed rate and in stereo has been tried.  Where the
-   * hardware can be set to the stream's rate and channel count, that should
-   * be preferred to resampling and mixing. */
+  /* TODO: only float at a fixed rate has been tried.  Where the hardware can
+   * be set to the stream's rate and channel count, that should be preferred
+   * to resampling and mixing. */
 
-  if (stream_desc.mChannelsPerFrame != ft->signal.channels)
-  {
-    lsx_debug("audio device did not accept %d channels. Use %d channels instead.", (int)ft->signal.channels,
-              (int)stream_desc.mChannelsPerFrame);
-    ft->signal.channels = stream_desc.mChannelsPerFrame;
-  }
+  if (is_input && stream_desc.mChannelsPerFrame != ft->signal.channels)
+    lsx_debug("stream format reports %d channels but stream configuration reports %d channels",
+              (int)stream_desc.mChannelsPerFrame, (int)ft->signal.channels);
 
   if (stream_desc.mSampleRate != ft->signal.rate)
   {

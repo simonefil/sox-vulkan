@@ -1042,6 +1042,7 @@ sox_format_t * sox_open_mem_read(
     sox_encodinginfo_t const * encoding,
     char               const * filetype)
 {
+  if (!buffer || !buffer_size) return NULL;
   return open_read("", buffer, buffer_size, signal, encoding, filetype, NULL);
 }
 

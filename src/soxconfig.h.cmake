@@ -82,6 +82,7 @@
 #cmakedefine HAVE_FMEMOPEN            1
 #cmakedefine HAVE_FORK                1
 #cmakedefine HAVE_FSEEKO              1
+#cmakedefine HAVE__FSEEKI64           1
 #cmakedefine HAVE_GETTIMEOFDAY        1
 #cmakedefine HAVE_LRINT               1
 #cmakedefine HAVE_MEMALIGN            1

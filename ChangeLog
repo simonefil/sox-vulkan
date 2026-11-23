@@ -17,6 +17,14 @@ Unreleased
     `-f hq' is now an invalid filter name; `-f sdm-7' is the 7th-order
     choice, with the coefficients of the right rate. The automatic 1-bit
     dither, which runs the default modulator, changes in the same way.
+  o `rate' rejects conversion ratios above 131072 (2^17) in either
+    direction, with an error that names the ratio. Real uses stay far below
+    it (DSD1024 from 44.1 kHz is 1024, a 2.4 MS/s radio capture to 48 kHz
+    is 50, 1 Hz sensor data to 96 kHz is 96000); above it the quick stage
+    overflowed, and the other qualities needed tens of gigabytes or
+    crashed. The bound is on the ratio only: MHz rates convert as before.
+  o The AIFC writer stores the instrument loops (MARK and INST chunks)
+    as the AIFF writer does, so loops survive a conversion to AIFC.
 
 SoX-16.2.1
 ----------

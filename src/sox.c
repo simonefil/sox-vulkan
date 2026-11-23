@@ -2857,6 +2857,11 @@ static char const * set_default_device(file_t * f)
 {
   /* Default audio driver type in order of preference: */
   if (!f->filetype) f->filetype = getenv("AUDIODRIVER");
+/* On Windows the only available audio driver is waveaudio
+ * but it is not autodetected so choose it unless AUDIODRIVER names one */
+#ifdef _WIN32
+  if (!f->filetype) f->filetype = "waveaudio";
+#else
   if (!f->filetype) f->filetype = try_device("coreaudio");
   if (!f->filetype) f->filetype = try_device("pulseaudio");
   if (!f->filetype) f->filetype = try_device("alsa");
@@ -2866,6 +2871,7 @@ static char const * set_default_device(file_t * f)
   if (!f->filetype) f->filetype = try_device("sunau");
   if (!f->filetype && file_count) /*!rec*/
     f->filetype = try_device("ao");
+#endif
 
   if (!f->filetype) {
     lsx_fail("Sorry, there is no default audio device configured");

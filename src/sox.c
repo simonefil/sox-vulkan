@@ -1177,7 +1177,14 @@ static void create_user_effects(void)
   }
 
   for (i = 0; i < num_effects; i++) {
-    effp = sox_create_effect(sox_find_effect(user_effargs[current_eff_chain][i].name));
+    sox_effect_handler_t const *handler =
+        sox_find_effect(user_effargs[current_eff_chain][i].name);
+    if (!handler) {
+      lsx_fail("can't find an effect called `%s'",
+               user_effargs[current_eff_chain][i].name);
+      exit(1);
+    }
+    effp = sox_create_effect(handler);
 
     if (effp->handler.flags & SOX_EFF_DEPRECATED)
       lsx_warn("effect `%s' is deprecated; see sox(1) for an alternative",

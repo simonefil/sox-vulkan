@@ -388,7 +388,7 @@ static child_pipe * child_pipes;
  * UNIX Review, Vol. 6, No. 8.
  */
 FILE * lsx_popen(char ** argv, char type,
-#if (HAVE_PIPE && HAVE_FORK) || !defined(HAVE_POPEN)
+#if (HAVE_PIPE && HAVE_FORK) || defined(_WIN32) || !defined(HAVE_POPEN)
 UNUSED
 #endif
                  int filename_index)
@@ -398,7 +398,7 @@ UNUSED
   int pdes[2], saved_errno, status;
   pid_t pid;
   child_pipe *child;
-#elif defined(HAVE_POPEN)
+#elif defined(HAVE_POPEN) && !defined(_WIN32)
   FILE *iop;
   char *quoted_filename;
   char *p, *q;
@@ -408,12 +408,10 @@ UNUSED
   size_t nchars;
   int i;
 #endif
-  char mode[3];
+#if (HAVE_PIPE && HAVE_FORK) || (defined(HAVE_POPEN) && !defined(_WIN32))
+  char mode[2];
 
   mode[0] = type;
-#ifdef _WIN32
-  mode[1] = 'b'; mode[2] = '\0';
-#else
   mode[1] = '\0';
 #endif
 
@@ -490,33 +488,20 @@ UNUSED
   child_pipes = child;
   return iop;
 
+#elif defined(_WIN32)
+
+  return win32_popen_argv(argv, type);
+
 #elif defined(HAVE_POPEN)
 
-  /* Quote special characters in the filename. */
-  /* On Unix, single quote the complete filename.  An embedded single quote
-   * needs four extra characters: close quote, escaped quote, open quote.
-   * Windows uses the existing escape syntax and can require one escape per
-   * input character. */
+  /* Single quote the complete filename.  An embedded single quote needs
+   * four extra characters: close quote, escaped quote, open quote. */
   filename_len = strlen(filename);
   if (filename_len > ((size_t)-1 - 3) / 4) {
     errno = EOVERFLOW;
     return NULL;
   }
   quoted_filename = lsx_malloc(filename_len * 4 + 3);
-#ifdef _WIN32
-  /* cmd.exe and then the child's C runtime both split the command line, and
-   * double quotes are understood by both, so quote the whole name.  A run of
-   * backslashes just before the closing quote would escape it, so those are
-   * doubled. */
-  q = quoted_filename;
-  *q++ = '"';
-  for (p = filename; *p; p++)
-    *q++ = *p;
-  for (p = filename + filename_len; p > filename && p[-1] == '\\'; p--)
-    *q++ = '\\';
-  *q++ = '"';
-  *q = '\0';
-#else
   q = quoted_filename;
   *q++ = '\'';
   for (p = filename; *p; ++p) {
@@ -530,7 +515,6 @@ UNUSED
   }
   *q++ = '\'';
   *q = '\0';
-#endif
 
   argv[filename_index] = quoted_filename;
 
@@ -595,6 +579,14 @@ int lsx_pclose(FILE * stream, sox_bool cancel)
       return -1;
     }
     return cancel ? 0 : status;
+  }
+#endif
+#ifdef _WIN32
+  {
+    int status;
+
+    if (win32_pclose_argv(stream, cancel, &status))
+      return status;
   }
 #endif
 #ifdef HAVE_POPEN

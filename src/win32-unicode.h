@@ -54,6 +54,10 @@ extern char    * win32_utf16_to_utf8(const wchar_t *input);
 extern wchar_t * win32_utf8_to_utf16(const char *input);
 extern char    * win32_getenv_utf8(const wchar_t *name);
 
+extern FILE    * lsx_shell_popen(const char *command_utf8, const char *mode);
+extern FILE    * win32_popen_argv(char **argv_utf8, char type);
+extern int       win32_pclose_argv(FILE *stream, int cancel, int *status);
+
 # else  /* _WIN32 */
 
 #define lsx_fopen(a,b)  fopen(a,b)
@@ -62,6 +66,7 @@ extern char    * win32_getenv_utf8(const wchar_t *name);
 #define lsx_remove(a)   remove(a)
 #define lsx_rename(a,b) rename(a,b)
 #define lsx_mkdir(a)    mkdir(a, 0777)
+#define lsx_shell_popen(a,b) popen(a,b)
 
 #endif  /* _WIN32 */
 

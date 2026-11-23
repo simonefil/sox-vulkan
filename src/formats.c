@@ -750,7 +750,7 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
 #ifndef POPEN_MODE
 #define POPEN_MODE "r"
 #endif
-    f = popen(identifier + 1, POPEN_MODE);
+    f = lsx_shell_popen(identifier + 1, POPEN_MODE);
     if (f) {
       *io_type = lsx_io_pipe;
       incr_pipe_size(f);
@@ -766,16 +766,6 @@ static FILE * xfopen(char const * identifier, char const * mode, lsx_io_type * i
     char * command_argv[] = {
       "wget", "-q", "-O-", NULL, NULL
     };
-#ifdef _WIN32
-    /* The popen fallback quotes the URL for cmd.exe.  A raw double quote,
-     * which is not valid in a URL, would end that quoting and allow the
-     * remainder of a playlist entry to be interpreted as command syntax.
-     */
-    if (strchr(identifier, '"')) {
-      lsx_fail("URL contains an invalid double quote");
-      return NULL;
-    }
-#endif
     command_argv[3] = (char *)identifier;
     f = lsx_popen(command_argv, 'r', 3);
     if (f == NULL) {

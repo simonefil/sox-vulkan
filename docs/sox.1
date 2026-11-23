@@ -3048,6 +3048,11 @@ equivalent:
 though the second command is more flexible as it allows
 .B rate
 options to be given, and allows the effects to be ordered arbitrarily.
+.SP
+The conversion ratio, the higher rate divided by the lower, can be at most
+131072 (2^17), up or down; a larger ratio stops with an error.  The limit
+is on the ratio alone: rates of several MHz, such as DSD1024 or radio
+captures, convert as usual.
 .TS
 center;
 c8 c8 c.

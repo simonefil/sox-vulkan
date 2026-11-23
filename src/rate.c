@@ -439,6 +439,9 @@ typedef struct {
 /* Output one processing pass may produce: an upsampler fed a whole input
  * chunk at a time would otherwise emit chunk / factor samples at once. */
 #define RATE_MAX_PASS_OUTPUT (1 << 22)
+/* Largest conversion ratio, up or down: past it there is no real use, only
+ * filters and steps the design cannot hold. */
+#define RATE_MAX_RATIO (1 << 17)
 
 typedef enum {
   rolloff_none, rolloff_small /* <= 0.01 dB */, rolloff_medium /* <= 0.35 dB */
@@ -640,12 +643,6 @@ static int rate_plan_create(
   }
 
   if (!bits) {                                  /* Quick and dirty arb stage: */
-    /* The 32.32 step has to be non-zero and its integer part an int32_t. */
-    if (!(arbM * MULT32 + .5 >= 1 && arbM < MULT32 / 2)) {
-      lsx_fail("output/input ratio %g is out of the quick interpolator's "
-          "range", 1 / factor);
-      return SOX_EINVAL;
-    }
     arb_stage.kind = rate_stage_cubic;
     arb_stage.fn = cubic_stage_fn;
     arb_stage.step.all = arbM * MULT32 + .5;
@@ -2168,6 +2165,16 @@ static int start(sox_effect_t * effp)
 
   if ((size_t)effp->in_signal.rate == 0) {
     lsx_fail("input sample rate is %g", effp->in_signal.rate);
+    return SOX_EOF;
+  }
+
+  if (out_rate > effp->in_signal.rate * RATE_MAX_RATIO ||
+      effp->in_signal.rate > out_rate * RATE_MAX_RATIO) {
+    sox_bool up = out_rate > effp->in_signal.rate;
+    lsx_fail("%s ratio %.10g is above the maximum of %d",
+        up? "output/input" : "input/output", up?
+        out_rate / effp->in_signal.rate : effp->in_signal.rate / out_rate,
+        RATE_MAX_RATIO);
     return SOX_EOF;
   }
 

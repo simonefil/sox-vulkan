@@ -1693,23 +1693,84 @@ Unix csh:
     <p class="Pp">See also <b>remix</b> for an effect that allows channels to be
         mixed/selected arbitrarily.</p>
   </dd>
-  <dt id="chorus"><a class="permalink" href="#chorus"><b>chorus </b><i>gain-in
-    gain-out</i> &lt;<i>delay decay speed depth
-    </i><b>-s</b>|<b>-t</b>&gt;</a></dt>
-  <dd>Add a chorus effect to the audio. This can make a single vocal sound like
-      a chorus, but can also be applied to instrumentation.
-    <p class="Pp">Chorus resembles an echo effect with a short delay, but
-        whereas with echo the delay is constant, with chorus, it is varied using
-        sinusoidal or triangular modulation. The modulation depth defines the
-        range the modulated delay is played before or after the delay. Hence the
-        delayed sound will sound slower or faster, that is the delayed sound
-        tuned around the original one, like in a chorus where some vocals are
-        slightly off key. See [3] for more discussion of the chorus effect.</p>
-    <p class="Pp">Each four-tuple parameter delay/decay/speed/depth gives the
-        delay in milliseconds and the decay (relative to gain-in) with a
-        modulation speed in Hz using depth in milliseconds. The modulation is
-        either sinusoidal (<b>-s</b>) or triangular (<b>-t</b>). Gain-out is the
-        volume of the output.</p>
+  <dt id="chorus"><a class="permalink" href="#chorus"><b>chorus
+    [</b><b>-n</b>|<b>l</b>|<b>q</b>] [<b>-s</b>|<b>t</b>] [<i>gain-in
+    [gain-out</i> {<i>delay [decay [speed [depth
+    [</i><b>-s</b>|<b>t</b>]]]]}]]</a></dt>
+  <dd>Add a chorus effect to the audio. This can make a single voice sound like
+      a chorus but can also be applied to instrumentation.
+    <p class="Pp">Chorus resembles an <b>echo</b> effect with a short delay but,
+        while <b>echo</b>'s delay is constant, <b>chorus</b>' delay varies by a
+        sinusoidal or triangular modulation.</p>
+    <p class="Pp">See [3] for further discussion of the chorus effect.</p>
+    <p class="Pp">The <b>-l</b> flag makes <b>chorus</b> do linear interpolation
+        between samples when the offset into the delay line is not a whole
+        number, which is slower but makes it considerably less noisy and
+        <b>-q</b> asks for quadratic interpolation which is slower still but
+        makes it even less noisy. <b>-n</b> explicitly asks for no
+        interpolation, the default, fast and fuzzy.</p>
+    <p class="Pp"><b>-s</b> or <b>-t</b> before the stages change the default
+        wave type for all of them.</p>
+    <p class="Pp">All parameters are optional and, if missing, assume the
+        following values:</p>
+    <p class="Pp"></p>
+    <table class="tbl">
+      <tr>
+        <td><b>Parameter</b></td>
+        <td><b>Range</b></td>
+        <td><b>Default</b></td>
+        <td><b>Description</b></td>
+      </tr>
+      <tr>
+        <td>gain-in</td>
+        <td style="text-align: center;">-1-1</td>
+        <td style="text-align: center;">0.5</td>
+        <td>Proportion of input delivered clean to the adder</td>
+      </tr>
+      <tr>
+        <td>gain-out</td>
+        <td style="text-align: center;">-1-1</td>
+        <td style="text-align: center;">1</td>
+        <td>Final volume adjustment</td>
+      </tr>
+      <tr>
+        <td>delay</td>
+        <td style="text-align: center;">0-1000</td>
+        <td style="text-align: center;">50</td>
+        <td>Fixed delay in milliseconds</td>
+      </tr>
+      <tr>
+        <td>decay</td>
+        <td style="text-align: center;">-1-1</td>
+        <td style="text-align: center;">0.5</td>
+        <td>Volume of delayed output</td>
+      </tr>
+      <tr>
+        <td>speed</td>
+        <td style="text-align: center;">0-192k</td>
+        <td style="text-align: center;">0.25</td>
+        <td>Modulation frequency</td>
+      </tr>
+      <tr>
+        <td>depth</td>
+        <td style="text-align: center;">0-1000</td>
+        <td style="text-align: center;">2</td>
+        <td>Extra delay in milliseconds</td>
+      </tr>
+      <tr>
+        <td>wave</td>
+        <td style="text-align: center;">-s|-t</td>
+        <td style="text-align: center;">-s</td>
+        <td>Sinusoidal/triangular modulation</td>
+      </tr>
+    </table>
+    <p class="Pp">Each delay ranges from the fixed <i>delay</i> to
+        <i>delay</i>&#x00A0;+&#x00A0;<i>depth</i>.</p>
+    <p class="Pp"><i>Gain-out</i> is then applied to the sum of the input scaled
+        by <i>gain-in</i> and the outputs from the delays scaled by their
+        <i>decay</i>s: a safe <i>gain-out</i> is at most
+        1&#x00A0;&#x00F7;&#x00A0;(<i>gain-in</i>&#x00A0;+&#x00A0;<i>decay</i>&#x00A0;1&#x00A0;+&#x00A0;...&#x00A0;+&#x00A0;<i>decay</i>&#x00A0;n).</p>
+    <p class="Pp">There is a limit of 256 chorus stages.</p>
     <p class="Pp">A typical delay is around 40ms to 60ms; the modulation speed
         is best near 0.25Hz and the modulation depth around 2ms. For example, a
         single delay:</p>
@@ -1723,11 +1784,24 @@ Unix csh:
    play guitar1.wav chorus 0.6 0.9 50 0.4 0.25 2 -t \
 	 60 0.32 0.4 1.3 -s
     </pre>
-    A fuller sounding chorus (with three additional delays):
+    A fuller-sounding chorus (with three additional delays):
     <pre>
 <br/>
    play guitar1.wav chorus 0.5 0.9 50 0.4 0.25 2 -t \
 	 60 0.32 0.4 2.3 -t 40 0.3 0.3 1.3 -s
+    </pre>
+    <b>flanger</b> can do everything that <b>chorus</b> does except multiple
+      stages:
+    <pre>
+<br/>
+   chorus -l gain-in gain-out delay decay speed depth -wave
+    </pre>
+    is equivalent to
+    <pre>
+<br/>
+   flanger delay depth 0 100&#x00D7;decay&#x00F7;gain-in speed wave 0 \
+<br/>
+      vol gain-out&#x00F7;(gain-in+decay)
     </pre>
   </dd>
   <dt id="compand"><a class="permalink" href="#compand"><b>compand
@@ -2018,9 +2092,9 @@ Unix csh:
       (time), and the loudness of the reflected signal is the `decay'. Multiple
       echoes can have different delays and decays.
     <p class="Pp">Each given <i>delay decay</i> pair gives the delay in
-        milliseconds and the decay (relative to gain-in) of that echo. Gain-out
-        is the volume of the output. For example: This will make it sound as if
-        there are twice as many instruments as are actually playing:</p>
+        milliseconds and the decay of that echo. Gain-out is the volume of the
+        output. For example: This will make it sound as if there are twice as
+        many instruments as are actually playing:</p>
     <pre>
 <br/>
    play lead.aiff echo 0.8 0.88 60 0.4
@@ -2045,13 +2119,13 @@ Unix csh:
   <dt id="echos"><a class="permalink" href="#echos"><b>echos </b><i>gain-in
     gain-out</i> &lt;<i>delay decay</i>&gt;</a></dt>
   <dd>Add a sequence of echoes to the audio. Each <i>delay decay</i> pair gives
-      the delay in milliseconds and the decay (relative to gain-in) of that
-      echo. Gain-out is the volume of the output.
-    <p class="Pp">Like the echo effect, echos stand for `ECHO in Sequel', that
-        is the first echos takes the input, the second the input and the first
-        echos, the third the input and the first and the second echos, ... and
-        so on. Care should be taken using many echos; a single echos has the
-        same effect as a single echo.</p>
+      the delay in milliseconds and the decay of that echo. Gain-out is the
+      volume of the output.
+    <p class="Pp">Echos stand for `ECHO in Sequel', that is the first echos
+        takes the input, the second the input and the first echos, the third the
+        input and the first and the second echos, ... and so on. Care should be
+        taken using many echos; a single echos has the same effect as a single
+        echo.</p>
     <p class="Pp">The sample will be bounced twice in symmetric echos:</p>
     <pre>
 <br/>
@@ -2674,6 +2748,10 @@ Unix csh:
     </pre>
     though the second command is more flexible as it allows <b>rate</b> options
       to be given, and allows the effects to be ordered arbitrarily.
+    <p class="Pp">The conversion ratio, the higher rate divided by the lower,
+        can be at most 131072 (2^17), up or down; a larger ratio stops with an
+        error. The limit is on the ratio alone: rates of several MHz, such as
+        DSD1024 or radio captures, convert as usual.</p>
     <table class="tbl">
       <tr>
         <td style="text-align: center;">*</td>
@@ -3011,9 +3089,10 @@ done
         is diminished. Applying a small amount of stereo reverb to a (dry) mono
         signal will usually make it sound more natural. See [3] for a detailed
         description of reverberation.</p>
-    <p class="Pp">Note that this effect increases both the volume and the length
-        of the audio, so to prevent clipping in these domains, a typical
-        invocation might be:</p>
+    <p class="Pp">This effect increases the volume of the audio and continues to
+        reverberate after the input finishes so, to prevent clipping and keep
+        the audible part of the final reverberation, a typical invocation might
+        be:</p>
     <pre>
 <br/>
    play dry.wav gain -3 pad 0 3 reverb
@@ -4192,7 +4271,8 @@ sox part1.wav piece.wav part2.wav &quot;$5&quot; \
 <p class="Pp">Exit status is 0 for no error; 1 if there is a problem with the
     command-line parameters or an error occurs while the audio is processed; 2
     if an input or output file cannot be opened or an effect cannot be started.
-    <b>--help-effect</b> and <b>--help-format</b> exit with status 1.</p>
+    <b>--help-effect</b> and <b>--help-format</b> exit with status 0 if the
+    named effect or format exists and 1 otherwise.</p>
 <p class="Pp"></p>
 <p class="Pp">When processing fails, the partly written output file is removed;
     this includes a failure while the output file is being closed. An output

@@ -66,8 +66,18 @@ void lsx_adpcm_init(adpcm_t * p, int type, int first_sample)
 
 int lsx_adpcm_decode(int code, adpcm_t * p)
 {
-  int s = ((code & (p->setup.sign - 1)) << 1) | 1;
-  s = ((p->setup.steps[p->step_index] * s) >> (p->setup.shift + 1)) & p->setup.mask;
+  int s;
+  if (p->setup.shift == 2) {
+    /* IMA e OKI: somma dei pezzi del passo, ognuno arrotondato come nelle specifiche */
+    int step = p->setup.steps[p->step_index];
+    s = (step >> 3) & p->setup.mask;
+    if (code & 4) s += step;
+    if (code & 2) s += (step >> 1) & p->setup.mask;
+    if (code & 1) s += (step >> 2) & p->setup.mask;
+  } else {
+    s = ((code & (p->setup.sign - 1)) << 1) | 1;
+    s = ((p->setup.steps[p->step_index] * s) >> (p->setup.shift + 1)) & p->setup.mask;
+  }
   if (code & p->setup.sign)
     s = -s;
   s += p->last_output;

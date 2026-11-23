@@ -1432,6 +1432,7 @@ error:
   free(ft->priv);
   free(ft->filename);
   free(ft->filetype);
+  sox_delete_comments(&ft->oob.comments);
   free(ft);
   return NULL;
 }

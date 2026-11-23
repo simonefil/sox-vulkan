@@ -195,6 +195,7 @@ static int sox_noiseprof_stop(sox_effect_t * effp)
 
         free(chan->sum);
         free(chan->profilecount);
+        free(chan->window);
     }
 
     free(data->chandata);

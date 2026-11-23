@@ -126,7 +126,7 @@ static const char* const amr_opencore_library_names[] =
 #define AMR_GP3_DESC "amr-nb 3GPP reference library"
 static const char* const amr_gp3_library_names[] =
 {
-#ifdef DL_AMRWB
+#ifdef DL_AMRNB
   "libamrnb-3",
   "libamrnb",
   "amrnb",

@@ -694,23 +694,88 @@ int lsx_aiffstopwrite(sox_format_t * ft)
         }
 }
 
+/* MARK and INST hold at most a sustain and a release loop */
+static unsigned mark_and_inst_size(sox_format_t * ft)
+{
+        if (ft->oob.instr.nloops > 2)
+                ft->oob.instr.nloops = 2;
+        if (!ft->oob.instr.nloops)
+                return 0;
+        return 8 /* MARK hdr */ + 2 + 16*ft->oob.instr.nloops +
+               8 /* INST hdr */ + 20; /* INST chunk */
+}
+
+static int write_mark_and_inst_chunks(sox_format_t * ft)
+{
+        unsigned i;
+
+        /* MARK chunk -- set markers */
+        if (ft->oob.instr.nloops) {
+                if (lsx_writes(ft, "MARK"))
+                        return(SOX_EOF);
+                /* Two marks, the start and the end, for each loop */
+                if (lsx_writedw(ft, 2 + 16u*ft->oob.instr.nloops) ||
+                    lsx_writew(ft, 2 * ft->oob.instr.nloops))
+                        return(SOX_EOF);
+
+                for(i = 0; i < ft->oob.instr.nloops; i++) {
+                        unsigned start = ft->oob.loops[i].start > UINT_MAX
+                            ? UINT_MAX
+                            : ft->oob.loops[i].start;
+                        unsigned end = ft->oob.loops[i].start + ft->oob.loops[i].length > UINT_MAX
+                            ? UINT_MAX
+                            : ft->oob.loops[i].start + ft->oob.loops[i].length;
+                        if (lsx_writew(ft, i + 1) ||
+                            lsx_writedw(ft, start) ||
+                            lsx_writeb(ft, 0) ||
+                            lsx_writeb(ft, 0) ||
+                            lsx_writew(ft, i + 3) ||   /* end marker, as INST refers to it */
+                            lsx_writedw(ft, end) ||
+                            lsx_writeb(ft, 0) ||
+                            lsx_writeb(ft, 0))
+				return(SOX_EOF);
+                }
+
+                if (lsx_writes(ft, "INST") ||
+                    lsx_writedw(ft, 20) ||
+                    /* random MIDI shit that we default on */
+                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDInote) ||
+                    lsx_writeb(ft, 0) ||                 /* detune */
+                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIlow) ||
+                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIhi) ||
+                    lsx_writeb(ft, 1) ||                 /* low velocity */
+                    lsx_writeb(ft, 127) ||               /* hi  velocity */
+                    lsx_writew(ft, 0) ||                 /* gain */
+
+                    /* sustain loop */
+                    lsx_writew(ft, ft->oob.loops[0].type) ||
+                    lsx_writew(ft, 1) ||                 /* marker 1 */
+                    lsx_writew(ft, 3) ||
+                    /* release loop, if there */
+                    (ft->oob.instr.nloops == 2
+                      ?(lsx_writew(ft, ft->oob.loops[1].type) ||
+                        lsx_writew(ft, 2) ||             /* marker 2 */
+                        lsx_writew(ft, 4))               /* marker 4 */
+                      :(lsx_writew(ft, 0) ||             /* no release loop */
+                        lsx_writew(ft, 0) ||
+                        lsx_writew(ft, 0))))
+		    return SOX_EOF;
+        }
+        return SOX_SUCCESS;
+}
+
 static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
 {
         int hsize =
                 8 /*COMM hdr*/ + 18 /*COMM chunk*/ +
                 8 /*SSND hdr*/ + 12 /*SSND chunk*/;
         unsigned bits = 0;
-        unsigned i;
         uint64_t size;
         size_t padded_comment_size = 0, comment_size = 0;
         size_t comment_chunk_size = 0;
         char * comment = lsx_cat_comments(ft->oob.comments);
 
-        /* MARK and INST chunks */
-        if (ft->oob.instr.nloops) {
-          hsize += 8 /* MARK hdr */ + 2 + 16*ft->oob.instr.nloops;
-          hsize += 8 /* INST hdr */ + 20; /* INST chunk */
-        }
+        hsize += mark_and_inst_size(ft);
 
         if (ft->encoding.encoding == SOX_ENCODING_SIGN2 &&
             ft->encoding.bits_per_sample == 8)
@@ -789,60 +854,8 @@ static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
             write_ieee_extended(ft, (double)ft->signal.rate))
                 return(SOX_EOF);
 
-        /* MARK chunk -- set markers */
-        if (ft->oob.instr.nloops) {
-                if (lsx_writes(ft, "MARK"))
-                        return(SOX_EOF);
-                if (ft->oob.instr.nloops > 2)
-                        ft->oob.instr.nloops = 2;
-                /* Two marks, the start and the end, for each loop */
-                if (lsx_writedw(ft, 2 + 16u*ft->oob.instr.nloops) ||
-                    lsx_writew(ft, 2 * ft->oob.instr.nloops))
-                        return(SOX_EOF);
-
-                for(i = 0; i < ft->oob.instr.nloops; i++) {
-                        unsigned start = ft->oob.loops[i].start > UINT_MAX
-                            ? UINT_MAX
-                            : ft->oob.loops[i].start;
-                        unsigned end = ft->oob.loops[i].start + ft->oob.loops[i].length > UINT_MAX
-                            ? UINT_MAX
-                            : ft->oob.loops[i].start + ft->oob.loops[i].length;
-                        if (lsx_writew(ft, i + 1) ||
-                            lsx_writedw(ft, start) ||
-                            lsx_writeb(ft, 0) ||
-                            lsx_writeb(ft, 0) ||
-                            lsx_writew(ft, i + 3) ||   /* end marker, as INST refers to it */
-                            lsx_writedw(ft, end) ||
-                            lsx_writeb(ft, 0) ||
-                            lsx_writeb(ft, 0))
-				return(SOX_EOF);
-                }
-
-                if (lsx_writes(ft, "INST") ||
-                    lsx_writedw(ft, 20) ||
-                    /* random MIDI shit that we default on */
-                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDInote) ||
-                    lsx_writeb(ft, 0) ||                 /* detune */
-                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIlow) ||
-                    lsx_writeb(ft, (uint8_t)ft->oob.instr.MIDIhi) ||
-                    lsx_writeb(ft, 1) ||                 /* low velocity */
-                    lsx_writeb(ft, 127) ||               /* hi  velocity */
-                    lsx_writew(ft, 0) ||                 /* gain */
-
-                    /* sustain loop */
-                    lsx_writew(ft, ft->oob.loops[0].type) ||
-                    lsx_writew(ft, 1) ||                 /* marker 1 */
-                    lsx_writew(ft, 3) ||
-                    /* release loop, if there */
-                    (ft->oob.instr.nloops == 2
-                      ?(lsx_writew(ft, ft->oob.loops[1].type) ||
-                        lsx_writew(ft, 2) ||             /* marker 2 */
-                        lsx_writew(ft, 4))               /* marker 4 */
-                      :(lsx_writew(ft, 0) ||             /* no release loop */
-                        lsx_writew(ft, 0) ||
-                        lsx_writew(ft, 0))))
-		    return SOX_EOF;
-        }
+        if (write_mark_and_inst_chunks(ft))
+                return(SOX_EOF);
 
         /* SSND chunk -- describes data */
         if (lsx_writes(ft, "SSND") ||
@@ -962,7 +975,7 @@ static int aifcwriteheader(sox_format_t * ft, uint64_t nframes)
         comm_padding = comm_len%2;
 
         hsize = 12 /*FVER*/ + 8 /*COMM hdr*/ + comm_len+comm_padding /*COMM chunk*/ +
-                8 /*SSND hdr*/ + 12 /*SSND chunk*/;
+                8 /*SSND hdr*/ + 12 /*SSND chunk*/ + mark_and_inst_size(ft);
 
         if (lsx_writes(ft, "FORM")) /* IFF header */
 	    return(SOX_EOF);
@@ -993,6 +1006,8 @@ static int aifcwriteheader(sox_format_t * ft, uint64_t nframes)
             lsx_writeb(ft, cname_len) ||
             lsx_writes(ft, cname) ||
             (comm_padding ? lsx_writeb(ft, 0) : 0) ||
+
+            write_mark_and_inst_chunks(ft) ||
 
             /* SSND chunk -- describes data */
             lsx_writes(ft, "SSND") ||

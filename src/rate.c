@@ -1310,11 +1310,19 @@ static double *rate_vulkan_half_taps(stage_t const *stage)
  * guard. */
 static void rate_dsd_dump_plan(priv_t const *p)
 {
+#ifdef _WIN32
+  /* UTF-8, as lsx_fopen expects on Windows. */
+  char *path = win32_getenv_utf8(L"SOX_DSD_COEFFICIENTS");
+#else
   char const *path = getenv("SOX_DSD_COEFFICIENTS");
-  FILE *file;
+#endif
+  FILE *file = path && *path ? lsx_fopen(path, "w") : NULL;
   int index;
 
-  if (!path || !*path || !(file = fopen(path, "w")))
+#ifdef _WIN32
+  free(path);
+#endif
+  if (!file)
     return;
   for (index = 0; index < (int)p->rate.plan.num_stages; ++index) {
     stage_t const *stage = &p->rate.plan.stages[index];

@@ -29,33 +29,32 @@
   #include <unistd.h>
 #endif
 
-#if defined(_MSC_VER) || defined(__MINGW32__)
-  #define MKTEMP_X _O_BINARY|_O_TEMPORARY
-#else
-  #define MKTEMP_X 0
-#endif
-
 #ifndef HAVE_MKSTEMP
-  #include <fcntl.h>
-  #include <sys/types.h>
-  #include <sys/stat.h>
-  #define mkstemp(t) open(mktemp(t), MKTEMP_X|O_RDWR|O_TRUNC|O_CREAT, S_IREAD|S_IWRITE)
+  #ifdef _WIN32
+    /* The template is UTF-8 like every file name on Windows */
+    #define mkstemp(t) lsx_mkstemp(t)
+  #else
+    #include <fcntl.h>
+    #include <sys/types.h>
+    #include <sys/stat.h>
+    #define mkstemp(t) open(mktemp(t), O_RDWR|O_TRUNC|O_CREAT, S_IREAD|S_IWRITE)
+  #endif
   #define FAKE_MKSTEMP "fake "
 #else
   #define FAKE_MKSTEMP
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
 static int check_dir(char * buf, size_t buflen, char const * name)
 {
   struct stat st;
-  if (!name || stat(name, &st) || (st.st_mode & S_IFMT) != S_IFDIR)
+  if (!name || lsx_stat(name, &st) || (st.st_mode & S_IFMT) != S_IFDIR)
   {
     return 0;
   }
   else
   {
-    strncpy(buf, name, buflen);
+    strncpy(buf, name, buflen - 1);
     buf[buflen - 1] = 0;
     return strlen(name) == strlen(buf);
   }
@@ -73,19 +72,27 @@ FILE * lsx_tmpfile(void)
   is null, figure out a reasonable default.
   To force use of tmpfile(), set sox_globals.tmp_path = "".
   */
-#ifdef WIN32
+#ifdef _WIN32
   if (!path)
   {
     static char default_path[260] = "";
-    if (default_path[0] == 0
-        && !check_dir(default_path, sizeof(default_path), getenv("TEMP"))
-        && !check_dir(default_path, sizeof(default_path), getenv("TMP"))
-    #ifdef __CYGWIN__
-        && !check_dir(default_path, sizeof(default_path), "/tmp")
-    #endif
-        )
+    if (default_path[0] == 0)
     {
-      strcpy(default_path, ".");
+      /* UTF-8, as check_dir and the template below expect */
+      char * temp = win32_getenv_utf8(L"TEMP");
+      char * tmp = win32_getenv_utf8(L"TMP");
+
+      if (!check_dir(default_path, sizeof(default_path), temp)
+          && !check_dir(default_path, sizeof(default_path), tmp)
+      #ifdef __CYGWIN__
+          && !check_dir(default_path, sizeof(default_path), "/tmp")
+      #endif
+          )
+      {
+        strcpy(default_path, ".");
+      }
+      free(temp);
+      free(tmp);
     }
 
     path = default_path;
@@ -102,7 +109,7 @@ FILE * lsx_tmpfile(void)
     fildes = mkstemp(name);
 #ifdef HAVE_UNISTD_H
     lsx_debug(FAKE_MKSTEMP "mkstemp, name=%s (unlinked)", name);
-    unlink(name);
+    lsx_unlink(name);
 #else
     lsx_debug(FAKE_MKSTEMP "mkstemp, name=%s (O_TEMPORARY)", name);
 #endif

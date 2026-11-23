@@ -22,9 +22,13 @@
 #define WIN32_LEAN_AND_MEAN 1
 #include <windows.h>
 
+/* The rest of SoX passes file names around as UTF-8, so a name of MAX_PATH
+ * UTF-16 code units needs up to four bytes each once it gets here. */
+#define MAX_PATH_UTF8 (MAX_PATH * 4)
+
 typedef struct file_entry
 {
-    char name[MAX_PATH];
+    char name[MAX_PATH_UTF8];
     struct file_entry *next;
 } file_entry;
 
@@ -41,12 +45,12 @@ insert(
         return ENOMEM;
     }
 
-    len = _snprintf(cur->name, MAX_PATH, "%s%s", path, name);
-    cur->name[MAX_PATH - 1] = 0;
+    len = _snprintf(cur->name, MAX_PATH_UTF8, "%s%s", path, name);
+    cur->name[MAX_PATH_UTF8 - 1] = 0;
     cur->next = *phead;
     *phead = cur;
 
-    return len < 0 || len >= MAX_PATH ? ENAMETOOLONG : 0;
+    return len < 0 || len >= MAX_PATH_UTF8 ? ENAMETOOLONG : 0;
 }
 
 static int
@@ -66,13 +70,15 @@ glob(
     void *unused,
     glob_t *pglob)
 {
-    char path[MAX_PATH];
+    char path[MAX_PATH_UTF8];
+    char name[MAX_PATH_UTF8];
+    wchar_t wpattern[MAX_PATH];
     file_entry *head = NULL;
     int err = 0;
     size_t len;
     unsigned entries = 0;
-    WIN32_FIND_DATAA finddata;
-    HANDLE hfindfile = FindFirstFileA(pattern, &finddata);
+    WIN32_FIND_DATAW finddata;
+    HANDLE hfindfile;
 
     if (!pattern || flags != (flags & GLOB_FLAGS) || unused || !pglob)
     {
@@ -80,18 +86,31 @@ glob(
         return EINVAL;
     }
 
-    path[MAX_PATH - 1] = 0;
-    strncpy(path, pattern, MAX_PATH);
-    if (path[MAX_PATH - 1] != 0)
+    /* The terminating nul is included in the MAX_PATH (260) characters */
+    if (strlen(pattern) > MAX_PATH_UTF8 - 1)
     {
         errno = ENAMETOOLONG;
         return ENAMETOOLONG;
     }
+    strncpy(path, pattern, MAX_PATH_UTF8 - 1);
+    path[MAX_PATH_UTF8 - 1] = '\0';
 
     len = strlen(path);
     while (len > 0 && path[len - 1] != '/' && path[len - 1] != '\\')
         len--;
     path[len] = 0;
+
+    /* Only the wide API can round-trip a name that the ANSI code page has no
+     * room for: FindFirstFileA hands back a literal '?' in its place, which
+     * then fails to open -- and it reads the pattern in that code page too,
+     * so a UTF-8 pattern with any non-ASCII in it matches nothing at all. */
+    if (!MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wpattern, MAX_PATH))
+    {
+        errno = ENAMETOOLONG;
+        return ENAMETOOLONG;
+    }
+
+    hfindfile = FindFirstFileW(wpattern, &finddata);
 
     if (hfindfile == INVALID_HANDLE_VALUE)
     {
@@ -105,9 +124,15 @@ glob(
     {
         do
         {
-            err = insert(path, finddata.cFileName, &head);
+            if (!WideCharToMultiByte(CP_UTF8, 0, finddata.cFileName, -1,
+                                     name, MAX_PATH_UTF8, NULL, NULL))
+            {
+                err = ENAMETOOLONG;
+                break;
+            }
+            err = insert(path, name, &head);
             entries++;
-        } while (!err && FindNextFileA(hfindfile, &finddata));
+        } while (!err && FindNextFileW(hfindfile, &finddata));
 
         FindClose(hfindfile);
     }

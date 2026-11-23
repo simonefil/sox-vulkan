@@ -25,6 +25,7 @@
 #include "soxconfig.h"
 #include "sox.h"
 #include "util.h"
+#include "win32-unicode.h"
 #include "codec.h"
 #include "diagnostics.h"
 
@@ -298,7 +299,7 @@ static int cleanup(void)
     write_output_diagnostics();
     if (ofile->ft->io_type == lsx_io_file) {
       struct stat st;
-      if (!stat(ofile->ft->filename, &st) &&
+      if (!lsx_stat(ofile->ft->filename, &st) &&
           (st.st_mode & S_IFMT) == S_IFREG)
         output = lsx_strdup(ofile->ft->filename);
     }
@@ -307,7 +308,7 @@ static int cleanup(void)
     ofile->ft = NULL;
     if (output) {
       if (!success)
-        unlink(output);
+        lsx_unlink(output);
       free(output);
     }
   }
@@ -1060,7 +1061,7 @@ static char * * strtoargv(char * s, int * argc)
 
 static void read_user_effects(char const *filename)
 {
-    FILE *file = fopen(filename, "r");
+    FILE *file = lsx_fopen(filename, "r");
     const size_t buffer_size_step = 1024;
     size_t buffer_size = buffer_size_step;
     char *s = lsx_malloc(buffer_size); /* buffer for one input line */
@@ -1503,6 +1504,7 @@ static void display_status(sox_bool all_done)
   }
   if (all_done)
     fputc('\n', stderr);
+  fflush(stderr);
 }
 
 #ifdef HAVE_TERMIOS_H
@@ -2364,7 +2366,7 @@ static void read_comment_file(sox_comments_t * comments, char const * const file
   int c;
   size_t text_length = 100;
   char * text = lsx_malloc(text_length + 1);
-  FILE * file = fopen(filename, "r");
+  FILE * file = lsx_fopen(filename, "r");
 
   if (file == NULL) {
     lsx_fail("Cannot open comment file `%s'", filename);
@@ -2834,6 +2836,7 @@ static char const * device_name(char const * const type)
   return name? from_env? from_env : name : NULL;
 }
 
+#ifndef _WIN32
 static char const * try_device(char const * name)
 {
   sox_format_handler_t const * handler = sox_find_format(name, sox_false);
@@ -2852,6 +2855,7 @@ static char const * try_device(char const * name)
   }
   return NULL;
 }
+#endif
 
 static char const * set_default_device(file_t * f)
 {
@@ -3177,7 +3181,11 @@ static sox_bool cmp_comment_text(char const * c1, char const * c2)
   return c1 && c2 && !strcasecmp(c1, c2);
 }
 
+#ifdef _WIN32
+static int sox_main(int argc, char **argv)
+#else
 int main(int argc, char **argv)
+#endif
 {
   size_t i;
   char mybase[6];
@@ -3397,3 +3405,104 @@ int main(int argc, char **argv)
 
   return result? result : err != SOX_SUCCESS || !success;
 }
+
+#ifdef _WIN32
+
+/* The arguments arrive in UTF-16 and are handed to sox_main in UTF-8, the
+ * encoding libSoX expects for file names on Windows; the console prints
+ * UTF-8 meanwhile, so the names show as they are. */
+
+# ifndef _MSC_VER
+
+#  include <windows.h>
+
+# else
+
+/* Do not include windows.h because of double definition of
+ * __timeb64; replace this by local definitions */
+
+#define CP_UTF8 65001
+typedef int             BOOL;
+typedef const wchar_t*  LPCWSTR;
+typedef wchar_t*        LPWSTR;
+typedef unsigned int    UINT;
+typedef void*           HLOCAL;
+
+LPWSTR* __stdcall CommandLineToArgvW (LPCWSTR, int*);
+LPWSTR  __stdcall GetCommandLineW (void);
+UINT    __stdcall GetConsoleOutputCP (void);
+BOOL    __stdcall SetConsoleOutputCP (UINT);
+HLOCAL  __stdcall LocalFree (HLOCAL);
+
+# endif
+
+static UINT g_old_output_cp = ((UINT)-1);
+
+static void lsx_init_console(void)
+{
+  g_old_output_cp = GetConsoleOutputCP();
+  SetConsoleOutputCP(CP_UTF8);
+}
+
+static void lsx_uninit_console(void)
+{
+  if(g_old_output_cp != ((UINT)-1)) {
+    SetConsoleOutputCP(g_old_output_cp);
+  }
+}
+
+static void lsx_init_commandline_arguments(int *argc, char ***argv)
+{
+  int i, nArgs;
+  LPWSTR *szArglist;
+
+  szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
+
+  if(NULL == szArglist) {
+    fprintf(stderr, "\nFATAL: CommandLineToArgvW failed\n\n");
+    exit(-1);
+  }
+
+  lsx_valloc(*argv, nArgs);
+  *argc = nArgs;
+
+  for(i = 0; i < nArgs; i++)
+    (*argv)[i] = win32_utf16_to_utf8(szArglist[i]);
+
+  LocalFree(szArglist);
+}
+
+static void lsx_free_commandline_arguments(int *argc, char ***argv)
+{
+  int i = 0;
+
+  if(*argv != NULL) {
+    for(i = 0; i < *argc; i++) {
+      if((*argv)[i] != NULL) {
+        free((*argv)[i]);
+        (*argv)[i] = NULL;
+      }
+    }
+    free(*argv);
+    *argv = NULL;
+  }
+}
+
+int main(void)
+{
+  int sox_argc;
+  char **sox_argv;
+  int exit_code;
+
+  lsx_init_console();
+  lsx_init_commandline_arguments(&sox_argc, &sox_argv);
+
+  exit_code = sox_main(sox_argc, sox_argv);
+
+  lsx_uninit_console();
+  lsx_free_commandline_arguments(&sox_argc, &sox_argv);
+
+  return exit_code;
+}
+
+#endif /* _WIN32 */

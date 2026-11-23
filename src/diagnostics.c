@@ -26,13 +26,10 @@
 #include <string.h>
 
 #ifdef _WIN32
-#include <direct.h>
-#define diagnostics_mkdir(path) _mkdir(path)
 #define DIAGNOSTICS_PATH_SEPARATOR '\\'
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
-#define diagnostics_mkdir(path) mkdir((path), 0777)
 #define DIAGNOSTICS_PATH_SEPARATOR '/'
 #endif
 
@@ -297,7 +294,7 @@ void lsx_diagnostics_open(char const *dir)
     lsx_fail("--diagnostics needs a directory");
     exit(1);
   }
-  if (diagnostics_mkdir(dir) != 0 && errno != EEXIST) {
+  if (lsx_mkdir(dir) != 0 && errno != EEXIST) {
     lsx_fail("cannot create the diagnostics directory `%s': %s", dir, strerror(errno));
     exit(1);
   }
@@ -331,7 +328,7 @@ static void capture_write(capture_t *capture, double const *values, size_t sampl
 
     snprintf(leaf, sizeof(leaf), "%s.part%" PRIuPTR, capture->name, tap_flow);
     slot->path = join_path(directory, leaf);
-    slot->file = fopen(slot->path, "wb");
+    slot->file = lsx_fopen(slot->path, "wb");
     if (!slot->file)
       lsx_diagnostics_fail("cannot write the capture `%s': %s", slot->path, strerror(errno));
     capture->used = 1;
@@ -403,7 +400,7 @@ void lsx_diagnostics_capture_dsd(sox_sample_t const *samples, size_t n,
     lsx_diagnostics_fail("packed DSD capture changed channel count");
   if (!dsd_file) {
     dsd_path = join_path(directory, "chain-out.dsd-u8");
-    dsd_file = fopen(dsd_path, "wb");
+    dsd_file = lsx_fopen(dsd_path, "wb");
     if (!dsd_file)
       lsx_diagnostics_fail("cannot write the capture `%s': %s", dsd_path, strerror(errno));
     dsd_channels = channels;
@@ -531,8 +528,8 @@ static uint64_t capture_assemble(capture_t *capture)
   path = join_path(directory, capture->name);
   if (capture->slot_count == 1) {
     frames = tap_channels ? capture->slots[0].samples / tap_channels : 0;
-    remove(path);
-    if (rename(capture->slots[0].path, path) != 0)
+    lsx_remove(path);
+    if (lsx_rename(capture->slots[0].path, path) != 0)
       lsx_diagnostics_fail("cannot name the capture `%s': %s", path, strerror(errno));
     free(path);
     return frames;
@@ -544,11 +541,11 @@ static uint64_t capture_assemble(capture_t *capture)
           "the tapped effect captured %llu samples on flow 0 and %llu on flow %" PRIuPTR,
           (unsigned long long)frames,
           (unsigned long long)capture->slots[slot].samples, slot);
-  output = fopen(path, "wb");
+  output = lsx_fopen(path, "wb");
   if (!output)
     lsx_diagnostics_fail("cannot write the capture `%s': %s", path, strerror(errno));
   for (slot = 0; slot < capture->slot_count; ++slot) {
-    capture->slots[slot].file = fopen(capture->slots[slot].path, "rb");
+    capture->slots[slot].file = lsx_fopen(capture->slots[slot].path, "rb");
     if (!capture->slots[slot].file)
       lsx_diagnostics_fail("cannot read back the capture `%s': %s",
           capture->slots[slot].path, strerror(errno));
@@ -600,7 +597,7 @@ static void write_captures(void)
         /* The single-flow part became the capture itself, so removing it by
          * name would delete what was just assembled. */
         if (capture->slot_count > 1)
-          remove(capture->slots[slot].path);
+          lsx_remove(capture->slots[slot].path);
         free(capture->slots[slot].path);
         capture->slots[slot].path = NULL;
       }
@@ -695,7 +692,7 @@ static int compare_entries(void const *left, void const *right)
 static void write_run_txt(void)
 {
   char *path = join_path(directory, "run.txt");
-  FILE *file = fopen(path, "wb");
+  FILE *file = lsx_fopen(path, "wb");
   size_t index;
 
   if (!file) {

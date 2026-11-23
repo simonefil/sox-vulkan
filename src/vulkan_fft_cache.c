@@ -28,16 +28,13 @@
 #include <string.h>
 
 #ifdef _WIN32
-#include <direct.h>
 #include <process.h>
-#define cache_mkdir(path) _mkdir(path)
 #define cache_getpid() _getpid()
 #define CACHE_PATH_SEPARATOR '\\'
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#define cache_mkdir(path) mkdir((path), 0777)
 #define cache_getpid() getpid()
 #define CACHE_PATH_SEPARATOR '/'
 #endif
@@ -163,7 +160,7 @@ static int append_directory(char *path, size_t size, char const *component)
   if (used)
     path[used++] = CACHE_PATH_SEPARATOR;
   strcpy(path + used, component);
-  if (cache_mkdir(path) != 0 && errno != EEXIST)
+  if (lsx_mkdir(path) != 0 && errno != EEXIST)
     return 0;
   return 1;
 }
@@ -187,7 +184,9 @@ static char const *cache_directory(void)
     size_t level;
 
 #ifdef _WIN32
-    base = getenv("LOCALAPPDATA");
+    /* UTF-8, as the file functions below expect on Windows. */
+    char *local_app_data = win32_getenv_utf8(L"LOCALAPPDATA");
+    base = local_app_data;
 #elif defined(__APPLE__)
     base = getenv("HOME");
     below[levels++] = "Library";
@@ -199,9 +198,13 @@ static char const *cache_directory(void)
       below[levels++] = ".cache";
     }
 #endif
-    if (!base || !*base || strlen(base) + 1 > sizeof(path))
+    if (base && *base && strlen(base) + 1 <= sizeof(path))
+      strcpy(path, base);
+#ifdef _WIN32
+    free(local_app_data);
+#endif
+    if (!path[0])
       return NULL;
-    strcpy(path, base);
     for (level = 0; level < levels; ++level)
       if (!append_directory(path, sizeof(path), below[level])) {
         path[0] = '\0';
@@ -313,7 +316,7 @@ static void *disk_lookup(lsx_vulkan_fft_cache_key_t const *key, uint64_t *size)
 
   if (!entry_path(key, path, sizeof(path)))
     return NULL;
-  file = fopen(path, "rb");
+  file = lsx_fopen(path, "rb");
   if (!file)
     return NULL;
   if (!get_u32(file, &magic) || magic != CACHE_FILE_MAGIC ||
@@ -357,7 +360,7 @@ static void disk_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, 
   written = snprintf(temporary, sizeof(temporary), "%s.%d.tmp", path, (int)cache_getpid());
   if (written <= 0 || (size_t)written >= sizeof(temporary))
     return;
-  file = fopen(temporary, "wb");
+  file = lsx_fopen(temporary, "wb");
   if (!file)
     return;
   put_u32(file, CACHE_FILE_MAGIC);
@@ -369,16 +372,16 @@ static void disk_store(lsx_vulkan_fft_cache_key_t const *key, void const *blob, 
   put_u64(file, blob_hash(blob, size));
   fwrite(blob, 1, (size_t)size, file);
   if (ferror(file) || fclose(file) != 0) {
-    remove(temporary);
+    lsx_remove(temporary);
     return;
   }
 #ifdef _WIN32
   /* rename() will not replace an existing file on Windows; elsewhere it is
    * left to replace atomically, so a concurrent reader never sees a gap. */
-  remove(path);
+  lsx_remove(path);
 #endif
-  if (rename(temporary, path) != 0) {
-    remove(temporary);
+  if (lsx_rename(temporary, path) != 0) {
+    lsx_remove(temporary);
     return;
   }
   ++disk_writes;

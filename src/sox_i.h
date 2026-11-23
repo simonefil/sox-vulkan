@@ -26,6 +26,7 @@
 #include <stdlib.h>
 
 #include "util.h"
+#include "win32-unicode.h"
 
 #if defined(LSX_EFF_ALIAS)
 #undef lsx_debug

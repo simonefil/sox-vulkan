@@ -1269,6 +1269,7 @@ if(IS_WINDOWS)
     target_sources(libsox PRIVATE
         win32-glob.c
         win32-ltdl.c
+        win32-unicode.c
     )
 endif()
 

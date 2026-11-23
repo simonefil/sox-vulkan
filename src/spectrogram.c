@@ -804,7 +804,7 @@ static int stop(sox_effect_t *effp) /* only called, by end(), on flow 0 */
     SET_BINARY_MODE(stdout);
     file = stdout;
   } else {
-    file = fopen(p->out_name, "wb");
+    file = lsx_fopen(p->out_name, "wb");
     if (!file) {
       lsx_fail("failed to create `%s': %s", p->out_name, strerror(errno));
       goto error;

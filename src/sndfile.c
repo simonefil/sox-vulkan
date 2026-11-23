@@ -347,6 +347,21 @@ static int check_read_params(sox_format_t * ft, unsigned channels,
 }
 
 /*
+ * Close file for libsndfile (this doesn't close the file handle)
+ */
+static int stop(sox_format_t * ft)
+{
+  priv_t * sf = (priv_t *)ft->priv;
+  sf->sf_stop(sf->sf_file);
+  drain_log_buffer(ft);
+  sf->sf_close(sf->sf_file);
+  free((void *)sf->log_buffer);
+  free((void *)sf->sf_info);
+  LSX_DLLIBRARY_CLOSE(sf, sndfile_dl);
+  return SOX_SUCCESS;
+}
+
+/*
  * Open file in sndfile.
  */
 static int startread(sox_format_t * ft)
@@ -365,12 +380,13 @@ static int startread(sox_format_t * ft)
   if (sf->sf_file == NULL) {
     memset(ft->sox_errstr, 0, sizeof(ft->sox_errstr));
     strncpy(ft->sox_errstr, sf->sf_strerror(sf->sf_file), sizeof(ft->sox_errstr)-1);
-    free(sf->sf_file);
+    stop(ft);
     return SOX_EOF;
   }
 
   if (!(encoding = sox_enc(sf->sf_info->format, &bits_per_sample))) {
     lsx_fail_errno(ft, SOX_EFMT, "unsupported sndfile encoding %#x", sf->sf_info->format);
+    stop(ft);
     return SOX_EOF;
   }
 
@@ -391,8 +407,12 @@ static int startread(sox_format_t * ft)
     sox_append_comments(&ft->oob.comments, buf);
 #endif
 
-  return check_read_params(ft, (unsigned)sf->sf_info->channels, rate,
-      encoding, bits_per_sample, (uint64_t)(sf->sf_info->frames * sf->sf_info->channels));
+  if (check_read_params(ft, (unsigned)sf->sf_info->channels, rate,
+      encoding, bits_per_sample, (uint64_t)(sf->sf_info->frames * sf->sf_info->channels)) != SOX_SUCCESS) {
+    stop(ft);
+    return SOX_EOF;
+  }
+  return SOX_SUCCESS;
 }
 
 /*
@@ -405,21 +425,6 @@ static size_t read_samples(sox_format_t * ft, sox_sample_t *buf, size_t len)
   /* libsndfile's double entry points normalise to [-1, 1] by default, which
    * is SoX's own scale, so samples are read straight into buf. */
   return (size_t)sf->sf_read_double(sf->sf_file, buf, (sf_count_t)len);
-}
-
-/*
- * Close file for libsndfile (this doesn't close the file handle)
- */
-static int stop(sox_format_t * ft)
-{
-  priv_t * sf = (priv_t *)ft->priv;
-  sf->sf_stop(sf->sf_file);
-  drain_log_buffer(ft);
-  sf->sf_close(sf->sf_file);
-  free((void *)sf->log_buffer);
-  free((void *)sf->sf_info);
-  LSX_DLLIBRARY_CLOSE(sf, sndfile_dl);
-  return SOX_SUCCESS;
 }
 
 static int startwrite(sox_format_t * ft)

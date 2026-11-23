@@ -240,6 +240,51 @@ function Find-Tar {
     return "C:\Windows\System32\tar.exe"
 }
 
+# GNU patch ships with both MSYS2 and Git for Windows.
+function Find-Patch {
+    $candidates = @(
+        "C:\msys64\usr\bin\patch.exe",
+        "C:\msys32\usr\bin\patch.exe",
+        "C:\Program Files\Git\usr\bin\patch.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    $onPath = Get-Command patch.exe -ErrorAction SilentlyContinue
+    if ($onPath) {
+        return $onPath.Source
+    }
+
+    throw "patch not found: install Git for Windows or MSYS2 (pacman -S patch)"
+}
+
+# Applies a patch from patches\ to an extracted source tree with patch -p1.
+# A tree the patch already applies to in reverse is left as it is, so a
+# rebuild over sources patched by an earlier run goes on.
+function Apply-Patch($src, $name) {
+    $patch = Find-Patch
+    $patchFile = Join-Path $ScriptDir "patches\$name"
+
+    # The reverse dry run fails on a tree not patched yet: under Stop, its
+    # redirected stderr would end the script on Windows PowerShell and 7.0/7.1.
+    $ErrorActionPreference = "Continue"
+    & $patch -p1 -R -s -f --dry-run -d $src -i $patchFile *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "Patch already applied: $name"
+        return
+    }
+
+    & $patch -p1 -N -s -f -d $src -i $patchFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "Patch failed: $name"
+    }
+    Write-Info "Applied patch: $name"
+}
+
 function Extract-Archive($archive, $dest) {
     Write-Info "Extracting: $(Split-Path -Leaf $archive)"
 
@@ -924,6 +969,9 @@ function Build-MonkeysAudio {
 # The SV8 bit reader and writer each define a table named log2, which clashes
 # with the C99 function declared by the UCRT headers; both are renamed
 # mpc_log2.
+#
+# patches\musepack\r475-encoder-state.patch resets the encoder state that r475
+# carries from one file to the next in the same process.
 function Build-Musepack {
     Write-Info "========== Building Musepack $($Versions.musepack) =========="
 
@@ -939,6 +987,7 @@ function Build-Musepack {
     if (-not (Test-Path $src)) {
         Extract-Archive $archive $SrcDir
     }
+    Apply-Patch $src "musepack\r475-encoder-state.patch"
 
     foreach ($file in @("libmpcdec\mpc_bits_reader.c", "libmpcenc\bitstream.c")) {
         $path = Join-Path $src $file

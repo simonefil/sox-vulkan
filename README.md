@@ -36,6 +36,7 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 - CMake 3.15 or later
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
+- GNU patch, from Git for Windows or MSYS2 (`pacman -S patch`), unless `-NoMusepack` is given
 - Git (optional, for cloning)
 
 **Environment:**
@@ -90,7 +91,7 @@ SoX requires Vulkan-Headers 1.3.270 or later for `VK_EXT_frame_boundary`. Debian
 ```bash
 sudo dnf install -y \
   gcc gcc-c++ make cmake git curl pkgconf-pkg-config \
-  autoconf automake libtool xz bzip2 unzip
+  autoconf automake libtool xz bzip2 unzip patch
 ```
 
 **Optional:**

@@ -170,6 +170,24 @@ check_command() {
     fi
 }
 
+# Applies a patch from patches/ to an extracted source tree with patch -p1.
+# A tree the patch already applies to in reverse is left as it is, so a
+# rebuild over sources patched by an earlier run goes on.
+apply_patch() {
+    local src="$1"
+    local patch_file="${SCRIPT_DIR}/patches/$2"
+
+    if patch -p1 -R -s -f --dry-run -d "$src" < "$patch_file" > /dev/null 2>&1; then
+        log_info "Patch already applied: $2"
+        return
+    fi
+    if ! patch -p1 -N -s -f -d "$src" < "$patch_file"; then
+        log_error "Patch failed: $2"
+        exit 1
+    fi
+    log_info "Applied patch: $2"
+}
+
 # A third argument "--insecure" skips certificate verification; the caller
 # must then check the archive's digest with verify_sha256.
 download_file() {
@@ -842,6 +860,8 @@ EOF
 }
 
 # Musepack: libmpcdec reads SV7 and SV8, libmpcenc and libmpcpsy write SV8.
+# patches/musepack/r475-encoder-state.patch resets the encoder state that r475
+# carries from one file to the next in the same process.
 build_musepack() {
     log_info "========== Building Musepack ${MUSEPACK_VERSION} =========="
 
@@ -856,6 +876,7 @@ build_musepack() {
     if [ ! -d "$src" ]; then
         extract_archive "$archive" "$SRC_DIR"
     fi
+    apply_patch "$src" "musepack/r475-encoder-state.patch"
 
     mkdir -p "${libraries}/build"
     write_musepack_cmakelists > "${libraries}/CMakeLists.txt"
@@ -1236,6 +1257,9 @@ main() {
     check_command "cmake"
     check_command "pkg-config"
     check_command "tar"
+    if [ "${ENABLE_MUSEPACK}" = "ON" ]; then
+        check_command "patch"
+    fi
     if [ "${ENABLE_APE}" = "ON" ]; then
         check_command "unzip"
     fi

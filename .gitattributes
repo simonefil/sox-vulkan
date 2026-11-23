@@ -1,0 +1,2 @@
+# patch -p1 matches the LF line endings of the upstream sources.
+*.patch -text

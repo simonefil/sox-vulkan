@@ -1,0 +1,67 @@
+Musepack r475: reset the encoder state so a process can encode more than one file
+
+libmpcenc and libmpcpsy keep their state in file-scope variables, and two of
+them survive from one encoder to the next:
+
+1. libmpcenc/analy_filter.c defines FASTER, under which Klemm() rearranges
+   and negates part of the static table Ci_opt[512] in place.
+   mpc_encoder_init() calls Klemm() for every encoder, so from the second
+   encoder in the same process on the analysis filter bank runs on a
+   scrambled table and the audio comes out damaged. Klemm() now builds its
+   tables once per process.
+
+2. libmpcpsy/psy.c tracks the loudness used by AdaptLtq() in a function-scope
+   static that Init_Psychoakustik() does not reset, so a second encoder
+   starts from the loudness the previous file ended with and writes
+   different bytes. The variable is moved to file scope and reset by
+   Init_Psychoakustik() together with the other arrays.
+
+With both changes every encoder in a process writes the same bytes as the
+first one.
+
+--- a/libmpcenc/analy_filter.c
++++ b/libmpcenc/analy_filter.c
+@@ -104,10 +104,17 @@
+ void
+ Klemm ( void )
+ {
++    static int  done = 0;
+     int    i;
+     int    k;
+     float  S [512];
+ 
++    // The FASTER block below rearranges Ci_opt in place: running it again
++    // would scramble the table, so the tables are built once per process.
++    if ( done )
++        return;
++    done = 1;
++
+     for ( i=0; i<32; i++ ) {
+         for ( k=0; k<32; k++ ) {
+             M [i*32 + k] = (float) cos ( ((2*i+1)*k & 127) * M_PI/64 );
+--- a/libmpcpsy/psy.c
++++ b/libmpcpsy/psy.c
+@@ -112,6 +112,7 @@
+ static float         tmp_Mask_R [PART_LONG];           // for Post-Masking L/R
+ static int           Vocal_L    [MAX_CVD_LINE + 4];
+ static int           Vocal_R    [MAX_CVD_LINE + 4];    // FFT-Line belongs to harmonic?
++static float         loud;                             // tracked loudness for AdaptLtq
+ 
+ /* F U N C T I O N S */
+ 
+@@ -143,6 +144,7 @@
+ 	memset ( T_R,       0, sizeof T_R     );
+ 	memset ( Vocal_L,   0, sizeof Vocal_L );
+ 	memset ( Vocal_R,   0, sizeof Vocal_R );
++	loud = 0.f;
+ 
+ 	m->SampleFreq = 0.;
+ 	m->BandWidth = 0.;
+@@ -564,7 +566,6 @@
+ static float
+ AdaptLtq ( PsyModel* m, const float* erg0, const float* erg1 )
+ {
+-    static float  loud   = 0.f;
+ 	float*        weight = Loudness;
+     float         sum    = 0.f;
+     int           n;

@@ -3256,8 +3256,10 @@ int main(int argc, char **argv)
     usage("--ignore-length can be given only for an input file");
 
   for (i = 0; i < input_count; i++) {
-    size_t j = input_count - 1 - i; /* Open in reverse order 'cos of rec (below) */
+    /* Open in reverse order when recording (see below) */
+    size_t j = sox_mode == sox_rec ? input_count - 1 - i : i;
     file_t * f = files[j];
+
 
     /* When mixing audio, default to input side volume adjustments that will
      * make sure no clipping will occur.  Users probably won't be happy with

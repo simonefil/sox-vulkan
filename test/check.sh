@@ -45,6 +45,7 @@ args="$*"
 sox=${sox:-sox}
 case "$sox" in
 /*) ;;
+[A-Za-z]:[\\/]*) ;;
 */*) sox="`pwd`/$sox" ;;
 esac
 export sox

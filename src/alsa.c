@@ -107,12 +107,15 @@ static int select_format(
 static lsx_speaker_t const * default_speakers(unsigned channels)
 {
   #define _(x) lsx_speaker_##x
+  static lsx_speaker_t const mono[1] = {_(fc)};
   static lsx_speaker_t const speakers[4][8] = {
     {_(fl), _(fr)},
     {_(fl), _(fr), _(bl), _(br)},
     {_(fl), _(fr), _(bl), _(br), _(fc), _(lfe)},
     {_(fl), _(fr), _(bl), _(br), _(fc), _(lfe), _(sl), _(sr)}};
   #undef _
+  if (channels == 1)
+    return mono;
   return channels >= 2 && channels <= 8 && !(channels & 1)?
     speakers[channels / 2 - 1] : NULL;
 }
@@ -242,7 +245,8 @@ static int setup(sox_format_t * ft)
   _(snd_pcm_hw_params_set_rate_near, (p->pcm, params, &n, 0));
   ft->signal.rate = n;
 
-  /* Set channels: from 3 to 8 placed by speaker, the others as they are */
+  /* Set channels: from 3 to 8 the fewest with a speaker for each; mono and
+   * stereo as near as the device goes, then placed by speaker as well */
   n = ft->signal.channels >= 3 && ft->signal.channels <= 8?
     choose_channels(p->pcm, params, ft->signal.channels, ft->mode == 'w') : 0;
   if (n)
@@ -276,7 +280,7 @@ static int setup(sox_format_t * ft)
   _(snd_pcm_hw_params, (p->pcm, params));           /* Configure ALSA */
   snd_pcm_hw_params_free(params), params = NULL;
   _(snd_pcm_prepare, (p->pcm));
-  if (ft->signal.channels >= 3 && ft->signal.channels <= 8)
+  if (ft->signal.channels <= 8)
     route_channels(ft);
   else ft->signal.channels = p->device_channels;
   p->buf_len *= p->device_channels;                 /* No longer in `frames' */

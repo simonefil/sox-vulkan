@@ -1,0 +1,79 @@
+TwoLAME 0.4.0, MSVC: CMakeLists for the static libtwolame
+
+TwoLAME builds with autotools, which MSVC cannot run. CMakeLists.txt
+compiles libtwolame from its sources and writes the config.h that configure
+would produce.
+
+--- /dev/null
++++ b/CMakeLists.txt
+@@ -0,0 +1,70 @@
++cmake_minimum_required(VERSION 3.14)
++project(twolame C)
++
++set(TWOLAME_SOURCES
++    libtwolame/ath.c
++    libtwolame/availbits.c
++    libtwolame/bitbuffer.c
++    libtwolame/crc.c
++    libtwolame/dab.c
++    libtwolame/encode.c
++    libtwolame/energy.c
++    libtwolame/fft.c
++    libtwolame/get_set.c
++    libtwolame/mem.c
++    libtwolame/psycho_0.c
++    libtwolame/psycho_1.c
++    libtwolame/psycho_2.c
++    libtwolame/psycho_3.c
++    libtwolame/psycho_4.c
++    libtwolame/psycho_n1.c
++    libtwolame/subband.c
++    libtwolame/twolame.c
++    libtwolame/util.c
++)
++
++add_library(twolame STATIC ${TWOLAME_SOURCES})
++
++target_include_directories(twolame PUBLIC
++    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libtwolame>
++    $<INSTALL_INTERFACE:include>
++)
++
++target_compile_definitions(twolame PRIVATE
++    LIBTWOLAME_STATIC
++    _CRT_SECURE_NO_WARNINGS
++    _CRT_NONSTDC_NO_DEPRECATE
++    HAVE_CONFIG_H
++)
++
++if(MSVC)
++    target_compile_options(twolame PRIVATE /wd4244 /wd4305 /wd4018 /wd4267)
++endif()
++
++# Generate config.h for MSVC
++file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/config.h "
++#ifndef CONFIG_H
++#define CONFIG_H
++
++#define HAVE_STDINT_H 1
++#define HAVE_LIMITS_H 1
++#define HAVE_MEMORY_H 1
++#define HAVE_STRING_H 1
++#define STDC_HEADERS 1
++
++#define PACKAGE \"twolame\"
++#define PACKAGE_NAME \"TwoLAME\"
++#define PACKAGE_VERSION \"0.4.0\"
++#define VERSION \"0.4.0\"
++
++#ifdef _MSC_VER
++#define inline __inline
++#endif
++
++#endif /* CONFIG_H */
++")
++
++target_include_directories(twolame PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
++
++install(TARGETS twolame ARCHIVE DESTINATION lib)
++install(FILES libtwolame/twolame.h DESTINATION include)

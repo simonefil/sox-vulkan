@@ -36,6 +36,9 @@
  * When detected on inputs, disable any length logic.
  */
 #define MS_UNSPEC 0x7ffff000
+/* The ones LAME (0x7fffffff), FFmpeg and madplay (UINT32_MAX) write when
+ * they do not know it. */
+#define LAME_UNSPEC 0x7fffffff
 
 #define WAVE_FORMAT_UNKNOWN             0x0000
 #define WAVE_FORMAT_PCM                 0x0001
@@ -898,7 +901,8 @@ static int startread(sox_format_t *ft)
             wav->dataStart = lsx_tell(ft);
             ft->data_start = wav->dataStart;
 
-            if (qwDataLength == UINT32_MAX || qwDataLength == MS_UNSPEC)
+            if (qwDataLength == UINT32_MAX || qwDataLength == LAME_UNSPEC ||
+                qwDataLength == MS_UNSPEC)
                 break;
 
             if (!ft->seekable)
@@ -946,9 +950,11 @@ static int startread(sox_format_t *ft)
     if (wav->numSamples * wav->blockAlign == qwDataLength * ft->signal.channels)
         wav->numSamples /= ft->signal.channels;
 
-    if ((qwDataLength == UINT32_MAX && !wav->numSamples) ||
+    if (qwDataLength == UINT32_MAX || qwDataLength == LAME_UNSPEC ||
         qwDataLength == MS_UNSPEC) {
-        lsx_warn("WAV data length is magic value or UINT32_MAX, ignoring");
+        /* This is to be expected when reading from a pipe */
+        if (ft->seekable)
+            lsx_warn("data length is unspecified; taking it from the file length");
         wav->ignoreSize = 1;
     }
 

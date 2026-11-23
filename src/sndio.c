@@ -26,6 +26,9 @@ struct sndio_priv {
   struct sio_par par;              /* current device parameters */
 #define SNDIO_BUFSZ 0x1000
   unsigned char buf[SNDIO_BUFSZ];  /* temp buffer for converions */
+  lsx_route_t *route;              /* NULL when the channels go as they are */
+  sox_sample_t *frames;            /* playback: the samples in sndio's order */
+  size_t frames_len;
 };
 
 /*
@@ -155,6 +158,17 @@ static int startany(sox_format_t *ft, unsigned mode)
   ft->encoding.reverse_nibbles = sox_option_no;
   ft->encoding.reverse_bits = sox_option_no;
 
+  /* sndio has no speaker positions; 5.1 and 7.1 are taken in ALSA's order,
+   * as mpv does, and the other counts go as they are. */
+  if (ft->signal.channels == 6 || ft->signal.channels == 8) {
+    #define _(x) lsx_speaker_##x
+    static lsx_speaker_t const speakers[8] =
+      {_(fl), _(fr), _(bl), _(br), _(fc), _(lfe), _(sl), _(sr)};
+    #undef _
+    p->route = lsx_malloc(ft->signal.channels * sizeof(*p->route));
+    lsx_route_speakers(p->route, speakers, ft->signal.channels, ft->signal.channels, sox_false);
+  }
+
   if (!sio_start(p->hdl))
     goto failed;
   return SOX_SUCCESS;
@@ -165,7 +179,11 @@ static int startany(sox_format_t *ft, unsigned mode)
 
 static int stopany(sox_format_t *ft)
 {
-  sio_close(((struct sndio_priv *)ft->priv)->hdl);
+  struct sndio_priv *p = (struct sndio_priv *)ft->priv;
+
+  sio_close(p->hdl);
+  free(p->route);
+  free(p->frames);
   return SOX_SUCCESS;
 }
 
@@ -205,7 +223,18 @@ static size_t readsamples(sox_format_t *ft, sox_sample_t *buf, size_t len)
     buf += n / p->par.bps;
     todo -= n;
   }
-  return len - todo / p->par.bps;
+  len -= todo / p->par.bps;
+  if (p->route) {                         /* to SoX's order */
+    unsigned channels = ft->signal.channels, c;
+    sox_sample_t frame[8];
+
+    for (buf -= len, n = 0; n + channels <= len; n += channels) {
+      memcpy(frame, buf + n, channels * sizeof(*frame));
+      for (c = 0; c < channels; ++c)
+        buf[n + p->route[c].channel] = frame[c];
+    }
+  }
+  return len;
 }
 
 static size_t writesamples(sox_format_t *ft, const sox_sample_t *buf, size_t len)
@@ -214,6 +243,18 @@ static size_t writesamples(sox_format_t *ft, const sox_sample_t *buf, size_t len
   unsigned sc, spb;
   size_t n, todo;
 
+  if (p->route) {                         /* to sndio's order */
+    unsigned channels = ft->signal.channels, c;
+
+    if (p->frames_len < len)
+      p->frames = lsx_realloc(p->frames, (p->frames_len = len) * sizeof(*p->frames));
+    for (n = 0; n + channels <= len; n += channels)
+      for (c = 0; c < channels; ++c)
+        p->frames[n + c] = buf[n + p->route[c].channel];
+    for (; n < len; ++n)
+      p->frames[n] = buf[n];
+    buf = p->frames;
+  }
   todo = len;
   spb = SNDIO_BUFSZ / p->par.bps;
   while (todo > 0) {

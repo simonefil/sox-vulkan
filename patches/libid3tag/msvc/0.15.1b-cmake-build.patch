@@ -1,0 +1,77 @@
+libid3tag 0.15.1b, MSVC: CMakeLists for the static libid3tag
+
+libid3tag builds with autotools, which MSVC cannot run. CMakeLists.txt
+compiles the library from its sources against zlib and writes the config.h
+that configure would produce.
+
+--- /dev/null
++++ b/CMakeLists.txt
+@@ -0,0 +1,68 @@
++cmake_minimum_required(VERSION 3.14)
++project(id3tag C)
++
++set(ID3TAG_SOURCES
++    compat.c
++    crc.c
++    debug.c
++    field.c
++    file.c
++    frame.c
++    frametype.c
++    genre.c
++    latin1.c
++    parse.c
++    render.c
++    tag.c
++    ucs4.c
++    utf16.c
++    utf8.c
++    util.c
++    version.c
++)
++
++add_library(id3tag STATIC ${ID3TAG_SOURCES})
++
++# Find zlib
++find_package(ZLIB REQUIRED)
++
++target_include_directories(id3tag PUBLIC
++    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
++    $<INSTALL_INTERFACE:include>
++)
++
++target_link_libraries(id3tag PRIVATE ZLIB::ZLIB)
++
++target_compile_definitions(id3tag PRIVATE
++    _CRT_SECURE_NO_WARNINGS
++    HAVE_CONFIG_H
++)
++
++if(MSVC)
++    target_compile_options(id3tag PRIVATE /wd4244 /wd4267)
++endif()
++
++# Generate config.h for MSVC
++file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/config.h "
++#ifndef CONFIG_H
++#define CONFIG_H
++
++#define HAVE_STDINT_H 1
++#define HAVE_LIMITS_H 1
++#define HAVE_MEMORY_H 1
++#define HAVE_STRING_H 1
++#define STDC_HEADERS 1
++#define HAVE_ZLIB_H 1
++#define HAVE_FTRUNCATE 1
++
++#ifdef _MSC_VER
++#define ftruncate _chsize
++#endif
++
++#endif /* CONFIG_H */
++")
++
++target_include_directories(id3tag PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
++
++install(TARGETS id3tag ARCHIVE DESTINATION lib)
++install(FILES id3tag.h DESTINATION include)

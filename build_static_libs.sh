@@ -170,22 +170,30 @@ check_command() {
     fi
 }
 
-# Applies a patch from patches/ to an extracted source tree with patch -p1.
-# A tree the patch already applies to in reverse is left as it is, so a
-# rebuild over sources patched by an earlier run goes on.
-apply_patch() {
+# Applies, in name order, the patches of patches/<dependency>/ and then those
+# of patches/<dependency>/unix/ to an extracted source tree, with patch -p1.
+# A patch the tree already applies to in reverse is skipped, so a rebuild over
+# sources patched by an earlier run goes on.
+apply_patches() {
     local src="$1"
-    local patch_file="${SCRIPT_DIR}/patches/$2"
+    local dependency="$2"
+    local patch_file
 
-    if patch -p1 -R -s -f --dry-run -d "$src" < "$patch_file" > /dev/null 2>&1; then
-        log_info "Patch already applied: $2"
-        return
-    fi
-    if ! patch -p1 -N -s -f -d "$src" < "$patch_file"; then
-        log_error "Patch failed: $2"
-        exit 1
-    fi
-    log_info "Applied patch: $2"
+    for patch_file in "${SCRIPT_DIR}/patches/${dependency}"/*.patch \
+            "${SCRIPT_DIR}/patches/${dependency}/unix"/*.patch; do
+        [ -f "$patch_file" ] || continue
+        local name="${patch_file#"${SCRIPT_DIR}/patches/"}"
+
+        if patch -p1 -R -s -f --dry-run -d "$src" < "$patch_file" > /dev/null 2>&1; then
+            log_info "Patch already applied: ${name}"
+            continue
+        fi
+        if ! patch -p1 -N -s -f -d "$src" < "$patch_file"; then
+            log_error "Patch failed: ${name}"
+            exit 1
+        fi
+        log_info "Applied patch: ${name}"
+    done
 }
 
 # A third argument "--insecure" skips certificate verification; the caller
@@ -577,48 +585,6 @@ build_ffmpeg() {
     log_success "FFmpeg installed"
 }
 
-# Update outdated config.guess/config.sub for ARM64 support.
-#
-# Several autotools tarballs predate arm64-apple-darwin.  The replacement
-# comes from the unpacked libtool source when available, else from GNU config,
-# and is validated before use so a saved proxy error page cannot overwrite
-# config.guess.
-update_config_scripts() {
-    local dir="$1"
-    log_info "Updating config.guess/config.sub for ARM64 compatibility..."
-
-    local script
-    for script in config.guess config.sub; do
-        local destination="${dir}/${script}"
-        local temporary="${destination}.tmp.$$"
-        local local_copy="${SRC_DIR}/libtool-${LIBTOOL_VERSION}/build-aux/${script}"
-
-        [ -f "$destination" ] || continue
-        rm -f "$temporary"
-
-        if [ -s "$local_copy" ]; then
-            cp "$local_copy" "$temporary"
-        elif command -v curl &> /dev/null; then
-            curl --fail --silent --show-error --location \
-                "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" \
-                --output "$temporary" || true
-        elif command -v wget &> /dev/null; then
-            wget -q "https://git.savannah.gnu.org/cgit/config.git/plain/${script}" -O "$temporary" || true
-        fi
-
-        if [ -s "$temporary" ] &&
-                head -n 1 "$temporary" | grep -q '^#!' &&
-                grep -q 'GNU config' "$temporary"; then
-            chmod +x "$temporary"
-            mv "$temporary" "$destination"
-        else
-            rm -f "$temporary"
-            log_error "Could not download a valid ${script}"
-            return 1
-        fi
-    done
-}
-
 build_libmad() {
     log_info "========== Building libmad ${LIBMAD_VERSION} =========="
 
@@ -709,10 +675,9 @@ build_libid3tag() {
         extract_archive "$archive" "$SRC_DIR"
     fi
 
-    cd "$src"
+    apply_patches "$src" "libid3tag"
 
-    # Update config.guess/config.sub for ARM64 support
-    update_config_scripts "$src"
+    cd "$src"
 
     ./configure $(get_common_flags) \
         CPPFLAGS="-I${STATIC_LIBS_DIR}/include" \
@@ -752,11 +717,9 @@ build_wavpack() {
 # Monkey's Audio SDK: libMAC, the C++ library SoX reads and writes APE with.
 #
 # The zip has no top-level directory, so it is unpacked into one of its own.
-# Two files are dropped: MD5.cpp (RSA's reference MD5, under its own licence;
-# SoX defines the three MD5 functions the library calls) and MACDll.cpp (the
-# SDK DLL's C interface, unused, and it includes MFC under MSVC).  The frame
-# decoder and encoder are declared in headers the SDK does not install, so all
-# headers are copied beside the public ones.
+# patches/monkeysaudio/ drops MD5.cpp and MACDll.cpp from the build.  The
+# frame decoder and encoder are declared in headers the SDK does not install,
+# so all headers are copied beside the public ones.
 build_monkeys_audio() {
     log_info "========== Building Monkey's Audio SDK ${MAC_SDK_VERSION} =========="
 
@@ -773,14 +736,9 @@ build_monkeys_audio() {
         extract_archive "$archive" "$src"
     fi
 
+    apply_patches "$src" "monkeysaudio"
+
     cd "$src"
-
-    sed -i.bak -e '/Source\/MACLib\/MD5\.cpp/d' -e '/Source\/MACDll\/MACDll\.cpp/d' CMakeLists.txt
-    if grep -Eq 'MACLib/MD5\.cpp|MACDll/MACDll\.cpp' CMakeLists.txt; then
-        log_error "Could not remove MD5.cpp and MACDll.cpp from the Monkey's Audio SDK build"
-        exit 1
-    fi
-
     mkdir -p build && cd build
 
     cmake .. $(get_cmake_flags) \
@@ -796,72 +754,10 @@ build_monkeys_audio() {
     log_success "Monkey's Audio SDK installed"
 }
 
-# CMakeLists for libmpcdec, libmpcenc and libmpcpsy only: upstream's also
-# builds the command-line tools, whose libcuefile r475 fails on current clang.
-# Flags are upstream's (FAST_MATH, CVD_FASTLOG), matched by SoX's encoder.
-# build_static_libs.ps1 writes the same file.
-write_musepack_cmakelists() {
-    cat <<'EOF'
-cmake_minimum_required(VERSION 3.15)
-project(musepack C)
-
-set(MPC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
-
-add_compile_definitions(FAST_MATH CVD_FASTLOG)
-if(MSVC)
-    add_compile_definitions(_CRT_SECURE_NO_DEPRECATE)
-else()
-    # requant.h declares its tables without extern, which needs common
-    # symbols (off by default since GCC 10); libmpcpsy's ans.c passes an
-    # int * for a const int (*)[3], an error since GCC 14.
-    add_compile_options(-fomit-frame-pointer -fcommon -Wno-error=incompatible-pointer-types)
-endif()
-include_directories("${MPC_ROOT}/include")
-
-add_library(mpcdec STATIC
-    ${MPC_ROOT}/libmpcdec/huffman.c
-    ${MPC_ROOT}/libmpcdec/mpc_decoder.c
-    ${MPC_ROOT}/libmpcdec/mpc_reader.c
-    ${MPC_ROOT}/libmpcdec/streaminfo.c
-    ${MPC_ROOT}/libmpcdec/mpc_bits_reader.c
-    ${MPC_ROOT}/libmpcdec/mpc_demux.c
-    ${MPC_ROOT}/libmpcdec/requant.c
-    ${MPC_ROOT}/libmpcdec/synth_filter.c
-    ${MPC_ROOT}/common/crc32.c
-)
-
-add_library(mpcenc STATIC
-    ${MPC_ROOT}/libmpcenc/analy_filter.c
-    ${MPC_ROOT}/libmpcenc/bitstream.c
-    ${MPC_ROOT}/libmpcenc/encode_sv7.c
-    ${MPC_ROOT}/libmpcenc/huffsv7.c
-    ${MPC_ROOT}/libmpcenc/quant.c
-    ${MPC_ROOT}/common/crc32.c
-)
-
-add_library(mpcpsy STATIC
-    ${MPC_ROOT}/libmpcpsy/ans.c
-    ${MPC_ROOT}/libmpcpsy/cvd.c
-    ${MPC_ROOT}/libmpcpsy/fft4g.c
-    ${MPC_ROOT}/libmpcpsy/fft_routines.c
-    ${MPC_ROOT}/libmpcpsy/profile.c
-    ${MPC_ROOT}/libmpcpsy/psy.c
-    ${MPC_ROOT}/libmpcpsy/psy_tab.c
-    ${MPC_ROOT}/common/fastmath.c
-)
-
-install(TARGETS mpcdec mpcenc mpcpsy ARCHIVE DESTINATION lib)
-file(GLOB MPC_HEADERS "${MPC_ROOT}/include/mpc/*.h")
-install(FILES ${MPC_HEADERS}
-    "${MPC_ROOT}/libmpcenc/libmpcenc.h"
-    "${MPC_ROOT}/libmpcpsy/libmpcpsy.h"
-    DESTINATION include/mpc)
-EOF
-}
-
 # Musepack: libmpcdec reads SV7 and SV8, libmpcenc and libmpcpsy write SV8.
-# patches/musepack/r475-encoder-state.patch resets the encoder state that r475
-# carries from one file to the next in the same process.
+# patches/musepack/ adds sox-libraries/CMakeLists.txt, which builds the three
+# libraries without upstream's command-line tools, and resets the encoder
+# state that r475 carries from one file to the next in the same process.
 build_musepack() {
     log_info "========== Building Musepack ${MUSEPACK_VERSION} =========="
 
@@ -876,10 +772,9 @@ build_musepack() {
     if [ ! -d "$src" ]; then
         extract_archive "$archive" "$SRC_DIR"
     fi
-    apply_patch "$src" "musepack/r475-encoder-state.patch"
+    apply_patches "$src" "musepack"
 
     mkdir -p "${libraries}/build"
-    write_musepack_cmakelists > "${libraries}/CMakeLists.txt"
     cd "${libraries}/build"
 
     cmake .. $(get_cmake_flags)
@@ -1257,9 +1152,7 @@ main() {
     check_command "cmake"
     check_command "pkg-config"
     check_command "tar"
-    if [ "${ENABLE_MUSEPACK}" = "ON" ]; then
-        check_command "patch"
-    fi
+    check_command "patch"
     if [ "${ENABLE_APE}" = "ON" ]; then
         check_command "unzip"
     fi

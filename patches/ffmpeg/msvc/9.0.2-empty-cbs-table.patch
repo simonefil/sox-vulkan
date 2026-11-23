@@ -1,0 +1,27 @@
+FFmpeg 9.0.2, MSVC: end the coded-bitstream type loop on a NULL sentinel
+
+cbs_type_table in libavcodec/cbs.c gets one entry per coded-bitstream type
+through #ifdefs. None of the codecs SoX enables adds one, so with
+--disable-everything the array is empty, a GNU extension MSVC rejects. The
+table gains a NULL sentinel and CBS_FUNC(init) stops on it instead of on
+FF_ARRAY_ELEMS.
+
+--- a/libavcodec/cbs.c
++++ b/libavcodec/cbs.c
+@@ -61,6 +61,7 @@
+ #if CBS_VP9
+     &CBS_FUNC(type_vp9),
+ #endif
++    NULL,
+ };
+ 
+ av_cold int CBS_FUNC(init)(CodedBitstreamContext **ctx_ptr,
+@@ -71,7 +72,7 @@
+     int i;
+ 
+     type = NULL;
+-    for (i = 0; i < FF_ARRAY_ELEMS(cbs_type_table); i++) {
++    for (i = 0; cbs_type_table[i]; i++) {
+         if (cbs_type_table[i]->codec_id == codec_id) {
+             type = cbs_type_table[i];
+             break;

@@ -36,7 +36,7 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 - CMake 3.15 or later
 - MSYS2 with GNU Make, diffutils, and pkgconf (required for the static FFmpeg build)
 - NASM (available in the MSYS2 environment)
-- GNU patch, from Git for Windows or MSYS2 (`pacman -S patch`), unless `-NoMusepack` is given
+- GNU patch, from Git for Windows or MSYS2 (`pacman -S patch`)
 - Git (optional, for cloning)
 
 **Environment:**
@@ -63,7 +63,7 @@ SoX is a command-line audio processing tool for converting, processing, recordin
 sudo apt-get update
 sudo apt-get install -y \
   build-essential cmake git curl pkg-config \
-  autoconf automake libtool xz-utils bzip2 unzip
+  autoconf automake libtool xz-utils bzip2 unzip patch
 ```
 
 **Optional (for audio drivers):**
@@ -112,7 +112,7 @@ sudo dnf install -y vulkan-loader-devel vulkan-headers glslc glslang-devel
 
 **Required:**
 ```bash
-sudo pacman -S base-devel cmake git curl xz bzip2 unzip
+sudo pacman -S base-devel cmake git curl xz bzip2 unzip patch
 ```
 
 **Optional:**
@@ -129,7 +129,7 @@ sudo pacman -S vulkan-icd-loader vulkan-headers shaderc glslang
 
 **Required:**
 ```bash
-# Install Xcode Command Line Tools
+# Install Xcode Command Line Tools (they include patch)
 xcode-select --install
 
 # Install Homebrew (if not installed)
@@ -166,6 +166,8 @@ brew install nasm
 ```bash
 sudo pkg install bash cmake git curl gmake autoconf automake libtool pkgconf nasm
 ```
+
+`patch` is part of the FreeBSD base system.
 
 **Required by the `--vulkan` build option:**
 ```bash

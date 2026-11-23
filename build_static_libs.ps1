@@ -4,7 +4,8 @@
 #
 # Usage: .\build_static_libs.ps1 [OPTIONS]
 #
-# Requirements: Visual Studio 2019 or later, PowerShell 7, CMake, Git, MSYS2, NASM
+# Requirements: Visual Studio 2019 or later, PowerShell 7, CMake, Git, MSYS2, NASM,
+# GNU patch
 #
 
 param(
@@ -259,30 +260,49 @@ function Find-Patch {
         return $onPath.Source
     }
 
-    throw "patch not found: install Git for Windows or MSYS2 (pacman -S patch)"
+    return $null
 }
 
-# Applies a patch from patches\ to an extracted source tree with patch -p1.
-# A tree the patch already applies to in reverse is left as it is, so a
-# rebuild over sources patched by an earlier run goes on.
-function Apply-Patch($src, $name) {
-    $patch = Find-Patch
-    $patchFile = Join-Path $ScriptDir "patches\$name"
+# Global patch path
+$script:PatchPath = $null
 
-    # The reverse dry run fails on a tree not patched yet: under Stop, its
-    # redirected stderr would end the script on Windows PowerShell and 7.0/7.1.
-    $ErrorActionPreference = "Continue"
-    & $patch -p1 -R -s -f --dry-run -d $src -i $patchFile *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info "Patch already applied: $name"
-        return
-    }
+# Applies, in name order, the patches of patches\<dependency>\ and then those
+# of patches\<dependency>\msvc\ to an extracted source tree, with patch -p1.
+# A patch the tree already applies to in reverse is skipped, so a rebuild over
+# sources patched by an earlier run goes on.
+function Apply-Patches($src, $dependency) {
+    $patchRoot = Join-Path $ScriptDir "patches"
+    $directories = @(
+        (Join-Path $patchRoot $dependency)
+        (Join-Path $patchRoot (Join-Path $dependency "msvc"))
+    )
 
-    & $patch -p1 -N -s -f -d $src -i $patchFile
-    if ($LASTEXITCODE -ne 0) {
-        throw "Patch failed: $name"
+    foreach ($directory in $directories) {
+        if (-not (Test-Path -LiteralPath $directory)) {
+            continue
+        }
+
+        $patchFiles = Get-ChildItem -LiteralPath $directory -Filter "*.patch" -File | Sort-Object Name
+        foreach ($patchFile in $patchFiles) {
+            $name = $patchFile.FullName.Substring($patchRoot.Length + 1)
+
+            # The reverse dry run fails on a tree not patched yet: under Stop,
+            # its redirected stderr would end the script on Windows PowerShell
+            # and 7.0/7.1.
+            $ErrorActionPreference = "Continue"
+            & $script:PatchPath -p1 -R -s -f --dry-run -d $src -i $patchFile.FullName *> $null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Info "Patch already applied: $name"
+                continue
+            }
+
+            & $script:PatchPath -p1 -N -s -f -d $src -i $patchFile.FullName
+            if ($LASTEXITCODE -ne 0) {
+                throw "Patch failed: $name"
+            }
+            Write-Info "Applied patch: $name"
+        }
     }
-    Write-Info "Applied patch: $name"
 }
 
 function Extract-Archive($archive, $dest) {
@@ -609,93 +629,7 @@ function Build-Lame {
         Extract-Archive $archive $SrcDir
     }
 
-    # Create CMakeLists.txt for LAME
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-
-    # Always recreate to ensure correct version
-    $cmakeContent = @"
-cmake_minimum_required(VERSION 3.14)
-project(lame C)
-
-# Collect source files
-set(LAME_SOURCES
-    libmp3lame/bitstream.c
-    libmp3lame/encoder.c
-    libmp3lame/fft.c
-    libmp3lame/gain_analysis.c
-    libmp3lame/id3tag.c
-    libmp3lame/lame.c
-    libmp3lame/mpglib_interface.c
-    libmp3lame/newmdct.c
-    libmp3lame/presets.c
-    libmp3lame/psymodel.c
-    libmp3lame/quantize.c
-    libmp3lame/quantize_pvt.c
-    libmp3lame/reservoir.c
-    libmp3lame/set_get.c
-    libmp3lame/tables.c
-    libmp3lame/takehiro.c
-    libmp3lame/util.c
-    libmp3lame/vbrquantize.c
-    libmp3lame/VbrTag.c
-    libmp3lame/version.c
-)
-
-# Add vector sources if not on ARM
-if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
-    list(APPEND LAME_SOURCES libmp3lame/vector/xmm_quantize_sub.c)
-endif()
-
-add_library(mp3lame STATIC `${LAME_SOURCES})
-
-# The source root is on the path for mpglib_interface.c's "mpglib/mpglib.h"
-target_include_directories(mp3lame PUBLIC
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}>
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/include>
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/libmp3lame>
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_BINARY_DIR}>
-    `$<INSTALL_INTERFACE:include>
-)
-
-target_compile_definitions(mp3lame PRIVATE
-    HAVE_CONFIG_H
-    _CRT_SECURE_NO_WARNINGS
-    _CRT_NONSTDC_NO_DEPRECATE
-)
-
-if(MSVC)
-    target_compile_options(mp3lame PRIVATE /wd4244 /wd4305 /wd4018 /wd4267)
-endif()
-
-# Generate config.h for MSVC
-file(WRITE `${CMAKE_CURRENT_BINARY_DIR}/config.h "
-#ifndef CONFIG_H
-#define CONFIG_H
-
-#define HAVE_STDINT_H 1
-#define HAVE_LIMITS_H 1
-#define HAVE_MEMORY_H 1
-#define HAVE_STRING_H 1
-#define STDC_HEADERS 1
-
-/* Define IEEE754 float type */
-typedef float ieee754_float32_t;
-
-/* Disable inline for MSVC compatibility */
-#ifdef _MSC_VER
-#define inline __inline
-#endif
-
-#define TAKEHIRO_IEEE754_HACK 1
-#define USE_FAST_LOG 1
-
-#endif /* CONFIG_H */
-")
-
-install(TARGETS mp3lame ARCHIVE DESTINATION lib)
-install(FILES include/lame.h DESTINATION include/lame)
-"@
-    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
+    Apply-Patches $src "lame"
 
     Build-CMakeProject $src
 
@@ -715,82 +649,7 @@ function Build-Twolame {
         Extract-Archive $archive $SrcDir
     }
 
-    # TwoLAME uses autotools, we need to create a CMakeLists.txt
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-
-    $cmakeContent = @"
-cmake_minimum_required(VERSION 3.14)
-project(twolame C)
-
-set(TWOLAME_SOURCES
-    libtwolame/ath.c
-    libtwolame/availbits.c
-    libtwolame/bitbuffer.c
-    libtwolame/crc.c
-    libtwolame/dab.c
-    libtwolame/encode.c
-    libtwolame/energy.c
-    libtwolame/fft.c
-    libtwolame/get_set.c
-    libtwolame/mem.c
-    libtwolame/psycho_0.c
-    libtwolame/psycho_1.c
-    libtwolame/psycho_2.c
-    libtwolame/psycho_3.c
-    libtwolame/psycho_4.c
-    libtwolame/psycho_n1.c
-    libtwolame/subband.c
-    libtwolame/twolame.c
-    libtwolame/util.c
-)
-
-add_library(twolame STATIC `${TWOLAME_SOURCES})
-
-target_include_directories(twolame PUBLIC
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}/libtwolame>
-    `$<INSTALL_INTERFACE:include>
-)
-
-target_compile_definitions(twolame PRIVATE
-    LIBTWOLAME_STATIC
-    _CRT_SECURE_NO_WARNINGS
-    _CRT_NONSTDC_NO_DEPRECATE
-    HAVE_CONFIG_H
-)
-
-if(MSVC)
-    target_compile_options(twolame PRIVATE /wd4244 /wd4305 /wd4018 /wd4267)
-endif()
-
-# Generate config.h for MSVC
-file(WRITE `${CMAKE_CURRENT_BINARY_DIR}/config.h "
-#ifndef CONFIG_H
-#define CONFIG_H
-
-#define HAVE_STDINT_H 1
-#define HAVE_LIMITS_H 1
-#define HAVE_MEMORY_H 1
-#define HAVE_STRING_H 1
-#define STDC_HEADERS 1
-
-#define PACKAGE \"twolame\"
-#define PACKAGE_NAME \"TwoLAME\"
-#define PACKAGE_VERSION \"$($Versions.twolame)\"
-#define VERSION \"$($Versions.twolame)\"
-
-#ifdef _MSC_VER
-#define inline __inline
-#endif
-
-#endif /* CONFIG_H */
-")
-
-target_include_directories(twolame PRIVATE `${CMAKE_CURRENT_BINARY_DIR})
-
-install(TARGETS twolame ARCHIVE DESTINATION lib)
-install(FILES libtwolame/twolame.h DESTINATION include)
-"@
-    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
+    Apply-Patches $src "twolame"
 
     Build-CMakeProject $src
 
@@ -810,80 +669,7 @@ function Build-Libid3tag {
         Extract-Archive $archive $SrcDir
     }
 
-    # Create CMakeLists.txt for libid3tag
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-
-    $cmakeContent = @"
-cmake_minimum_required(VERSION 3.14)
-project(id3tag C)
-
-set(ID3TAG_SOURCES
-    compat.c
-    crc.c
-    debug.c
-    field.c
-    file.c
-    frame.c
-    frametype.c
-    genre.c
-    latin1.c
-    parse.c
-    render.c
-    tag.c
-    ucs4.c
-    utf16.c
-    utf8.c
-    util.c
-    version.c
-)
-
-add_library(id3tag STATIC `${ID3TAG_SOURCES})
-
-# Find zlib
-find_package(ZLIB REQUIRED)
-
-target_include_directories(id3tag PUBLIC
-    `$<BUILD_INTERFACE:`${CMAKE_CURRENT_SOURCE_DIR}>
-    `$<INSTALL_INTERFACE:include>
-)
-
-target_link_libraries(id3tag PRIVATE ZLIB::ZLIB)
-
-target_compile_definitions(id3tag PRIVATE
-    _CRT_SECURE_NO_WARNINGS
-    HAVE_CONFIG_H
-)
-
-if(MSVC)
-    target_compile_options(id3tag PRIVATE /wd4244 /wd4267)
-endif()
-
-# Generate config.h for MSVC
-file(WRITE `${CMAKE_CURRENT_BINARY_DIR}/config.h "
-#ifndef CONFIG_H
-#define CONFIG_H
-
-#define HAVE_STDINT_H 1
-#define HAVE_LIMITS_H 1
-#define HAVE_MEMORY_H 1
-#define HAVE_STRING_H 1
-#define STDC_HEADERS 1
-#define HAVE_ZLIB_H 1
-#define HAVE_FTRUNCATE 1
-
-#ifdef _MSC_VER
-#define ftruncate _chsize
-#endif
-
-#endif /* CONFIG_H */
-")
-
-target_include_directories(id3tag PRIVATE `${CMAKE_CURRENT_BINARY_DIR})
-
-install(TARGETS id3tag ARCHIVE DESTINATION lib)
-install(FILES id3tag.h DESTINATION include)
-"@
-    Set-Content -Path $cmakeFile -Value $cmakeContent -Force
+    Apply-Patches $src "libid3tag"
 
     Build-CMakeProject $src @(
         "-DZLIB_LIBRARY=$ZlibLibrary"
@@ -917,11 +703,9 @@ function Build-Wavpack {
 # Monkey's Audio SDK: libMAC, the C++ library SoX reads and writes APE with.
 #
 # The zip has no top-level directory, so it is unpacked into one of its own.
-# MD5.cpp (RSA's reference MD5, own licence) is dropped: SoX defines the three
-# MD5 functions the library calls. MACDll.cpp, the DLL's C interface, is
-# dropped: SoX does not use it and under MSVC it includes MFC. The SDK's GCC
-# warning options are dropped, since cl rejects -Wextra. The frame decoder
-# and encoder headers are not installed by the SDK, so all headers are copied
+# patches\monkeysaudio\ drops MD5.cpp and MACDll.cpp from the build, and its
+# msvc\ folder the GCC warning options cl rejects. The frame decoder and
+# encoder headers are not installed by the SDK, so all headers are copied
 # beside the public ones. The C++ runtime is static (Get-CMakeFlags).
 function Build-MonkeysAudio {
     Write-Info "========== Building Monkey's Audio SDK $($Versions.mac) =========="
@@ -939,12 +723,7 @@ function Build-MonkeysAudio {
         Extract-Archive $archive $src
     }
 
-    $cmakeFile = Join-Path $src "CMakeLists.txt"
-    $cmakeLines = (Get-Content -LiteralPath $cmakeFile) -notmatch 'Source/MACLib/MD5\.cpp|Source/MACDll/MACDll\.cpp|add_compile_options\(-Wall -Wextra\)'
-    Set-Content -LiteralPath $cmakeFile -Value $cmakeLines
-    if (Select-String -LiteralPath $cmakeFile -Pattern 'MACLib/MD5\.cpp|MACDll/MACDll\.cpp|-Wextra' -Quiet) {
-        throw "Could not remove MD5.cpp, MACDll.cpp and -Wextra from the Monkey's Audio SDK build"
-    }
+    Apply-Patches $src "monkeysaudio"
 
     Build-CMakeProject $src @(
         "-DBUILD_SHARED=OFF"
@@ -961,17 +740,10 @@ function Build-MonkeysAudio {
 
 # Musepack: libmpcdec reads SV7 and SV8, libmpcenc and libmpcpsy write SV8.
 #
-# The three libraries are compiled from our own CMakeLists beside the sources,
-# without upstream's command-line tools, whose libcuefile r475 no longer
-# compiles with a current clang. The flags are upstream's, FAST_MATH and
-# CVD_FASTLOG, matched by SoX's encoder; build_static_libs.sh writes the same.
-#
-# The SV8 bit reader and writer each define a table named log2, which clashes
-# with the C99 function declared by the UCRT headers; both are renamed
-# mpc_log2.
-#
-# patches\musepack\r475-encoder-state.patch resets the encoder state that r475
-# carries from one file to the next in the same process.
+# patches\musepack\ adds sox-libraries\CMakeLists.txt, which builds the three
+# libraries without upstream's command-line tools, and resets the encoder
+# state that r475 carries from one file to the next in the same process; its
+# msvc\ folder renames the SV8 log2 tables, which clash with the UCRT.
 function Build-Musepack {
     Write-Info "========== Building Musepack $($Versions.musepack) =========="
 
@@ -987,73 +759,7 @@ function Build-Musepack {
     if (-not (Test-Path $src)) {
         Extract-Archive $archive $SrcDir
     }
-    Apply-Patch $src "musepack\r475-encoder-state.patch"
-
-    foreach ($file in @("libmpcdec\mpc_bits_reader.c", "libmpcenc\bitstream.c")) {
-        $path = Join-Path $src $file
-        $text = [IO.File]::ReadAllText($path) -replace '\blog2\[', 'mpc_log2['
-        [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
-    }
-
-    New-Item -ItemType Directory -Path $libraries -Force | Out-Null
-    $cmakeContent = @'
-cmake_minimum_required(VERSION 3.15)
-project(musepack C)
-
-set(MPC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
-
-add_compile_definitions(FAST_MATH CVD_FASTLOG)
-if(MSVC)
-    add_compile_definitions(_CRT_SECURE_NO_DEPRECATE)
-else()
-    # The sources predate two GCC defaults.  requant.h declares its tables
-    # without extern, which links only with common symbols (GCC 10 stopped
-    # making them).  libmpcpsy's ans.c passes an int * where a
-    # const int (*)[3] is declared, which GCC 14 made an error.
-    add_compile_options(-fomit-frame-pointer -fcommon -Wno-error=incompatible-pointer-types)
-endif()
-include_directories("${MPC_ROOT}/include")
-
-add_library(mpcdec STATIC
-    ${MPC_ROOT}/libmpcdec/huffman.c
-    ${MPC_ROOT}/libmpcdec/mpc_decoder.c
-    ${MPC_ROOT}/libmpcdec/mpc_reader.c
-    ${MPC_ROOT}/libmpcdec/streaminfo.c
-    ${MPC_ROOT}/libmpcdec/mpc_bits_reader.c
-    ${MPC_ROOT}/libmpcdec/mpc_demux.c
-    ${MPC_ROOT}/libmpcdec/requant.c
-    ${MPC_ROOT}/libmpcdec/synth_filter.c
-    ${MPC_ROOT}/common/crc32.c
-)
-
-add_library(mpcenc STATIC
-    ${MPC_ROOT}/libmpcenc/analy_filter.c
-    ${MPC_ROOT}/libmpcenc/bitstream.c
-    ${MPC_ROOT}/libmpcenc/encode_sv7.c
-    ${MPC_ROOT}/libmpcenc/huffsv7.c
-    ${MPC_ROOT}/libmpcenc/quant.c
-    ${MPC_ROOT}/common/crc32.c
-)
-
-add_library(mpcpsy STATIC
-    ${MPC_ROOT}/libmpcpsy/ans.c
-    ${MPC_ROOT}/libmpcpsy/cvd.c
-    ${MPC_ROOT}/libmpcpsy/fft4g.c
-    ${MPC_ROOT}/libmpcpsy/fft_routines.c
-    ${MPC_ROOT}/libmpcpsy/profile.c
-    ${MPC_ROOT}/libmpcpsy/psy.c
-    ${MPC_ROOT}/libmpcpsy/psy_tab.c
-    ${MPC_ROOT}/common/fastmath.c
-)
-
-install(TARGETS mpcdec mpcenc mpcpsy ARCHIVE DESTINATION lib)
-file(GLOB MPC_HEADERS "${MPC_ROOT}/include/mpc/*.h")
-install(FILES ${MPC_HEADERS}
-    "${MPC_ROOT}/libmpcenc/libmpcenc.h"
-    "${MPC_ROOT}/libmpcpsy/libmpcpsy.h"
-    DESTINATION include/mpc)
-'@
-    Set-Content -Path (Join-Path $libraries "CMakeLists.txt") -Value $cmakeContent -Force
+    Apply-Patches $src "musepack"
 
     Build-CMakeProject $libraries
 
@@ -1100,54 +806,6 @@ function Find-MsysBash {
     return $null
 }
 
-# Patches libavcodec/cbs.c for MSVC.
-#
-# cbs_type_table gets one entry per coded-bitstream type through #ifdefs; none
-# of the codecs SoX enables adds one, so with --disable-everything the array
-# is empty, a GNU extension MSVC rejects. The patch appends a NULL sentinel
-# and ends the loop on it instead of on FF_ARRAY_ELEMS. Both edits are
-# idempotent, and each step throws if the source does not match, so an FFmpeg
-# upgrade that reshapes the file stops the build.
-function Patch-FfmpegMsvcEmptyCbsTable($src) {
-    $cbsPath = Join-Path $src "libavcodec\cbs.c"
-    $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cbsPath)
-    $tableDeclaration = "static const CodedBitstreamType *const cbs_type_table[] = {"
-    $oldLoop = "    for (i = 0; i < FF_ARRAY_ELEMS(cbs_type_table); i++) {"
-    $newLoop = "    for (i = 0; cbs_type_table[i]; i++) {"
-    $tableStart = $lines.IndexOf($tableDeclaration)
-
-    if ($tableStart -lt 0) {
-        throw "FFmpeg CBS compatibility patch failed: table declaration not found"
-    }
-
-    $tableEnd = -1
-    for ($i = $tableStart + 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -eq "};") {
-            $tableEnd = $i
-            break
-        }
-    }
-
-    if ($tableEnd -lt 0) {
-        throw "FFmpeg CBS compatibility patch failed: table end not found"
-    }
-
-    if ($lines[$tableEnd - 1] -ne "    NULL,") {
-        $lines.Insert($tableEnd, "    NULL,")
-    }
-
-    $oldLoopIndex = $lines.IndexOf($oldLoop)
-    if ($oldLoopIndex -ge 0) {
-        $lines[$oldLoopIndex] = $newLoop
-    }
-    elseif ($lines.IndexOf($newLoop) -lt 0) {
-        throw "FFmpeg CBS compatibility patch failed: table loop not found"
-    }
-
-    [IO.File]::WriteAllLines($cbsPath, $lines, [Text.UTF8Encoding]::new($false))
-    Write-Info "Applied FFmpeg MSVC empty CBS table compatibility patch"
-}
-
 # FFmpeg's build needs a POSIX shell, so configure and make run under MSYS2
 # bash while --toolchain=msvc keeps cl as the compiler; FFmpeg is the only
 # reason this script needs MSYS2.
@@ -1177,7 +835,7 @@ function Build-Ffmpeg {
         Extract-Archive $archive $SrcDir
     }
 
-    Patch-FfmpegMsvcEmptyCbsTable $src
+    Apply-Patches $src "ffmpeg"
 
     New-Item -ItemType Directory -Path $ffmpegBuild -Force | Out-Null
 
@@ -1409,6 +1067,13 @@ function Main {
         exit 1
     }
     Write-Info "Found CMake: $script:CMakePath"
+
+    $script:PatchPath = Find-Patch
+    if (-not $script:PatchPath) {
+        Write-Err "GNU patch not found. Install Git for Windows, or MSYS2 and run: pacman -S patch"
+        exit 1
+    }
+    Write-Info "Found patch: $script:PatchPath"
 
     if ($EnableVulkan) {
         if (-not $env:VULKAN_SDK) {

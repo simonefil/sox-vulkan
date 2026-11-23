@@ -1,0 +1,24 @@
+Monkey's Audio SDK 13.47: do not compile MD5.cpp and MACDll.cpp
+
+MD5.cpp is RSA's reference MD5, under its own licence; SoX defines the three
+MD5 functions the library calls. MACDll.cpp is the SDK DLL's C interface:
+SoX does not use it, and under MSVC it includes MFC.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -175,7 +175,6 @@
+         ${MAC_OS_SRC})
+ 
+ set(MAC_LIBRARY_SOURCE_FILES
+-        Source/MACDll/MACDll.cpp
+         Source/MACLib/APECompress.cpp
+         Source/MACLib/APECompressCore.cpp
+         Source/MACLib/APECompressCreate.cpp
+@@ -189,7 +188,6 @@
+         Source/MACLib/FloatTransform.cpp
+         Source/MACLib/MACLib.cpp
+         Source/MACLib/MACProgressHelper.cpp
+-        Source/MACLib/MD5.cpp
+         Source/MACLib/NewPredictor.cpp
+         Source/MACLib/NNFilter.cpp
+         Source/MACLib/NNFilterGeneric.cpp

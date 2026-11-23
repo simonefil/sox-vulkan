@@ -1,0 +1,14 @@
+Monkey's Audio SDK 13.47, MSVC: drop the GCC warning options
+
+cl rejects -Wextra, which the SDK's CMakeLists passes to every compiler.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -12,7 +12,6 @@
+ check_cxx_compiler_flag(-Wpedantic HAVE_WPEDANTIC_FLAG)
+ 
+ # Show all the warnings (hopefully there aren't any!)
+-add_compile_options(-Wall -Wextra)
+ 
+ if(HAVE_WPEDANTIC_FLAG)
+   add_compile_options(-Wpedantic)

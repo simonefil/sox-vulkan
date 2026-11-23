@@ -1,0 +1,89 @@
+LAME 4.0, MSVC: CMakeLists for the static libmp3lame
+
+LAME builds with autotools, which MSVC cannot run. CMakeLists.txt compiles
+libmp3lame from its sources, without the frontend and the decoder, and
+writes the config.h that configure would produce.
+
+--- /dev/null
++++ b/CMakeLists.txt
+@@ -0,0 +1,80 @@
++cmake_minimum_required(VERSION 3.14)
++project(lame C)
++
++# Collect source files
++set(LAME_SOURCES
++    libmp3lame/bitstream.c
++    libmp3lame/encoder.c
++    libmp3lame/fft.c
++    libmp3lame/gain_analysis.c
++    libmp3lame/id3tag.c
++    libmp3lame/lame.c
++    libmp3lame/mpglib_interface.c
++    libmp3lame/newmdct.c
++    libmp3lame/presets.c
++    libmp3lame/psymodel.c
++    libmp3lame/quantize.c
++    libmp3lame/quantize_pvt.c
++    libmp3lame/reservoir.c
++    libmp3lame/set_get.c
++    libmp3lame/tables.c
++    libmp3lame/takehiro.c
++    libmp3lame/util.c
++    libmp3lame/vbrquantize.c
++    libmp3lame/VbrTag.c
++    libmp3lame/version.c
++)
++
++# Add vector sources if not on ARM
++if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
++    list(APPEND LAME_SOURCES libmp3lame/vector/xmm_quantize_sub.c)
++endif()
++
++add_library(mp3lame STATIC ${LAME_SOURCES})
++
++# The source root is on the path for mpglib_interface.c's "mpglib/mpglib.h"
++target_include_directories(mp3lame PUBLIC
++    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
++    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
++    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libmp3lame>
++    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
++    $<INSTALL_INTERFACE:include>
++)
++
++target_compile_definitions(mp3lame PRIVATE
++    HAVE_CONFIG_H
++    _CRT_SECURE_NO_WARNINGS
++    _CRT_NONSTDC_NO_DEPRECATE
++)
++
++if(MSVC)
++    target_compile_options(mp3lame PRIVATE /wd4244 /wd4305 /wd4018 /wd4267)
++endif()
++
++# Generate config.h for MSVC
++file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/config.h "
++#ifndef CONFIG_H
++#define CONFIG_H
++
++#define HAVE_STDINT_H 1
++#define HAVE_LIMITS_H 1
++#define HAVE_MEMORY_H 1
++#define HAVE_STRING_H 1
++#define STDC_HEADERS 1
++
++/* Define IEEE754 float type */
++typedef float ieee754_float32_t;
++
++/* Disable inline for MSVC compatibility */
++#ifdef _MSC_VER
++#define inline __inline
++#endif
++
++#define TAKEHIRO_IEEE754_HACK 1
++#define USE_FAST_LOG 1
++
++#endif /* CONFIG_H */
++")
++
++install(TARGETS mp3lame ARCHIVE DESTINATION lib)
++install(FILES include/lame.h DESTINATION include/lame)

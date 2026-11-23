@@ -1,0 +1,64 @@
+Musepack r475: CMakeLists for libmpcdec, libmpcenc and libmpcpsy only
+
+Upstream's CMakeLists also builds the command-line tools, whose libcuefile
+r475 no longer compiles with a current clang. sox-libraries/CMakeLists.txt
+builds the three libraries from the sources beside it. The flags are
+upstream's, FAST_MATH and CVD_FASTLOG, matched by SoX's encoder.
+
+--- /dev/null
++++ b/sox-libraries/CMakeLists.txt
+@@ -0,0 +1,54 @@
++cmake_minimum_required(VERSION 3.15)
++project(musepack C)
++
++set(MPC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
++
++add_compile_definitions(FAST_MATH CVD_FASTLOG)
++if(MSVC)
++    add_compile_definitions(_CRT_SECURE_NO_DEPRECATE)
++else()
++    # requant.h declares its tables without extern, which needs common
++    # symbols (off by default since GCC 10); libmpcpsy's ans.c passes an
++    # int * for a const int (*)[3], an error since GCC 14.
++    add_compile_options(-fomit-frame-pointer -fcommon -Wno-error=incompatible-pointer-types)
++endif()
++include_directories("${MPC_ROOT}/include")
++
++add_library(mpcdec STATIC
++    ${MPC_ROOT}/libmpcdec/huffman.c
++    ${MPC_ROOT}/libmpcdec/mpc_decoder.c
++    ${MPC_ROOT}/libmpcdec/mpc_reader.c
++    ${MPC_ROOT}/libmpcdec/streaminfo.c
++    ${MPC_ROOT}/libmpcdec/mpc_bits_reader.c
++    ${MPC_ROOT}/libmpcdec/mpc_demux.c
++    ${MPC_ROOT}/libmpcdec/requant.c
++    ${MPC_ROOT}/libmpcdec/synth_filter.c
++    ${MPC_ROOT}/common/crc32.c
++)
++
++add_library(mpcenc STATIC
++    ${MPC_ROOT}/libmpcenc/analy_filter.c
++    ${MPC_ROOT}/libmpcenc/bitstream.c
++    ${MPC_ROOT}/libmpcenc/encode_sv7.c
++    ${MPC_ROOT}/libmpcenc/huffsv7.c
++    ${MPC_ROOT}/libmpcenc/quant.c
++    ${MPC_ROOT}/common/crc32.c
++)
++
++add_library(mpcpsy STATIC
++    ${MPC_ROOT}/libmpcpsy/ans.c
++    ${MPC_ROOT}/libmpcpsy/cvd.c
++    ${MPC_ROOT}/libmpcpsy/fft4g.c
++    ${MPC_ROOT}/libmpcpsy/fft_routines.c
++    ${MPC_ROOT}/libmpcpsy/profile.c
++    ${MPC_ROOT}/libmpcpsy/psy.c
++    ${MPC_ROOT}/libmpcpsy/psy_tab.c
++    ${MPC_ROOT}/common/fastmath.c
++)
++
++install(TARGETS mpcdec mpcenc mpcpsy ARCHIVE DESTINATION lib)
++file(GLOB MPC_HEADERS "${MPC_ROOT}/include/mpc/*.h")
++install(FILES ${MPC_HEADERS}
++    "${MPC_ROOT}/libmpcenc/libmpcenc.h"
++    "${MPC_ROOT}/libmpcpsy/libmpcpsy.h"
++    DESTINATION include/mpc)

@@ -109,7 +109,7 @@ static int start(sox_effect_t * effp)
 
   p->delay_pos = p->mod_pos = 0;
 
-  effp->out_signal.length = SOX_UNKNOWN_LEN; /* TODO: calculate actual length */
+  effp->out_signal.length = effp->in_signal.length;
   return SOX_SUCCESS;
 }
 
@@ -145,7 +145,7 @@ sox_effect_handler_t const * lsx_phaser_effect_fn(void)
 {
   static sox_effect_handler_t handler = {
     "phaser", "gain-in gain-out delay decay speed [ -s | -t ]",
-    SOX_EFF_LENGTH | SOX_EFF_GAIN, getopts, start, flow, NULL, stop, NULL, sizeof(priv_t)
+    SOX_EFF_GAIN, getopts, start, flow, NULL, stop, NULL, sizeof(priv_t)
   };
   return &handler;
 }

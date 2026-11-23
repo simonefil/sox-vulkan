@@ -962,6 +962,10 @@ static int end(sox_effect_t *effp)
     return stop(effp);
 
   free(p->dBfs);
+  free(p->buf);
+  free(p->dft_buf);
+  free(p->window);
+  free(p->magnitudes);
 
   return SOX_SUCCESS;
 }

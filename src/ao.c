@@ -72,6 +72,20 @@ static int startwrite(sox_format_t * ft)
   ao->format.rate = ft->signal.rate;
   ao->format.channels = ft->signal.channels;
   ao->format.byte_format = AO_FMT_NATIVE;
+  /* SoX's channel order, for the plugins that remap to their speakers.  The
+   * others, given a matrix, would play only L and R: they get none and take
+   * the channels by index, as before. */
+  {
+    static char * const matrices[] = {NULL, NULL, "L,R", "L,R,C", "L,R,BL,BR",
+      "L,R,C,BL,BR", "L,R,C,LFE,BL,BR", "L,R,C,LFE,BC,SL,SR",
+      "L,R,C,LFE,BL,BR,SL,SR"};
+    ao_info * info = ao_driver_info(ao->driver_id);
+
+    if (info && ft->signal.channels < sizeof(matrices) / sizeof(*matrices) &&
+        (!strcmp(info->short_name, "alsa") || !strcmp(info->short_name, "pulse") ||
+         !strcmp(info->short_name, "macosx") || !strcmp(info->short_name, "wmm")))
+      ao->format.matrix = matrices[ft->signal.channels];
+  }
   if ((ao->device = ao_open_live(ao->driver_id, &ao->format, NULL)) == NULL) {
     lsx_fail("Could not open device: error %d", errno);
     return SOX_EOF;

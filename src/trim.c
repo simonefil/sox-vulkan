@@ -48,8 +48,8 @@ static int parse(sox_effect_t *effp, int argc, char **argv)
     /* dummy parse to check for syntax errors */
     arg = lsx_parseposition(0., arg, NULL, (uint64_t)0, (uint64_t)0, '+');
     if (!arg || *arg) {
-      lsx_fail("Error parsing position %u", i+1);
-      return lsx_usage(effp);
+      lsx_fail("cannot parse position `%s'", argv[i]);
+      return SOX_EOF;
     }
   }
   return SOX_SUCCESS;

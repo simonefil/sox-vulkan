@@ -43,7 +43,10 @@ typedef struct {                /* Configuration parameters: */
 
 #define GETOPT_FREQ(optstate, c, name, min) \
     case c: p->name = lsx_parse_frequency(optstate.arg, &parseIndex); \
-      if (p->name < min || *parseIndex) return lsx_usage(effp); \
+      if (p->name < min || *parseIndex) { \
+        lsx_fail("cannot parse frequency `%s'", optstate.arg); \
+        return SOX_EOF; \
+      } \
       break;
 
 static int create(sox_effect_t * effp, int argc, char * * argv)

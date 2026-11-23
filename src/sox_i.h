@@ -296,7 +296,7 @@ char * lsx_usage_lines(char * * usage, char const * const * lines, size_t n);
   double d = strtod(state.arg, &end_ptr); \
   if (end_ptr == state.arg || d < min || d > max || *end_ptr != '\0') {\
     lsx_fail("parameter `%s' must be between %g and %g", #name, (double)min, (double)max); \
-    return lsx_usage(effp); \
+    return SOX_EOF; \
   } \
   name = d; \
   break; \

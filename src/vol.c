@@ -48,8 +48,12 @@ static int getopts(sox_effect_t * effp, int argc, char **argv)
   vol->uselimiter = sox_false; /* Default is no limiter. */
 
   /* Get the vol, and the type if it's in the same arg. */
-  if (!argc || (have_type = sscanf(argv[0], "%lf %10s %c", &vol->gain, type_string, &dummy) - 1) > 1)
-    return lsx_usage(effp);
+  if (!argc) return lsx_usage(effp);
+  have_type = sscanf(argv[0], "%lf %10s %c", &vol->gain, type_string, &dummy) - 1;
+  if (have_type > 1) {
+    lsx_fail("trailing garbage in `%s'", argv[0]);
+    return SOX_EOF;
+  }
   ++argv, --argc;
 
   /* No type yet? Get it from the next arg: */
@@ -61,8 +65,10 @@ static int getopts(sox_effect_t * effp, int argc, char **argv)
 
   if (have_type) {
     lsx_enum_item const * p = lsx_find_enum_text(type_ptr, vol_types, 0);
-    if (!p)
-      return lsx_usage(effp);
+    if (!p) {
+      lsx_fail("type must be one of amplitude, power and dB");
+      return SOX_EOF;
+    }
     switch (p->value) {
       case vol_dB: vol->gain = dB_to_linear(vol->gain); break;
       case vol_power: /* power to amplitude, keep phase change */

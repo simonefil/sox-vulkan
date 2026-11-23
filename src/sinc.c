@@ -66,7 +66,7 @@ static int create(sox_effect_t * effp, int argc, char * * argv)
           lsx_fail("%s what?", argv[optstate.ind - 1]);
         else {
           /* Invalid option flag */
-          lsx_fail("unknown option `-%c'", optstate.opt);
+          lsx_fail("invalid option `-%c'", optstate.opt);
           lsx_usage(effp);
         }
         return SOX_EOF;

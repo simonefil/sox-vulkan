@@ -51,8 +51,10 @@ static int sox_fade_getopts(sox_effect_t * effp, int argc, char **argv)
     const char *n;
   --argc, ++argv;
 
-    if (argc < 1 || argc > 4)
-         return lsx_usage(effp);
+    if (argc < 1) {
+      lsx_fail("fade-in-length is required");
+      return SOX_EOF;
+    }
 
     /* because sample rate is unavailable at this point we store the
      * string off for later computations.
@@ -73,11 +75,18 @@ static int sox_fade_getopts(sox_effect_t * effp, int argc, char **argv)
         fade->out_fadetype = 'l';
     }
 
+    if (argc > 3) {
+      lsx_fail("too many arguments");
+      return lsx_usage(effp);
+    }
+
     fade->in_stop_str = lsx_strdup(argv[0]);
     /* Do a dummy parse to see if it will fail */
     n = lsx_parsesamples(0., fade->in_stop_str, &samples, 't');
-    if (!n || *n)
-      return lsx_usage(effp);
+    if (!n || *n) {
+      lsx_fail("cannot parse fade-in-length `%s'", fade->in_stop_str);
+      return SOX_EOF;
+    }
 
     fade->in_stop = samples;
     fade->out_start_str = fade->out_stop_str = 0;
@@ -91,8 +100,10 @@ static int sox_fade_getopts(sox_effect_t * effp, int argc, char **argv)
 
             /* Do a dummy parse to see if it will fail */
             n = lsx_parseposition(0., fade->out_stop_str, NULL, (uint64_t)0, (uint64_t)0, '=');
-            if (!n || *n)
-              return lsx_usage(effp);
+            if (!n || *n) {
+	      lsx_fail("cannot parse stop-position `%s'", fade->out_stop_str);
+              return SOX_EOF;
+	    }
             fade->out_stop = samples;
         }
         else
@@ -101,8 +112,10 @@ static int sox_fade_getopts(sox_effect_t * effp, int argc, char **argv)
 
             /* Do a dummy parse to see if it will fail */
             n = lsx_parsesamples(0., fade->out_start_str, &samples, 't');
-            if (!n || *n)
-              return lsx_usage(effp);
+            if (!n || *n) {
+	      lsx_fail("cannot parse fade-out-length `%s'", fade->out_start_str);
+              return SOX_EOF;
+	    }
             fade->out_start = samples;
         }
     } /* End for(t_argno) */

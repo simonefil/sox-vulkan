@@ -209,8 +209,11 @@ static int create(sox_effect_t * effp, int argc, char * * argv)
   if (lsx_biquad_channels_getopts(effp, &argc, &argv) != SOX_SUCCESS)
     return SOX_EOF;
   --argc, ++argv;
-  if (argc == 6)
-    for (; argc && sscanf(*argv, "%lf%c", d, &c) == 1; --argc, ++argv, ++d);
+  if (argc != 6) {
+    lsx_fail("six coefficients are required");
+    return SOX_EOF;
+  }
+  for (; argc && sscanf(*argv, "%lf%c", d, &c) == 1; --argc, ++argv, ++d);
   return argc? lsx_usage(effp) : SOX_SUCCESS;
 }
 

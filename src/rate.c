@@ -2009,7 +2009,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
       if ((found_at = strchr(qopts, c)))
         quality = found_at - qopts;
       else {
-        lsx_fail("unknown option `-%c'", optstate.opt);
+        lsx_fail("invalid option `-%c'", optstate.opt);
         return lsx_usage(effp);
       }
   }
@@ -2092,8 +2092,10 @@ static int create(sox_effect_t * effp, int argc, char **argv)
     allow_aliasing? bw_3dB_pc : 100;
 
   if (argc) {
-    if ((p->out_rate = lsx_parse_frequency(*argv, &dummy_p)) <= 0 || *dummy_p)
-      return lsx_usage(effp);
+    if ((p->out_rate = lsx_parse_frequency(*argv, &dummy_p)) <= 0 || *dummy_p) {
+      lsx_fail("cannot parse frequency `%s'", *argv);
+      return SOX_EOF;
+    }
     argc--; argv++;
     effp->out_signal.rate = p->out_rate;
   }

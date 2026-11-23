@@ -39,8 +39,10 @@ typedef struct {
   else { \
     SEP = (SEPARATORS)[strlen(SEPARATORS) - 1]; \
     n = sscanf(text, SCAN"%c", &VAR, &SEP); \
-    if (n == 0 || VAR < MIN || (n == 2 && !strchr(SEPARATORS, SEP))) \
-      return lsx_usage(effp); \
+    if (n == 0 || VAR < MIN || (n == 2 && !strchr(SEPARATORS, SEP))) { \
+      lsx_fail("cannot parse `%s'", text); \
+      return SOX_EOF; \
+    } \
     text = end? end + 1 : text + strlen(text); \
   } \
 } while (0)
@@ -65,12 +67,21 @@ static int parse(sox_effect_t * effp, char * * argv, unsigned channels)
 
       PARSE(sep1, "%i", chan1, 0, separators);
       if (!chan1) {
-       if (j || *text)
-         return lsx_usage(effp);
+       if (j || *text) {
+         /* in-spec 1,0 (j!=0) or 0-something (*text) */
+         lsx_fail("the silent channel 0 cannot be part of a range");
+         return SOX_EOF;
+       }
        continue;
       }
-      if (sep1 == '-')
+      if (sep1 == '-') {
         PARSE(sep1, "%i", chan2, 0, separators + 1);
+        if (!chan2) {
+          /* in-spec 1-0 */
+          lsx_fail("the silent channel 0 cannot be part of a range");
+          return SOX_EOF;
+        }
+      }
       else chan2 = chan1;
       if (sep1 != ',') {
         multiplier = sep1 == 'v' ? 1 : 0;

@@ -130,7 +130,7 @@ static int create(sox_effect_t * effp, int argc, char **argv)
   while ((c = lsx_getopt(&optstate)) != -1) switch (c) {
     GETOPT_NUMERIC(optstate, 'f', frame_rate, 10 , 80)
     GETOPT_NUMERIC(optstate, 'o', ovsamp,  4 , 32)
-    default: lsx_fail("unknown option `-%c'", optstate.opt); return lsx_usage(effp);
+    default: lsx_fail("invalid option `-%c'", optstate.opt); return lsx_usage(effp);
   }
   argc -= optstate.ind, argv += optstate.ind;
 

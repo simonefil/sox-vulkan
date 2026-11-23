@@ -61,14 +61,24 @@ static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
       arg = &p->pads[i].pad;
     }
     next = lsx_parsesamples(rate, str, arg, 't');
-    if (next == NULL) break;
+    if (next == NULL) {
+      lsx_fail("cannot parse length `%s'", str);
+      return SOX_EOF;
+    }
     if (*next == '\0')
       p->pads[i].start = i? in_length : 0;
     else {
-      if (*next != '@') break;
-      next = lsx_parseposition(rate, next+1, argv ? NULL : &p->pads[i].start,
+      char const *pos;
+      if (*next != '@') {
+        lsx_fail("cannot parse length `%s'", str);
+        return SOX_EOF;
+      }
+      next = lsx_parseposition(rate, (pos=next+1), argv ? NULL : &p->pads[i].start,
                last_seen, in_length, '=');
-      if (next == NULL || *next != '\0') break;
+      if (next == NULL || *next != '\0') {
+        lsx_fail("cannot parse position `%s'", pos);
+        return SOX_EOF;
+      }
       last_seen = p->pads[i].start;
       if (p->pads[i].start == SOX_UNKNOWN_LEN)
         p->pads[i].start = UINT64_MAX; /* currently the same value, but ... */
@@ -83,15 +93,16 @@ static int parse(sox_effect_t * effp, char * * argv, sox_rate_t rate)
       pad_len += p->pads[i].pad;
 
       /* Do this check only during the second pass when the actual
-         sample rate is known, otherwise it might fail on legal
+         sample rate is known, otherwise it might fail on valid
          commands like
            pad 1@0.5 1@30000s
          if the rate is, e.g., 48k. */
-      if (i > 0 && p->pads[i].start <= p->pads[i-1].start) break;
+      if (i > 0 && p->pads[i].start <= p->pads[i-1].start) {
+        lsx_fail("positions must be in ascending order");
+        return SOX_EOF;
+      }
     }
   }
-  if (i < p->npads)
-    return lsx_usage(effp);
   return SOX_SUCCESS;
 }
 

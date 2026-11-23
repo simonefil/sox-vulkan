@@ -82,6 +82,7 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
     int parse_count;
     uint64_t temp;
     const char *n;
+    char dummy;
   --argc, ++argv;
 
     /* check for option switches */
@@ -99,8 +100,10 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
 
     /* Parse data related to trimming front side */
     silence->start = sox_false;
-    if (sscanf(argv[0], "%d", &silence->start_periods) != 1)
-      return lsx_usage(effp);
+    if (sscanf(argv[0], "%d %c", &silence->start_periods, &dummy) != 1) {
+      lsx_fail("cannot parse above-periods `%s'", argv[0]);
+      return SOX_EOF;
+    }
     if (silence->start_periods < 0)
     {
         lsx_fail("Periods must not be negative");
@@ -112,8 +115,10 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
     if (silence->start_periods > 0)
     {
         silence->start = sox_true;
-        if (argc < 2)
-          return lsx_usage(effp);
+        if (argc < 2) {
+          lsx_fail("a non-zero above-periods requires a duration and a threshold");
+          return SOX_EOF;
+        }
 
         /* We do not know the sample rate so we can not fully
          * parse the duration info yet.  So save argument off
@@ -122,14 +127,18 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
         silence->start_duration_str = lsx_strdup(argv[0]);
         /* Perform a fake parse to do error checking */
         n = lsx_parsesamples(0.,silence->start_duration_str,&temp,'s');
-        if (!n || *n)
-          return lsx_usage(effp);
+        if (!n || *n) {
+          lsx_fail("cannot parse duration `%s'", silence->start_duration_str);
+          return SOX_EOF;
+        }
         silence->start_duration = temp;
 
         parse_count = sscanf(argv[1], "%lf%c", &silence->start_threshold,
                 &silence->start_unit);
-        if (parse_count < 1)
-          return lsx_usage(effp);
+        if (parse_count < 1) {
+          lsx_fail("cannot parse threshold `%s'", argv[1]);
+          return SOX_EOF;
+        }
         else if (parse_count < 2)
             silence->start_unit = '%';
 
@@ -141,10 +150,14 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
     /* Parse data needed for trimming of backside */
     if (argc > 0)
     {
-        if (argc < 3)
-          return lsx_usage(effp);
-        if (sscanf(argv[0], "%d", &silence->stop_periods) != 1)
-          return lsx_usage(effp);
+        if (argc < 3) {
+          lsx_fail("below-periods requires a duration and a threshold");
+          return SOX_EOF;
+        }
+        if (sscanf(argv[0], "%d", &silence->stop_periods) != 1) {
+          lsx_fail("cannot parse below-periods `%s'", argv[0]);
+          return SOX_EOF;
+        }
         if (silence->stop_periods < 0)
         {
             silence->stop_periods = -silence->stop_periods;
@@ -163,14 +176,18 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
         silence->stop_duration_str = lsx_strdup(argv[0]);
         /* Perform a fake parse to do error checking */
         n = lsx_parsesamples(0.,silence->stop_duration_str,&temp,'s');
-        if (!n || *n)
-          return lsx_usage(effp);
+        if (!n || *n) {
+          lsx_fail("cannot parse duration `%s'", silence->stop_duration_str);
+          return SOX_EOF;
+        }
         silence->stop_duration = temp;
 
         parse_count = sscanf(argv[1], "%lf%c", &silence->stop_threshold,
                              &silence->stop_unit);
-        if (parse_count < 1)
-          return lsx_usage(effp);
+        if (parse_count < 1) {
+          lsx_fail("cannot parse threshold `%s'", argv[1]);
+          return SOX_EOF;
+        }
         else if (parse_count < 2)
             silence->stop_unit = '%';
 
@@ -183,8 +200,8 @@ static int sox_silence_getopts(sox_effect_t * effp, int argc, char **argv)
     {
         if ((silence->start_unit != '%') && (silence->start_unit != 'd'))
         {
-            lsx_fail("Invalid unit specified");
-            return lsx_usage(effp);
+            lsx_fail("invalid unit `%c'", silence->start_unit);
+            return SOX_EOF;
         }
         if ((silence->start_unit == '%') && ((silence->start_threshold < 0.0)
             || (silence->start_threshold > 100.0)))
@@ -240,15 +257,21 @@ static int sox_silence_start(sox_effect_t * effp)
     if (silence->start)
     {
         if (lsx_parsesamples(effp->in_signal.rate, silence->start_duration_str,
-                             &temp, 's') == NULL)
-            return lsx_usage(effp);
+                             &temp, 's') == NULL) {
+          /* Should have been caught by the fake parse above */
+          lsx_fail("cannot parse duration `%s'", silence->start_duration_str);
+          return SOX_EOF;
+        }
         silence->start_duration = temp * effp->in_signal.channels;
     }
     if (silence->stop)
     {
         if (lsx_parsesamples(effp->in_signal.rate,silence->stop_duration_str,
-                             &temp,'s') == NULL)
-            return lsx_usage(effp);
+                             &temp,'s') == NULL) {
+          /* Should have been caught by the fake parse above */
+          lsx_fail("cannot parse duration `%s'", silence->stop_duration_str);
+          return SOX_EOF;
+        }
         silence->stop_duration = temp * effp->in_signal.channels;
     }
 

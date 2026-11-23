@@ -72,8 +72,14 @@ static int getopts(sox_effect_t * effp, int argc, char * * argv)
   unsigned pairs, i, j, commas;
 
   --argc, ++argv;
-  if (argc < 2 || argc > 5)
-    return lsx_usage(effp);
+  if (argc < 2) {
+    lsx_fail("attack,decay and in-dB1[,out_dB] are required");
+    return SOX_EOF;
+  }
+  if (argc > 5) {
+    lsx_fail("too many arguments");
+    return SOX_EOF;
+  }
 
   l->arg0 = lsx_strdup(argv[0]);
   l->arg1 = lsx_strdup(argv[1]);

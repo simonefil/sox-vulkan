@@ -218,8 +218,10 @@ static int getopts(sox_effect_t * effp, int argc, char **argv)
     p->length_str = lsx_strdup(argv[argn]);
     /* Do a dummy parse of to see if it will fail */
     n = lsx_parsesamples(0., p->length_str, &p->samples_to_do, 't');
-    if (!n || *n)
-      return lsx_usage(effp);
+    if (!n || *n) {
+      lsx_fail("cannot parse length `%s'", p->length_str);
+      return SOX_EOF;
+    }
     argn++;
   }
 
@@ -329,8 +331,10 @@ static int start(sox_effect_t * effp)
   p->samples_done = 0;
 
   if (p->length_str) {
-    if (lsx_parsesamples(effp->in_signal.rate, p->length_str, &p->samples_to_do, 't') == NULL)
-      return lsx_usage(effp);
+    if (lsx_parsesamples(effp->in_signal.rate, p->length_str, &p->samples_to_do, 't') == NULL) {
+      lsx_fail("cannot parse length `%s'", p->length_str);
+      return SOX_EOF;
+    }
   } else
     p->samples_to_do = effp->in_signal.length != SOX_UNKNOWN_LEN ?
         effp->in_signal.length / effp->in_signal.channels : 0;

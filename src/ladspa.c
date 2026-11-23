@@ -114,7 +114,7 @@ static int sox_ladspa_getopts(sox_effect_t *effp, int argc, char **argv)
     case 'r': l_st->clone = sox_true; break;
     case 'l': l_st->latency_compensation = sox_true; break;
     default:
-      lsx_fail("unknown option `-%c'", optstate.opt);
+      lsx_fail("invalid option `-%c'", optstate.opt);
       return lsx_usage(effp);
   }
   argc -= optstate.ind, argv += optstate.ind;

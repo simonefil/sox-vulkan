@@ -85,8 +85,14 @@ static int sox_echos_getopts(sox_effect_t * effp, int argc, char **argv)
         echos->num_delays = 0;
 
   --argc, ++argv;
-        if ((argc < 4) || (argc % 2))
-          return lsx_usage(effp);
+        if (argc < 4) {
+          lsx_fail("gain_in, gain_out and one delay decay pair are required");
+          return SOX_EOF;
+        }
+        if (argc % 2) {
+          lsx_fail("each delay requires a decay");
+          return SOX_EOF;
+        }
 
         i = 0;
         sscanf(argv[i++], "%lf", &echos->in_gain);

@@ -228,21 +228,24 @@ static int getopts(sox_effect_t *effp, int argc, char **argv)
       case 'o': p->out_name         = optstate.arg; break;
       case 'S':
         next = lsx_parseposition(0, optstate.arg, NULL, 0, 0, '=');
-        if (next && !*next) {
-          p->start_time_str = lsx_strdup(optstate.arg);
-          break;
+        if (!next || *next) {
+          lsx_fail("cannot parse position `%s'", optstate.arg);
+          return SOX_EOF;
         }
-        return lsx_usage(effp);
+        p->start_time_str = lsx_strdup(optstate.arg);
+        break;
       case 'd':
         next = lsx_parsesamples(1e5, optstate.arg, &dummy, 't');
-        if (next && !*next) {
-          p->duration_str = lsx_strdup(optstate.arg);
-          break;
+        if (!next || *next) {
+          lsx_fail("cannot parse duration `%s'", optstate.arg);
+          return SOX_EOF;
         }
-        return lsx_usage(effp);
+        p->duration_str = lsx_strdup(optstate.arg);
+        break;
       default:
         lsx_fail("invalid option `-%c'", optstate.opt);
-        return lsx_usage(effp);
+        /* No point printing the usage as it just says "spectrogram [options]" */
+        return SOX_EOF;
     }
   }
 

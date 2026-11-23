@@ -2253,6 +2253,7 @@ static void usage_effect(char const * name)
   if (strcmp("all", name) && !sox_find_effect(name)) {
     printf("Cannot find an effect called `%s'.\n", name);
     display_supported_effects();
+    exit(1);
   }
   else {
     printf("Effect usage:\n\n");
@@ -2273,7 +2274,7 @@ static void usage_effect(char const * name)
       }
     }
   }
-  exit(1);
+  exit(0);
 }
 
 static void usage_format1(sox_format_handler_t const * f)
@@ -2338,6 +2339,7 @@ static void usage_format(char const * name)
     if (!(f = sox_find_format(name, sox_false))) {
       printf("Cannot find a format called `%s'.\n", name);
       display_supported_formats();
+      exit(1);
     }
     else usage_format1(f);
   }
@@ -2348,7 +2350,7 @@ static void usage_format(char const * name)
         usage_format1(f);
     }
   }
-  exit(1);
+  exit(0);
 }
 
 static void read_comment_file(sox_comments_t * comments, char const * const filename)

@@ -136,30 +136,75 @@ static int drain_output(sox_format_t *ft, priv_t *priv)
 static int stop(sox_format_t* ft)
 {
   priv_t *priv = (priv_t*)ft->priv;
-  int result = SOX_SUCCESS;
+  int result = SOX_SUCCESS, device_open = 0;
+  MMRESULT error;
+  unsigned i;
   if (priv == NULL) return SOX_EOF;
 
   if (priv->hin)
   {
-    waveInReset(priv->hin);
-    waveInClose(priv->hin);
+    error = waveInReset(priv->hin);
+    if (error != MMSYSERR_NOERROR) {
+      fail(ft, error, "waveInReset");
+      result = SOX_EOF;
+    }
+    for (i = 0; i < num_buffers; ++i)
+      if (priv->headers[i].dwFlags & WHDR_PREPARED) {
+        error = waveInUnprepareHeader(priv->hin, &priv->headers[i],
+                                      sizeof(priv->headers[i]));
+        if (error != MMSYSERR_NOERROR) {
+          fail(ft, error, "waveInUnprepareHeader");
+          result = SOX_EOF;
+        }
+      }
+    error = waveInClose(priv->hin);
+    if (error != MMSYSERR_NOERROR) {
+      fail(ft, error, "waveInClose");
+      device_open = 1;
+      result = SOX_EOF;
+    }
   }
 
   if (priv->hout)
   {
     if (drain_output(ft, priv) != SOX_SUCCESS)
       result = SOX_EOF;
-    /* Reset returns buffers even after a failed or timed-out drain. */
-    waveOutReset(priv->hout);
-    waveOutClose(priv->hout);
+    /* Reset returns queued headers on errors as well as after a drain. */
+    error = waveOutReset(priv->hout);
+    if (error != MMSYSERR_NOERROR) {
+      fail(ft, error, "waveOutReset");
+      result = SOX_EOF;
+    }
+    for (i = 0; i < num_buffers; ++i)
+      if (priv->headers[i].dwFlags & WHDR_PREPARED) {
+        error = waveOutUnprepareHeader(priv->hout, &priv->headers[i],
+                                       sizeof(priv->headers[i]));
+        if (error != MMSYSERR_NOERROR) {
+          fail(ft, error, "waveOutUnprepareHeader");
+          result = SOX_EOF;
+        }
+      }
+    error = waveOutClose(priv->hout);
+    if (error != MMSYSERR_NOERROR) {
+      fail(ft, error, "waveOutClose");
+      device_open = 1;
+      result = SOX_EOF;
+    }
   }
 
-  if (priv->block_finished_event)
-    CloseHandle(priv->block_finished_event);
-
-  if (priv->data)
+  if (device_open) {
+    /* sox_close() will free ft->priv. If the driver did not close, it may
+     * still refer to the embedded WAVEHDRs, their data and the event.
+     * Retain the entire allocation until process exit instead. */
+    ft->priv = NULL;
+  } else {
+    if (priv->block_finished_event && !CloseHandle(priv->block_finished_event)) {
+      fail(ft, GetLastError(), "CloseHandle(waveaudio)");
+      result = SOX_EOF;
+    }
     free(priv->data);
-
+    priv->data = NULL;
+  }
   return result;
 }
 

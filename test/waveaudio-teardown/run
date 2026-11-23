@@ -2,22 +2,29 @@
 
 # Exercise the WinMM teardown with deterministic device responses.
 # No Windows device is required; the tested functions come from waveaudio.c.
+# The CMake build on Windows passes the driver, built from the same sources,
+# in $winmm_driver; otherwise it is compiled here.
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/sox-waveaudio.XXXXXXXX") || exit 2
-trap 'rm -rf "$work"' EXIT HUP INT TERM
-awk '
-  /^typedef struct waveaudio_priv_t/ { in_section=1 }
-  /^static unsigned check_format/ { in_section=0 }
-  in_section { print }
-' ../../src/waveaudio.c > "$work/teardown.inc"
-if ! grep -q '^static int stop(' "$work/teardown.inc"; then
-  echo 'waveaudio teardown not found' >&2
-  exit 2
+if [ -n "$winmm_driver" ]; then
+  driver=$winmm_driver
+else
+  work=$(mktemp -d "${TMPDIR:-/tmp}/sox-waveaudio.XXXXXXXX") || exit 2
+  trap 'rm -rf "$work"' EXIT HUP INT TERM
+  awk '
+    /^typedef struct waveaudio_priv_t/ { in_section=1 }
+    /^static unsigned check_format/ { in_section=0 }
+    in_section { print }
+  ' ../../src/waveaudio.c > "$work/teardown.inc"
+  if ! grep -q '^static int stop(' "$work/teardown.inc"; then
+    echo 'waveaudio teardown not found' >&2
+    exit 2
+  fi
+  cp winmm-driver.c "$work/driver.c"
+  ${CC:-cc} -std=c99 -Wall -Wextra -Werror -Wno-unused-function -O1 -I"$work" \
+    "$work/driver.c" -o "$work/winmm-driver" || exit 2
+  driver=$work/winmm-driver
 fi
-cp winmm-driver.c "$work/driver.c"
-${CC:-cc} -std=c99 -Wall -Wextra -Werror -Wno-unused-function -O1 -I"$work" \
-  "$work/driver.c" -o "$work/winmm-driver" || exit 2
 for case in idle drain timeout tick-wrap wait-failure reset-failure unprepare-failure close-failure input-close-failure; do
-  "$work/winmm-driver" "$case" || exit 2
+  "$driver" "$case" || exit 2
 done
 exit 0

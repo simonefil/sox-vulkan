@@ -241,7 +241,8 @@ static int stage_occupancy(stage_t * s)
 
 static void cubic_stage_fn(stage_t * p, fifo_t * output_fifo)
 {
-  int i, num_in = stage_occupancy(p), max_num_out = 1 + num_in*p->out_in_ratio;
+  int num_in = stage_occupancy(p);
+  size_t i, max_num_out = 1 + num_in*p->out_in_ratio;
   sample_t const * input = stage_read_p(p);
   sample_t * output = fifo_reserve(output_fifo, max_num_out);
 
@@ -252,7 +253,7 @@ static void cubic_stage_fn(stage_t * p, fifo_t * output_fifo)
     sample_t c = s[1]-*s-a-b;
     output[i] = ((a*x + b)*x + c)*x + *s;
   }
-  assert(max_num_out - i >= 0);
+  assert(max_num_out >= i);
   fifo_trim_by(output_fifo, max_num_out - i);
   fifo_read(&p->fifo, p->at.parts.integer, NULL);
   p->at.parts.integer = 0;
@@ -435,6 +436,9 @@ typedef struct {
 #define TO_3dB(a)       ((1.6e-6*a-7.5e-4)*a+.646)
 #define LOW_Q_BW0_PC    (67 + 5 / 8.)
 #define RATE_MIN_INPUT_CHUNK 4096
+/* Output one processing pass may produce: an upsampler fed a whole input
+ * chunk at a time would otherwise emit chunk / factor samples at once. */
+#define RATE_MAX_PASS_OUTPUT (1 << 22)
 
 typedef enum {
   rolloff_none, rolloff_small /* <= 0.01 dB */, rolloff_medium /* <= 0.35 dB */
@@ -636,6 +640,12 @@ static int rate_plan_create(
   }
 
   if (!bits) {                                  /* Quick and dirty arb stage: */
+    /* The 32.32 step has to be non-zero and its integer part an int32_t. */
+    if (!(arbM * MULT32 + .5 >= 1 && arbM < MULT32 / 2)) {
+      lsx_fail("output/input ratio %g is out of the quick interpolator's "
+          "range", 1 / factor);
+      return SOX_EINVAL;
+    }
     arb_stage.kind = rate_stage_cubic;
     arb_stage.fn = cubic_stage_fn;
     arb_stage.step.all = arbM * MULT32 + .5;
@@ -800,6 +810,15 @@ static sample_t * rate_cpu_input(rate_t * p, sample_t const * samples, size_t n)
   return fifo_write(&p->plan.stages[0].fifo, n, samples);
 }
 
+/* How much of n input samples one pass may take, so that the stages emit
+ * at most RATE_MAX_PASS_OUTPUT samples. */
+static size_t rate_cpu_pass_input(rate_t const * p, size_t n)
+{
+  double limit = RATE_MAX_PASS_OUTPUT * p->plan.factor;
+
+  return limit < (double)n ? max((size_t)1, (size_t)limit) : n;
+}
+
 static sample_t const * rate_cpu_output(rate_t * p, sample_t * samples, size_t * n)
 {
   fifo_t * fifo = &p->plan.stages[p->plan.num_stages].fifo;
@@ -815,10 +834,11 @@ static void rate_cpu_flush(rate_t * p)
   size_t remaining = samples_out > p->samples_out ?
       (size_t)(samples_out - p->samples_out) : 0;
   sample_t * buff = calloc(1024, sizeof(*buff));
+  size_t chunk = rate_cpu_pass_input(p, 1024);
 
   if (remaining > 0) {
     while ((size_t)fifo_occupancy(fifo) < remaining) {
-      rate_cpu_input(p, buff, (size_t) 1024);
+      rate_cpu_input(p, buff, chunk);
       rate_cpu_process(p);
     }
     fifo_trim_to(fifo, remaining);
@@ -3231,12 +3251,22 @@ static int flow_core(sox_effect_t * effp, const sox_sample_t * ibuf,
   if (*isamp && odone < *osamp) {
     size_t output_room = *osamp - odone;
     double input_limit = ceil(output_room * p->rate.plan.factor);
-    size_t idone = input_limit >= (double)*isamp ?
+    size_t offered = input_limit >= (double)*isamp ?
         *isamp : min(*isamp, max((size_t)RATE_MIN_INPUT_CHUNK,
             (size_t)input_limit));
-    sample_t * t = rate_cpu_input(&p->rate, NULL, idone);
-    lsx_load_samples(t, ibuf, idone);
-    rate_cpu_process(&p->rate);
+    size_t idone = 0;
+
+    /* Passes go on until there is output: the chain takes a flow that
+     * leaves input behind and returns nothing as the time to drain. */
+    do {
+      size_t pass = rate_cpu_pass_input(&p->rate, offered - idone);
+      sample_t * t = rate_cpu_input(&p->rate, NULL, pass);
+
+      lsx_load_samples(t, ibuf + idone, pass);
+      rate_cpu_process(&p->rate);
+      idone += pass;
+    } while (idone < offered && !fifo_occupancy(
+        &p->rate.plan.stages[p->rate.plan.num_stages].fifo));
     *isamp = idone;
 
     {

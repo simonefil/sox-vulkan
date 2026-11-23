@@ -47,6 +47,35 @@ int lsx_strncasecmp(char const * s1, char const * s2, size_t n)
 #endif
 }
 
+/* A version of strtod() that disallows NaN which tends to provoke FPE.
+ * Some versions of Linux fail on strings beginning with '+'
+ * according to AC_FUNC_STRTOD() */
+#undef strtod
+double lsx_strtod(char const *nptr, char **endptr)
+{
+  char *orig_nptr = (char *)nptr;
+  char *string = " +69";
+  char *term = (char *)nptr;
+  double value;
+
+  /* Check for broken strtod */
+  value = strtod(string, &term);
+  if (value != 69 || term != string + 4) {
+    while (*nptr == ' ') nptr++;
+    if (*nptr == '+') nptr++;
+  }
+
+  /* The proper conversion */
+  value = strtod(nptr, &term);
+  if (term == nptr || isnan(value)) {
+    if (endptr) *endptr = orig_nptr;
+    return 0;
+  }
+
+  if (endptr) *endptr = term;
+  return value;
+}
+
 /* A version of sscanf() that disallows NaNs, which tend to provoke
  * Floating Point Exceptions.
  *

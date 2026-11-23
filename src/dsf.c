@@ -599,7 +599,12 @@ static int dsf_stopwrite(sox_format_t *ft)
 		return SOX_EOF;
 	}
 
-	return dsf_writeheader(ft);
+	err = dsf_writeheader(ft);
+	/* Coming back to the end keeps a memory stream from being cut short
+	 * at the rewritten header when it is closed. */
+	if (err == SOX_SUCCESS && lsx_seeki(ft, (off_t)dsf->file_size, SEEK_SET))
+		err = SOX_EOF;
+	return err;
 }
 
 LSX_FORMAT_HANDLER(dsf)

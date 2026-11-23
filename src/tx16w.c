@@ -383,9 +383,16 @@ static int stopwrite(sox_format_t * ft)
     WH.rpt_length[2] = (0x01 & (LoopLength >> 16)) +
         magic2[WH.sample_rate];
 
-    lsx_rewind(ft);
-    if (lsx_writebuf(ft, &WH, (size_t) 32) != 32)
-        write_error();
+    {
+        /* Coming back to the end keeps a memory stream from being cut
+         * short at the rewritten header when it is closed. */
+        off_t end = lsx_tell(ft);
+
+        lsx_rewind(ft);
+        if (lsx_writebuf(ft, &WH, (size_t) 32) != 32 ||
+            lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+            write_error();
+    }
 
     return(SOX_SUCCESS);
 }

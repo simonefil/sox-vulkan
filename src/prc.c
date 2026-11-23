@@ -434,11 +434,21 @@ static int stopwrite(sox_format_t * ft)
       return SOX_SUCCESS;
   }
 
-  if (lsx_seeki(ft, (off_t)0, 0) != 0) {
-      lsx_fail_errno(ft,errno,"Can't rewind output file to rewrite Psion header.");
-      return(SOX_EOF);
+  {
+    /* Coming back to the end keeps a memory stream from being cut short at
+     * the rewritten header when it is closed. */
+    off_t end = lsx_tell(ft);
+    int result;
+
+    if (lsx_seeki(ft, (off_t)0, 0) != 0) {
+        lsx_fail_errno(ft,errno,"Can't rewind output file to rewrite Psion header.");
+        return(SOX_EOF);
+    }
+    result = prcwriteheader(ft);
+    if (result == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+      result = SOX_EOF;
+    return result;
   }
-  return prcwriteheader(ft);
 }
 
 static int prcwriteheader(sox_format_t * ft)

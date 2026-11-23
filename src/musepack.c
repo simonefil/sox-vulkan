@@ -339,9 +339,13 @@ static int close_write(sox_format_t * ft, void * v UNUSED, lsx_codec_t const * c
   sox_uint32_t crc = 0xffffffff;
   size_t i;
   int bit;
+  off_t end;
 
   if (params->private_size != SH_PAYLOAD_SIZE - 5 || write_block(ft, "SE", NULL, 0) != SOX_SUCCESS)
     return SOX_EOF;
+  /* Coming back to the end keeps a memory stream from being cut short at
+   * the rewritten header when it is closed. */
+  end = lsx_tell(ft);
   payload[4] = 8;
   memcpy(payload + 5, params->private_data, params->private_size);
   for (i = 4; i < SH_PAYLOAD_SIZE; ++i)
@@ -351,7 +355,8 @@ static int close_write(sox_format_t * ft, void * v UNUSED, lsx_codec_t const * c
   for (i = 0; i < 4; ++i)
     payload[i] = (unsigned char)(crc >> (24 - 8 * i));
   return lsx_seeki(ft, 4 + 3, SEEK_SET) == SOX_SUCCESS &&
-      lsx_writebuf(ft, payload, sizeof(payload)) == sizeof(payload)? SOX_SUCCESS : SOX_EOF;
+      lsx_writebuf(ft, payload, sizeof(payload)) == sizeof(payload) &&
+      lsx_seeki(ft, end, SEEK_SET) == SOX_SUCCESS? SOX_SUCCESS : SOX_EOF;
 }
 
 static lsx_container_ops_t const musepack_ops = {

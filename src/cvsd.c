@@ -660,11 +660,15 @@ int lsx_dvmsstopwrite(sox_format_t * ft)
 {
         struct dvms_header hdr;
         int rc;
+        off_t end;
 
         lsx_cvsdstopwrite(ft);
         /* startwrite already warned that the length can't be fixed. */
         if (!ft->seekable)
             return (SOX_SUCCESS);
+        /* Coming back to the end keeps a memory stream from being cut short
+         * at the rewritten header when it is closed. */
+        end = lsx_tell(ft);
         if (lsx_seeki(ft, (off_t)0, 0) != 0)
         {
                 lsx_fail_errno(ft,errno,"Can't rewind output file to rewrite DVMS header.");
@@ -676,5 +680,7 @@ int lsx_dvmsstopwrite(sox_format_t * ft)
             lsx_fail_errno(ft,rc,"cannot write DVMS header");
             return rc;
         }
+        if (lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+            return SOX_EOF;
         return rc;
 }

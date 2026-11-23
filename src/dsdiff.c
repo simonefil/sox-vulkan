@@ -592,6 +592,7 @@ static int dff_stopwrite(sox_format_t *ft)
 	struct dsdiff *dff = ft->priv;
 	unsigned i;
 	int err = SOX_SUCCESS;
+	off_t end;
 
 	if (dff->bit_pos) {
 		unsigned silence = 0x69 & (0xff >> dff->bit_pos);
@@ -607,13 +608,19 @@ static int dff_stopwrite(sox_format_t *ft)
 	if (err)
 		return err;
 
+	/* Coming back to the end keeps a memory stream from being cut short
+	 * at the rewritten header when it is closed. */
+	end = lsx_tell(ft);
 	if (lsx_seeki(ft, 0, SEEK_SET)) {
 		lsx_fail_errno(ft, SOX_EOF,
 			       "error rewinding output to update header");
 		return SOX_EOF;
 	}
 
-	return dff_writeheader(ft);
+	err = dff_writeheader(ft);
+	if (err == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET))
+		err = SOX_EOF;
+	return err;
 }
 
 LSX_FORMAT_HANDLER(dsdiff)

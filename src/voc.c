@@ -552,9 +552,14 @@ static int blockstop(sox_format_t * ft)
 {
   priv_t * v = (priv_t *) ft->priv;
   int datum;            /* one byte of the block length */
+  off_t end;
 
-  if (lsx_writeb(ft, 0) ||    /* End of file block code */
-      lsx_seeki(ft, (off_t) v->blockseek, 0) || /* seek back to block length */
+  if (lsx_writeb(ft, 0))      /* End of file block code */
+    return (SOX_EOF);
+  /* Coming back to the end keeps a memory stream from being cut short at
+   * the rewritten block length when it is closed. */
+  end = lsx_tell(ft);
+  if (lsx_seeki(ft, (off_t) v->blockseek, 0) || /* seek back to block length */
       lsx_seeki(ft, (off_t)1, 1))  /* seek forward one */
     return (SOX_EOF);
   if (v->silent) {
@@ -577,6 +582,8 @@ static int blockstop(sox_format_t * ft)
     if (lsx_writesb(ft, datum))     /* high byte of length */
       return (SOX_EOF);
   }
+  if (lsx_seeki(ft, end, SEEK_SET))
+    return (SOX_EOF);
   return (SOX_SUCCESS);
 }
 

@@ -1627,13 +1627,22 @@ static int stopwrite(sox_format_t * ft)
         if (!ft->seekable)
           return SOX_SUCCESS;
 
-        if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
         {
-                lsx_fail_errno(ft,SOX_EOF,"Can't rewind output file to rewrite .wav header.");
-                return SOX_EOF;
-        }
+          /* Coming back to the end keeps a memory stream from being cut
+           * short at the rewritten header when it is closed. */
+          off_t end = lsx_tell(ft);
+          int result;
 
-        return (wavwritehdr(ft, 1));
+          if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
+          {
+                  lsx_fail_errno(ft,SOX_EOF,"Can't rewind output file to rewrite .wav header.");
+                  return SOX_EOF;
+          }
+          result = wavwritehdr(ft, 1);
+          if (result == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+            result = SOX_EOF;
+          return result;
+        }
 }
 
 /*

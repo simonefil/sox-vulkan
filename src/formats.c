@@ -1603,10 +1603,16 @@ int lsx_close(sox_format_t * ft, sox_bool read_finished, sox_bool * pipe_failed)
   else {
     if (ft->handler.flags & SOX_FILE_REWIND) {
       if (ft->olength != ft->signal.length && ft->seekable) {
+        /* Coming back to the end keeps a memory stream from being cut short
+         * at the rewritten header when it is closed. */
+        off_t end = lsx_tell(ft);
+
         result = lsx_seeki(ft, (off_t)0, 0);
         if (result == SOX_SUCCESS)
           result = ft->handler.stopwrite? (*ft->handler.stopwrite)(ft)
              : ft->handler.startwrite?(*ft->handler.startwrite)(ft) : SOX_SUCCESS;
+        if (result == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+          result = SOX_EOF;
       }
     }
     else result = ft->handler.stopwrite? (*ft->handler.stopwrite)(ft) : SOX_SUCCESS;

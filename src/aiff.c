@@ -676,12 +676,22 @@ int lsx_aiffstopwrite(sox_format_t * ft)
             lsx_warn("can't seek in output file `%s'; length in file header will be unspecified", ft->filename);
             return(SOX_SUCCESS);
         }
-        if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
         {
+          /* Coming back to the end keeps a memory stream from being cut
+           * short at the rewritten header when it is closed. */
+          off_t end = lsx_tell(ft);
+          int result;
+
+          if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
+          {
                 lsx_fail_errno(ft,errno,"can't rewind output file to rewrite AIFF header");
                 return(SOX_EOF);
+          }
+          result = aiffwriteheader(ft, ft->olength / ft->signal.channels);
+          if (result == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+            result = SOX_EOF;
+          return result;
         }
-        return(aiffwriteheader(ft, ft->olength / ft->signal.channels));
 }
 
 static int aiffwriteheader(sox_format_t * ft, uint64_t nframes)
@@ -879,12 +889,22 @@ int lsx_aifcstopwrite(sox_format_t * ft)
             lsx_warn("can't seek in output file `%s'; length in file header will be unspecified", ft->filename);
             return(SOX_SUCCESS);
         }
-        if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
         {
+          /* Coming back to the end keeps a memory stream from being cut
+           * short at the rewritten header when it is closed. */
+          off_t end = lsx_tell(ft);
+          int result;
+
+          if (lsx_seeki(ft, (off_t)0, SEEK_SET) != 0)
+          {
                 lsx_fail_errno(ft,errno,"can't rewind output file to rewrite AIFC header");
                 return(SOX_EOF);
+          }
+          result = aifcwriteheader(ft, ft->olength / ft->signal.channels);
+          if (result == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+            result = SOX_EOF;
+          return result;
         }
-        return(aifcwriteheader(ft, ft->olength / ft->signal.channels));
 }
 
 static int aifcwriteheader(sox_format_t * ft, uint64_t nframes)

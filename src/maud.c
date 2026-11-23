@@ -273,13 +273,22 @@ static int stopwrite(sox_format_t * ft)
         mdat_size = p->nsamples * (ft->encoding.bits_per_sample >> 3);
         lsx_padbytes(ft, (size_t) (mdat_size%2));
 
-        if (lsx_seeki(ft, (off_t)0, 0) != 0)
         {
-            lsx_fail_errno(ft,errno,"can't rewind output file to rewrite MAUD header");
-            return(SOX_EOF);
-        }
+          /* Coming back to the end keeps a memory stream from being cut
+           * short at the rewritten header when it is closed. */
+          off_t end = lsx_tell(ft);
+          int result;
 
-        return(maudwriteheader(ft));
+          if (lsx_seeki(ft, (off_t)0, 0) != 0)
+          {
+              lsx_fail_errno(ft,errno,"can't rewind output file to rewrite MAUD header");
+              return(SOX_EOF);
+          }
+          result = maudwriteheader(ft);
+          if (result == SOX_SUCCESS && lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
+            result = SOX_EOF;
+          return result;
+        }
 }
 
 #define write_error() { \

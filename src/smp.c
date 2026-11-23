@@ -412,17 +412,22 @@ static int sox_smpstopwrite(sox_format_t * ft)
 {
         priv_t * smp = (priv_t *) ft->priv;
         struct smptrailer trailer;
+        off_t end;
 
         /* Assign the trailer data */
         settrailer(ft, &trailer, ft->signal.rate);
         if (writetrailer(ft, &trailer) != SOX_SUCCESS)
                 write_error();
+        /* Coming back to the end keeps a memory stream from being cut short
+         * at the rewritten size when it is closed. */
+        end = lsx_tell(ft);
         if (lsx_seeki(ft, (off_t)112, 0) == -1)
         {
                 lsx_fail_errno(ft,errno,"SMP unable to seek back to save size");
                 return(SOX_EOF);
         }
-        if (lsx_writedw(ft, smp->NoOfSamps > UINT_MAX ? UINT_MAX : (unsigned)smp->NoOfSamps))
+        if (lsx_writedw(ft, smp->NoOfSamps > UINT_MAX ? UINT_MAX : (unsigned)smp->NoOfSamps) ||
+            lsx_seeki(ft, end, SEEK_SET) != SOX_SUCCESS)
                 write_error();
 
         return(SOX_SUCCESS);

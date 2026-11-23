@@ -275,13 +275,17 @@ static int stopwrite(sox_format_t * ft)
   priv_t * avr = (priv_t *)ft->priv;
 
   unsigned size = avr->size / ft->signal.channels;
+  /* Coming back to the end keeps a memory stream from being cut short at
+   * the rewritten header when it is closed. */
+  off_t end = lsx_tell(ft);
 
   /* Fix size */
   if (lsx_seeki(ft, (off_t)26, SEEK_SET) ||
       lsx_writedw (ft, size) ||
       /* Fix lend */
       lsx_seeki(ft, (off_t)34, SEEK_SET) ||
-      lsx_writedw (ft, size))
+      lsx_writedw (ft, size) ||
+      lsx_seeki(ft, end, SEEK_SET))
     write_error();
 
   return(SOX_SUCCESS);

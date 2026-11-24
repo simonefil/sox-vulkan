@@ -386,6 +386,9 @@ static int dff_startwrite(sox_format_t *ft)
 	ft->write_packed_dsd_words = dff_write_packed_words;
 	dff->buf = lsx_calloc(ft->signal.channels, 1);
 
+	if (!ft->signal.length && !ft->seekable)
+		lsx_warn("Length in output .dff header will be wrong since can't seek to fix it");
+
 	return dff_writeheader(ft);
 }
 
@@ -607,6 +610,11 @@ static int dff_stopwrite(sox_format_t *ft)
 
 	if (err)
 		return err;
+
+	/* On a pipe the header keeps the length written at the start, as
+	   startwrite already warned: the data itself is complete. */
+	if (!ft->seekable)
+		return SOX_SUCCESS;
 
 	/* Coming back to the end keeps a memory stream from being cut short
 	 * at the rewritten header when it is closed. */

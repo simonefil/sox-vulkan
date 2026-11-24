@@ -369,6 +369,9 @@ static int dsf_startwrite(sox_format_t *ft)
 
 	dsf->block = lsx_calloc(dsf->chan_num, (size_t)dsf->block_size);
 
+	if (!ft->signal.length && !ft->seekable)
+		lsx_warn("Length in output .dsf header will be wrong since can't seek to fix it");
+
 	return dsf_writeheader(ft);
 }
 
@@ -590,6 +593,11 @@ static int dsf_stopwrite(sox_format_t *ft)
 
 	if (err)
 		return err;
+
+	/* On a pipe the header keeps the length written at the start, as
+	   startwrite already warned: the data itself is complete. */
+	if (!ft->seekable)
+		return SOX_SUCCESS;
 
 	dsf->file_size = lsx_tell(ft);
 
